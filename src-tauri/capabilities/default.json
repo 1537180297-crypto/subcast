@@ -40,6 +40,7 @@
     "allow-list-models",
     "allow-tts-speak",
     "allow-cached-show",
+    "allow-save-image",
     "core:window:allow-start-dragging"
   ],
   "remote": {

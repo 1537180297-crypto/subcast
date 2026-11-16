@@ -153,3 +153,144 @@ pub fn transcript_segments(text: &str, duration: f64) -> Vec<Segment> {
     if joined.is_empty() { return vec![]; }
     crate::transcript::split_timed(&joined, 0.0, duration.max(60.0))
 }
+
+// ---- rss.qiaomu.ai sources (乔木改写) ---------------------------------------------------------------
+// Feeds the reader follows (Next Token, 半拿铁, Podscribe transcripts of Acquired / Pivot…) where each episode
+// may carry a 乔木改写: a Chinese deep-read written from the full transcript.
+
+const RSS: &str = "https://rss.qiaomu.ai";
+
+/// `https://rss.qiaomu.ai/sources/nexttoken` → `nexttoken`.
+pub fn rss_source_id(url: &str) -> Option<String> {
+    Regex::new(r"^https?://rss\.qiaomu\.ai/sources/([A-Za-z0-9_-]+)/?$").unwrap().captures(url.trim()).map(|c| c[1].to_string())
+}
+pub fn rss_feed_url(id: &str) -> String { format!("{RSS}/sources/{id}") }
+
+fn norm_title(t: &str) -> String {
+    t.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+/// Podscribe episodes have transcripts but no audio: borrow it from the show's own feed, matched by title.
+async fn audio_by_title(show_name: &str) -> std::collections::HashMap<String, (String, Option<f64>)> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(results) = crate::feeds::search_podcasts(show_name, "US").await else { return out };
+    let Some(feed) = results.first().map(|r| r.feed_url.clone()) else { return out };
+    if let Ok((_, eps)) = crate::feeds::fetch_show(&feed, "podcast").await {
+        for e in eps { if let Some(a) = e.audio_url { out.insert(norm_title(&e.title), (a, e.duration)); } }
+    }
+    out
+}
+
+pub async fn rss_channel(id: &str) -> Result<Channel> {
+    let sources: serde_json::Value = net::client().get(format!("{RSS}/api/sources")).send().await?.json().await?;
+    let meta = sources["sources"].as_array().and_then(|a| a.iter().find(|s| s["id"].as_str() == Some(id)).cloned())
+        .ok_or_else(|| anyhow!("rss.qiaomu.ai 上没有这个频道"))?;
+    let name = meta["name"].as_str().unwrap_or(id).replace(" · 文稿", "");
+    let mut entries: Vec<serde_json::Value> = vec![];
+    let mut cursor = String::new();
+    for _ in 0..4 {
+        let url = format!("{RSS}/api/sources/{id}/entries?limit=100{}", if cursor.is_empty() { String::new() } else { format!("&cursor={}", urlencoding::encode(&cursor)) });
+        let page: serde_json::Value = net::client().get(url).send().await?.json().await?;
+        entries.extend(page["entries"].as_array().cloned().unwrap_or_default());
+        match page["nextCursor"].as_str() { Some(c) if page["hasMore"].as_bool() == Some(true) && !c.is_empty() => cursor = c.to_string(), _ => break }
+    }
+    if entries.is_empty() { return Err(anyhow!("这个频道还没有节目")); }
+    let podscribe = id.starts_with("podscribe-");
+    let borrowed = if podscribe { audio_by_title(&name).await } else { Default::default() };
+    let feed = rss_feed_url(id);
+    let show_id = short_hash(&feed, 16);
+    let mut zh_titles = vec![];
+    let episodes: Vec<Episode> = entries.iter().take(crate::feeds::MAX_EPISODES).filter_map(|e| {
+        let guid = e["id"].as_str()?.to_string();
+        let title = e["title"].as_str()?.to_string();
+        if let Some(zh) = e["titleZh"].as_str().filter(|z| !z.is_empty() && *z != title) { zh_titles.push((title.clone(), zh.to_string())); }
+        let link = e["link"].as_str().map(String::from);
+        let (mut audio, mut duration) = (e["audio"]["url"].as_str().map(String::from), None);
+        if audio.is_none() { if let Some((a, d)) = borrowed.get(&norm_title(&title)) { audio = Some(a.clone()); duration = *d; } }
+        let video = link.as_deref().and_then(crate::feeds::youtube_video_id);
+        let transcript_url = if podscribe { link.as_deref().and_then(|l| l.strip_prefix("https://podcasts.happyscribe.com/")).map(|p| format!("https://api.qiaomu.ai/podscribe/v1/episodes/{p}/transcript")) } else { None };
+        Some(Episode {
+            id: short_hash(&format!("{show_id}:{guid}"), 20),
+            show_id: show_id.clone(),
+            guid,
+            title,
+            published: e["publishedTs"].as_i64(),
+            duration,
+            audio_url: audio,
+            video_id: video.clone(),
+            link,
+            cover: e["image"].as_str().map(String::from).or_else(|| video.map(|v| format!("https://i.ytimg.com/vi/{v}/hqdefault.jpg"))),
+            notes: e["summary"].as_str().map(String::from),
+            transcript_url,
+            transcript_type: Some(if podscribe { "podscribe" } else { "qiaomu-rss" }.into()),
+            ..Default::default()
+        })
+    }).collect();
+    let show = Show {
+        id: show_id,
+        kind: "qiaomu".into(),
+        title: title_for(id).map(String::from).unwrap_or(name),
+        author: Some("乔木精读".into()),
+        cover: cover_for(id).or_else(|| episodes.iter().find_map(|e| e.cover.clone())),
+        feed_url: feed.clone(),
+        link: meta["siteUrl"].as_str().map(String::from),
+        description: meta["description"].as_str().map(String::from),
+        updated_at: now_ms(),
+        unplayed: 0,
+    };
+    Ok(Channel { show, episodes, zh_titles })
+}
+
+/// The 乔木改写 for an rss.qiaomu.ai entry, as HTML.
+pub async fn rss_rewrite(entry_id: &str) -> Result<Option<String>> {
+    let v: serde_json::Value = net::client().get(format!("{RSS}/api/entry/{entry_id}/rewrite")).send().await?.json().await?;
+    if v["status"].as_str() != Some("ready") { return Ok(None); }
+    let html = v["rewrite"]["bodyHtml"].as_str().filter(|h| !h.is_empty()).map(String::from)
+        .or_else(|| v["rewrite"]["body"].as_str().map(markdown_html));
+    Ok(html.filter(|h| h.len() > 40))
+}
+
+fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;") }
+
+fn inline(s: &str) -> String {
+    let s = esc(s);
+    let s = Regex::new(r"\*\*(.+?)\*\*").unwrap().replace_all(&s, "<strong>$1</strong>");
+    let s = Regex::new(r"\[([^\]]+)\]\((https?://[^)\s]+)\)").unwrap().replace_all(&s, r#"<a href="$2">$1</a>"#);
+    Regex::new(r"`([^`]+)`").unwrap().replace_all(&s, "<code>$1</code>").into_owned()
+}
+
+/// Enough Markdown for the rewrites: headings, quotes, lists, paragraphs, bold, links.
+pub fn markdown_html(md: &str) -> String {
+    let mut out = String::new();
+    let mut list = false;
+    for block in md.split("\n\n").map(str::trim).filter(|b| !b.is_empty()) {
+        let lines: Vec<&str> = block.lines().collect();
+        if lines.iter().all(|l| l.trim_start().starts_with("- ") || l.trim_start().starts_with("* ")) {
+            if !list { out.push_str("<ul>"); list = true; }
+            for l in lines { out.push_str(&format!("<li>{}</li>", inline(l.trim_start()[2..].trim()))); }
+            continue;
+        }
+        if list { out.push_str("</ul>"); list = false; }
+        if let Some(h) = block.strip_prefix("### ") { out.push_str(&format!("<h3>{}</h3>", inline(h))); }
+        else if let Some(h) = block.strip_prefix("## ") { out.push_str(&format!("<h2>{}</h2>", inline(h))); }
+        else if let Some(h) = block.strip_prefix("# ") { out.push_str(&format!("<h2>{}</h2>", inline(h))); }
+        else if block.starts_with('>') {
+            let q: Vec<String> = lines.iter().map(|l| inline(l.trim_start_matches('>').trim())).collect();
+            out.push_str(&format!("<blockquote><p>{}</p></blockquote>", q.join("<br>")));
+        } else { out.push_str(&format!("<p>{}</p>", lines.iter().map(|l| inline(l)).collect::<Vec<_>>().join("<br>"))); }
+    }
+    if list { out.push_str("</ul>"); }
+    out
+}
+
+/// A Podscribe transcript with real timestamps.
+pub async fn podscribe_transcript(url: &str) -> Result<Vec<Segment>> {
+    let v: serde_json::Value = net::client().get(url).send().await?.json().await?;
+    let segs = v["data"]["transcript"]["segments"].as_array().cloned().unwrap_or_default();
+    let mut out: Vec<Segment> = segs.iter().filter_map(|s| {
+        let text = s["text"].as_str()?.trim().to_string();
+        (!text.is_empty()).then(|| Segment { start: s["start_seconds"].as_f64().unwrap_or(0.0), end: 0.0, text })
+    }).collect();
+    for i in 0..out.len() { out[i].end = out.get(i + 1).map(|n| n.start).unwrap_or(out[i].start + 8.0); }
+    Ok(out)
+}

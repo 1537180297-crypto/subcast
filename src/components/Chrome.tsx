@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, Compass, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { useStore, type View } from "../store";
-import { PICKS, isSubscribed, showName } from "../lib/picks";
+import { PICKS, deepPickFor, isSubscribed, showName } from "../lib/picks";
 import { useShowName } from "../lib/zh";
 import { useJobs } from "../lib/jobs";
 import { BiTitle, ZhText } from "./Bi";
@@ -13,7 +13,8 @@ import { showIcon } from "./Lists";
 export function Sidebar() {
   const { shows, view, go, set } = useStore();
   const is = (v: View) => view.kind === v.kind && (v.kind !== "show" || (view.kind === "show" && view.id === v.id)) && (v.kind !== "channel" || (view.kind === "channel" && view.input === v.input));
-  const curated = PICKS.filter((p) => p.deep && !isSubscribed(p, shows));
+  // A 精读 channel is listed once: hidden here when its show is already followed (either version).
+  const curated = PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
   const { sideOpen, put: putLayout } = useLayout();
   const rail = !sideOpen;
   const Nav = ({ v, icon, label }: { v: View; icon: React.ReactNode; label: string }) => (

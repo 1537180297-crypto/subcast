@@ -55,8 +55,8 @@ export function DeepRead({ ep, children }: { ep: Episode; children?: React.React
   return (
     <div className="deep-read">
       <div className="deep-head">
-        <span className="deep-badge"><BookOpen size={13} /> 乔木精读</span>
-        <span className="muted small">AI 基于完整访谈改写的中文长文，不是逐字翻译</span>
+        <span className="deep-badge" title="AI 基于完整访谈改写的中文长文，不是逐字翻译"><BookOpen size={13} /> 乔木精读</span>
+        <span className="spacer" />
         {speaking
           ? <button className="btn sm" onClick={stopSpeaking}><Square size={11} /> 停止朗读</button>
           : <button className="btn sm" title="用豆包语音朗读精读全文" onClick={read}><Volume2 size={13} /> 朗读</button>}

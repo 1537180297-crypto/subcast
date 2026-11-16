@@ -11,7 +11,7 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { BookOpen, Captions, ChevronDown, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, ScrollText } from "lucide-react";
+import { BookOpen, Captions, ChevronDown, Sparkles, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play } from "lucide-react";
 import { Splitter } from "./Splitter";
 import { DeepRead } from "./DeepRead";
 import { SkeletonEpisode } from "./Skeleton";
@@ -120,6 +120,21 @@ function Notes({ text, defaultOpen = false }: { text: string; defaultOpen?: bool
   );
 }
 
+/** The AI summary of the whole episode, folded under the show notes until asked for. */
+function GuideCard({ ep }: { ep: Episode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`notes guide-card ${open ? "open" : ""}`}>
+      <div className="notes-head" role="button" tabIndex={0} onClick={() => setOpen(!open)} onKeyDown={(e) => e.key === "Enter" && setOpen(!open)}>
+        <span><Sparkles size={14} className="accent" /> AI 导读</span>
+        <span className="muted small">按整期文字稿生成要点和时间线</span>
+        <ChevronDown size={14} className={open ? "flip" : ""} />
+      </div>
+      {open && <div className="guide-body"><SummaryPanel ep={ep} /></div>}
+    </div>
+  );
+}
+
 function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: Tab) => void }) {
   const { current, load } = useStore();
   const titleZh = useZh(ep.title);
@@ -170,6 +185,8 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
           {isCurrent ? <Controls /> : (
             <button className="btn primary" onClick={() => { load(ep); setTimeout(() => useStore.getState().player?.play(), 400); }}><Play size={14} /> 播放这一集</button>
           )}
+          {notes && <Notes text={notes} />}
+          <GuideCard ep={ep} />
         </section>
         </div>
         {panelOpen && <Splitter value={panel} min={PANEL.min} max={PANEL.max} def={PANEL.def} snap={PANEL.snap} edge="left" label="字幕栏宽度" onChange={(w) => put({ panel: w })} onCollapse={() => put({ panelOpen: false })} />}
@@ -178,7 +195,6 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
             <button role="tab" title={TAB_NAMES.transcript} aria-label={TAB_NAMES.transcript} aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /><span className="tab-label">字幕</span></button>
             {ep.transcriptType === "qiaomu" && <button role="tab" title={TAB_NAMES.deep} aria-label={TAB_NAMES.deep} aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /><span className="tab-label">精读</span></button>}
             <button role="tab" title={TAB_NAMES.chat} aria-label={TAB_NAMES.chat} aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /><span className="tab-label">问答</span></button>
-            <button role="tab" title={TAB_NAMES.summary} aria-label={TAB_NAMES.summary} aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /><span className="tab-label">导读</span></button>
             <span className="spacer" data-tauri-drag-region />
             <button className="icon-btn tabs-close" title="收起字幕栏（⌘\\）" onClick={() => put({ panelOpen: false })}><PanelRightClose size={16} /></button>
           </div>
@@ -187,12 +203,7 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
               {tab === "transcript" && <TranscriptPanel ep={ep} />}
               {tab === "chat" && <ChatPanel ep={ep} />}
               {tab === "deep" && <DeepRead ep={ep}><div className="panel-empty"><p className="muted">这一集还没有精读</p></div></DeepRead>}
-              {tab === "summary" && (
-                <div className="guide-panel">
-                  {notes && <Notes text={notes} defaultOpen />}
-                  <div className="guide-summary"><SummaryPanel ep={ep} /></div>
-                </div>
-              )}
+
             </PanelBoundary>
           </div>
         </section>}

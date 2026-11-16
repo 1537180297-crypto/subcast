@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface Show {
   id: string;
-  kind: "youtube" | "podcast" | "xiaoyuzhou" | "single";
+  kind: "youtube" | "podcast" | "xiaoyuzhou" | "single" | "qiaomu";
   title: string;
   author?: string;
   cover?: string;
@@ -69,6 +69,7 @@ export const api = {
   hasApiKey: (provider: string) => invoke<boolean>("has_api_key", { provider }),
   /** Free Google translation with a persistent cache (no model needed). */
   previewShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number }>("preview_show", { input }),
+  saveImage: (name: string, base64: string) => invoke<string>("save_image", { name, base64 }),
   cachedShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number } | null>("cached_show", { input }),
   qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
   listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),

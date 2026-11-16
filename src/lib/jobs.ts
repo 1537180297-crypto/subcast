@@ -38,7 +38,7 @@ export async function loadTranscript(ep: Episode) {
   if (s.transcripts[ep.id] || s.officialChecked[ep.id] === "searching") return;
   const cached = await api.loadTranscript(ep.id);
   if (cached) { patch("transcripts", ep.id, cached); return; }
-  if (!ep.videoId && !ep.transcriptUrl) { patch("officialChecked", ep.id, "none"); return; }
+  if (!ep.videoId && !ep.transcriptUrl && ep.transcriptType !== "qiaomu") { patch("officialChecked", ep.id, "none"); return; }
   patch("officialChecked", ep.id, "searching");
   try {
     const t = await api.fetchOfficialTranscript(ep.id);

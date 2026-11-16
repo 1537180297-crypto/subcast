@@ -789,3 +789,40 @@ body.resizing iframe, body.resizing video { pointer-events: none; }
 /* One reading column for show / channel pages: header row, calendar and list share the same width. */
 .list-head, .month-filter, .ep-feed { max-width: 880px; }
 .list-head { display: flex; align-items: center; justify-content: space-between; }
+.deep-head .spacer { flex: 1; }
+.deep-head .icon-btn { margin-left: 0; }
+.tabs .tabs-close { width: 32px; height: 32px; padding: 0; margin-bottom: 4px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); flex: none; }
+.tabs .tabs-close svg { width: 18px !important; height: 18px !important; display: block !important; }
+.tabs .tabs-close:hover { background: var(--soft); color: var(--text); }
+.tabs .tabs-close::after { display: none; }
+/* Calendar: quiet neutral cells; activity shown as a small accent bar, the picked month in the accent tint. */
+.month-filter { background: var(--panel); }
+.mf-cell, .mf-cell.hot:not(.on) { background: transparent; color: var(--text-2); position: relative; padding: 7px 0 10px; }
+.mf-cell::after { content: ""; position: absolute; left: 30%; right: 30%; bottom: 4px; height: 3px; border-radius: 2px; background: var(--accent); opacity: var(--heat); }
+.mf-cell:hover:not(:disabled) { background: var(--soft); transform: none; box-shadow: none; }
+.mf-cell .mf-n { color: var(--text); }
+.mf-cell:disabled .mf-n, .mf-cell:disabled { color: var(--line-strong); }
+.mf-cell.on { background: var(--accent-soft); color: var(--accent-text); box-shadow: none; }
+.mf-cell.on .mf-n { color: var(--accent-text); }
+.mf-cell.on::after { opacity: 1; }
+.deep-hint { display: flex; align-items: center; gap: 12px; max-width: 880px; margin: 0 0 18px; padding: 12px 14px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-text); cursor: pointer; }
+.deep-hint > div { flex: 1; }
+.deep-hint-t { font-weight: 600; font-size: 14px; }
+.deep-hint:hover { filter: brightness(.98); }
+.guide-card .notes-head { gap: 10px; }
+.guide-card .notes-head > span:first-child { display: inline-flex; align-items: center; gap: 6px; }
+.guide-card .notes-head .muted { flex: 1; }
+.guide-body { padding: 4px 16px 16px; }
+.guide-body .panel-empty { padding: 16px 0; }
+.ep-left > .guide-card { width: min(100%, max(560px, calc((100vh - 330px) * 16 / 9))); align-self: center; }
+
+/* ===================== selection toolbar + poster ===================== */
+.sel-bar { position: fixed; z-index: 60; transform: translate(-50%, -100%); display: flex; flex-direction: column; align-items: center; gap: 6px; animation: fade-in .12s var(--ease); }
+.sel-bar.below { transform: translate(-50%, 0); flex-direction: column-reverse; }
+.sel-actions { display: flex; padding: 3px; border-radius: 10px; background: #1b1c1f; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+.sel-actions button { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: #f2f3f5; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.sel-actions button:hover { background: rgba(255,255,255,.12); }
+.sel-tr { max-width: 420px; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); font-size: 13.5px; line-height: 1.6; color: var(--text); user-select: text; }
+.poster-pv { display: grid; place-items: center; min-height: 360px; max-height: 62vh; overflow: auto; padding: 4px; border-radius: 12px; background: var(--soft); }
+.poster-pv img { width: 100%; max-width: 420px; height: auto; border-radius: 8px; box-shadow: var(--shadow); }
+.poster-wait { display: flex; align-items: center; gap: 8px; color: var(--muted); }

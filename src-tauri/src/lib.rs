@@ -60,8 +60,10 @@ fn store(state: &AppState, show: &Show, eps: &[Episode]) -> Res<()> {
 /// into the translation cache so the UI shows them instead of machine translations.
 async fn fetch_any(state: &AppState, feed_url: &str, kind: &str) -> anyhow::Result<(Show, Vec<Episode>)> {
     if kind == "qiaomu" {
-        let id = qiaomu::site_id(feed_url).ok_or_else(|| anyhow::anyhow!("不是精读频道"))?;
-        let ch = qiaomu::channel(&id).await?;
+        let ch = if let Some(id) = qiaomu::rss_source_id(feed_url) { qiaomu::rss_channel(&id).await? } else {
+            let id = qiaomu::site_id(feed_url).ok_or_else(|| anyhow::anyhow!("不是精读频道"))?;
+            qiaomu::channel(&id).await?
+        };
         let conn = state.db.lock().unwrap();
         for (orig, zh) in &ch.zh_titles { let _ = db::tr_put(&conn, &short_hash(&format!("zh-CN|{orig}"), 24), zh); }
         return Ok((ch.show, ch.episodes));
@@ -94,6 +96,10 @@ enum Fetched { Show(Show, Vec<Episode>), Single(Episode) }
 /// Reads whatever the user pasted (or a curated channel) without subscribing.
 async fn fetch_input(state: &AppState, input: &str) -> Res<Fetched> {
     let normalized = if input.trim().starts_with("http") { input.trim().to_string() } else { format!("https://{}", input.trim()) };
+    if let Some(id) = qiaomu::rss_source_id(&normalized) {
+        let (show, eps) = fetch_any(state, &qiaomu::rss_feed_url(&id), "qiaomu").await.map_err(e)?;
+        return Ok(Fetched::Show(show, eps));
+    }
     if let Some(id) = qiaomu::site_id(&normalized) {
         let (show, eps) = fetch_any(state, &qiaomu::feed_url(&id), "qiaomu").await.map_err(e)?;
         return Ok(Fetched::Show(show, eps));
@@ -138,6 +144,7 @@ struct Preview { show: Show, episodes: Vec<Episode>, fetched_at: i64 }
 /// The id a channel input will have, when that can be known without the network (curated 精读 sites, direct feeds).
 fn known_show_id(input: &str) -> Option<String> {
     let normalized = if input.trim().starts_with("http") { input.trim().to_string() } else { format!("https://{}", input.trim()) };
+    if let Some(id) = qiaomu::rss_source_id(&normalized) { return Some(short_hash(&qiaomu::rss_feed_url(&id), 16)); }
     if let Some(id) = qiaomu::site_id(&normalized) { return Some(short_hash(&qiaomu::feed_url(&id), 16)); }
     Some(short_hash(input.trim(), 16))
 }
@@ -244,7 +251,7 @@ async fn fetch_official_transcript(state: State<'_, AppState>, episode_id: Strin
             }
             None => None,
         }
-    } else if let Some(url) = &ep.transcript_url {
+    } else if let Some(url) = ep.transcript_url.as_ref().filter(|_| ep.transcript_type.as_deref() != Some("podscribe")) {
         let body = net::get_text(url).await.map_err(e)?;
         let kind = ep.transcript_type.clone().unwrap_or_default();
         let segs = if kind.contains("json") { transcript::parse_podcast_json(&body) } else { transcript::parse_cues(&body) };
@@ -256,6 +263,10 @@ async fn fetch_official_transcript(state: State<'_, AppState>, episode_id: Strin
     // 乔木精读 episodes carry the original transcript on their page (untimed; spread across the episode).
     let t = match t {
         Some(t) => Some(t),
+        None if ep.transcript_type.as_deref() == Some("podscribe") && ep.transcript_url.is_some() => {
+            let segs = qiaomu::podscribe_transcript(ep.transcript_url.as_ref().unwrap()).await.map_err(e)?;
+            (!segs.is_empty()).then(|| Transcript { episode_id: ep.id.clone(), source: "podscribe".into(), language: "en".into(), segments: transcript::resegment(segs) })
+        }
         None if ep.transcript_type.as_deref() == Some("qiaomu") => match &ep.link {
             Some(link) => {
                 let d = qiaomu::detail(link).await.map_err(e)?;
@@ -284,12 +295,30 @@ fn asr_emit(app: &AppHandle, id: &str, stage: &str, progress: f64, message: Opti
 #[tauri::command]
 async fn qiaomu_detail(state: State<'_, AppState>, episode_id: String) -> Res<qiaomu::Detail> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
-    let link = ep.link.clone().ok_or("这集没有网页")?;
-    let d = qiaomu::detail(&link).await.map_err(e)?;
+    let d = if matches!(ep.transcript_type.as_deref(), Some("qiaomu-rss") | Some("podscribe")) {
+        qiaomu::Detail { audio: None, deep_read: qiaomu::rss_rewrite(&ep.guid).await.map_err(e)?, transcript: None }
+    } else {
+        let link = ep.link.clone().ok_or("这集没有网页")?;
+        qiaomu::detail(&link).await.map_err(e)?
+    };
     let conn = state.db.lock().unwrap();
     if let (Some(a), None) = (&d.audio, &ep.audio_url) { let _ = db::set_audio_url(&conn, &ep.id, a); }
     if let Some(h) = &d.deep_read { let _ = db::set_blob(&conn, &ep.id, "deep-read", h); }
     Ok(qiaomu::Detail { transcript: None, ..d })
+}
+
+/// Saves a generated image (a quote poster) to Downloads and returns its path.
+#[tauri::command]
+fn save_image(name: String, base64: String) -> Res<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(base64.trim_start_matches("data:image/png;base64,")).map_err(e)?;
+    let dir = dirs::download_dir().or_else(dirs::desktop_dir).ok_or("找不到下载文件夹")?;
+    let safe: String = name.chars().filter(|c| !"/\\:*?\"<>|".contains(*c)).take(60).collect();
+    let mut path = dir.join(format!("{safe}.png"));
+    let mut i = 2;
+    while path.exists() { path = dir.join(format!("{safe} {i}.png")); i += 1; }
+    std::fs::write(&path, bytes).map_err(e)?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -529,7 +558,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak, cached_show
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -539,6 +568,18 @@ pub fn run() {
 mod live {
     //! Network tests against real services: `cargo test -- --ignored --nocapture`.
     use super::*;
+    #[tokio::test]
+    #[ignore]
+    async fn qiaomu_rss_sources() {
+        for id in ["nexttoken", "podscribe-pivot"] {
+            let ch = crate::qiaomu::rss_channel(id).await.unwrap();
+            let e = &ch.episodes[0];
+            println!("{id}: {} eps={} audio={} first={} t={:?}", ch.show.title, ch.episodes.len(), ch.episodes.iter().filter(|x| x.audio_url.is_some()).count(), e.title, e.transcript_url);
+            let rw = crate::qiaomu::rss_rewrite(&e.guid).await.unwrap();
+            println!("  rewrite={}", rw.as_ref().map(|h| h.chars().take(120).collect::<String>()).unwrap_or_default());
+            if let Some(u) = &e.transcript_url { let s = crate::qiaomu::podscribe_transcript(u).await.unwrap(); println!("  segs={} {:?}", s.len(), s.get(1).map(|x| (x.start, x.text.chars().take(40).collect::<String>()))); }
+        }
+    }
     #[tokio::test]
     #[ignore]
     async fn qiaomu_channels() {

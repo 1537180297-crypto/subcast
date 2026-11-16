@@ -33,6 +33,13 @@ export const PICKS: Pick[] = [
   { id: "35huan", title: "三五环", zh: "三五环", by: "刘飞", intro: "互联网产品与商业观察", input: "https://35huan.qiaomu.ai", cover: it("Podcasts126/v4/6e/d0/de/6ed0dedb-d782-a562-e40b-043ce20441d3/mza_5066303992234991879.jpeg"), topics: ["乔木精读", "中文播客"], deep: true },
   { id: "zhixing", title: "知行小酒馆", zh: "知行小酒馆", by: "有知有行", intro: "投资理财与人生选择", input: "https://zhixing.qiaomu.ai", cover: it("Podcasts112/v4/b3/96/fc/b396fcc5-6e2b-d34e-8d3d-c849c43b6215/mza_4090324763067558601.jpeg"), topics: ["乔木精读", "中文播客"], deep: true },
   { id: "mianji", title: "面基", zh: "面基", by: "面基", intro: "和有意思的人见面聊天", input: "https://mianji.qiaomu.ai", cover: it("Podcasts126/v4/a8/d9/5e/a8d95e6e-aba6-3608-9c28-8b8cde840ec4/mza_10150483960934463526.png"), topics: ["乔木精读", "中文播客"], deep: true },
+  { id: "nexttoken", title: "Next Token｜词元之外", zh: "词元之外", by: "Next Token", intro: "AI 圈一线从业者的长对谈", input: "https://www.xiaoyuzhoufm.com/podcast/6a9956fafbb9512fc83ddbb5", cover: "https://image.xyzcdn.net/FhuQBR26B-8jsdfuZumu54mCylqG.png@small", topics: ["中文播客", "AI 前沿"] },
+  { id: "joerogan", title: "The Joe Rogan Experience", zh: "乔·罗根秀", by: "Joe Rogan", intro: "全球收听量最高的长篇访谈", input: "https://www.youtube.com/@joerogan", cover: it("Podcasts211/v4/d8/97/bf/d897bfdd-73ea-6a4e-5c3e-02ab30707f2b/mza_8607972238001778397.jpg"), topics: ["科技评论"], video: true },
+  { id: "80k", title: "80,000 Hours Podcast", zh: "八万小时", by: "80,000 Hours", intro: "关于 AI 风险与人生选择的深度访谈", input: "https://feeds.transistor.fm/80000-hours-podcast", cover: it("Podcasts221/v4/1e/ca/c2/1ecac2c7-a567-01ee-8bbe-80145ef185e3/mza_1975528560600666532.jpg"), topics: ["AI 前沿"] },
+  { id: "pivot", title: "Pivot", zh: "Pivot", by: "Kara Swisher & Scott Galloway", intro: "两位科技评论人每周辣评科技与商业", input: "https://feeds.megaphone.fm/pivot", cover: it("Podcasts221/v4/13/22/39/1322397a-976e-3c8f-7764-91cc38d0dd70/mza_12130189257448841692.jpeg"), topics: ["科技评论"] },
+  { id: "freakonomics", title: "Freakonomics Radio", zh: "魔鬼经济学", by: "Stephen Dubner", intro: "用经济学眼光看日常世界", input: "https://feeds.simplecast.com/Y8lFbOT4", cover: it("Podcasts115/v4/f7/0c/c5/f70cc540-ce36-d96f-b111-c970aad5505c/mza_17703422762227531425.jpg"), topics: ["科技评论"] },
+  { id: "iltb", title: "Invest Like the Best", zh: "像最好的投资人一样", by: "Patrick O'Shaughnessy", intro: "顶级投资人与创业者的方法论", input: "https://feeds.megaphone.fm/CLS2859450455", cover: it("Podcasts211/v4/61/ae/be/61aebe7a-06e8-7390-3ae5-f2fc5889e36c/mza_10827489189939068066.jpg"), topics: ["创业投资"] },
+  { id: "doac", title: "The Diary Of A CEO", zh: "CEO 日记", by: "Steven Bartlett", intro: "创业者、科学家与名人的人生故事", input: "https://rss2.flightcast.com/xmsftuzjjykcmqwolaqn6mdn", cover: it("Podcasts221/v4/69/af/0d/69af0ddd-1e0f-7ae3-c84b-88f18e31ad0c/mza_14445920128472365296.png"), topics: ["产品与增长"] },
 ];
 
 /** The first part of a long show name: "No Priors: Artificial Intelligence | …" → "No Priors". */
@@ -57,4 +64,10 @@ export const sameFeed = (a: string, b: string) => norm(a) === norm(b);
 export function isSubscribed(p: Pick, shows: { feedUrl: string; title: string }[]): boolean {
   if (p.deep) return shows.some((s) => sameFeed(s.feedUrl, p.input));
   return shows.some((s) => sameFeed(s.feedUrl, p.input) || s.title === p.title || shortName(s.title) === shortName(p.title));
+}
+
+/** The 精读 channel for a show the user follows through its original feed (e.g. No Priors on Megaphone). */
+export function deepPickFor(showTitle: string): Pick | undefined {
+  const short = shortName(showTitle);
+  return PICKS.find((p) => p.deep && (p.title === showTitle || shortName(p.title) === short));
 }

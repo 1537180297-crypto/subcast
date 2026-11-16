@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Link2, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Youtube } from "lucide-react";
+import { BookOpen, Check, ChevronDown, ChevronRight, Link2, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Youtube } from "lucide-react";
 import { api, errorText, type Episode, type Show } from "../lib/api";
 import { date, duration } from "../lib/format";
-import { PICKS, TOPICS, isSubscribed, sameFeed, type Pick, type Topic } from "../lib/picks";
+import { PICKS, TOPICS, deepPickFor, isSubscribed, sameFeed, type Pick, type Topic } from "../lib/picks";
 import { useShowName, useZh } from "../lib/zh";
 import { useStore } from "../store";
 import { SkeletonFeed } from "./Skeleton";
@@ -226,6 +226,13 @@ export function ShowView({ id }: { id: string }) {
           </div>
         </div>
       </div>
+      {show.kind !== "qiaomu" && deepPickFor(show.title) && (
+        <div className="deep-hint" role="button" tabIndex={0} onClick={() => go({ kind: "channel", input: deepPickFor(show.title)!.input })}>
+          <BookOpen size={16} />
+          <div><p className="deep-hint-t">这档节目有乔木精读版</p><p className="muted small">中文标题、每期精读长文和原文文稿，点击查看</p></div>
+          <ChevronRight size={16} className="muted" />
+        </div>
+      )}
       <div className="list-head">
         <h2 className="section-title flush">全部单集</h2>
         <div className="seg-control">

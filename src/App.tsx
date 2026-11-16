@@ -1,4 +1,5 @@
 import { Splitter } from "./components/Splitter";
+import { SelectionTools } from "./components/SelectionTools";
 import { SIDEBAR, useLayout } from "./lib/layout";
 import { useEffect } from "react";
 import { startJobListeners } from "./lib/jobs";
@@ -64,6 +65,7 @@ export default function App() {
       <AudioEngine />
       {settingsOpen && <SettingsDialog />}
       {addOpen && <AddDialog />}
+      <SelectionTools />
       <Toast />
     </div>
   );
