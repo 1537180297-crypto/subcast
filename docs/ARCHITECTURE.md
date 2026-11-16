@@ -26,7 +26,11 @@
   - YouTube：`youtube.com/feeds/videos.xml?channel_id=UC…`（@handle / 频道链接 → 读页面得 channel_id）
   - Apple Podcasts：`itunes.apple.com/lookup?id=…&entity=podcast` → `feedUrl`；搜索用 iTunes Search API
   - 小宇宙：节目页 → 关联 RSS（多数节目有 `feed.xyzfm.space/<id>`）；单集页解析音频直链
-- **本地转写**：whisper.cpp 经 `whisper-rs` 编译进独立的 `subcast-asr` 子进程（崩溃不拖垮主程序），默认模型 `ggml-large-v3-turbo-q5_0`（~550MB）首次使用时下载，可选 `small`。macOS 用 Metal。
+- **本地转写，两个引擎**：
+  - **Qwen3-ASR 0.6B（默认推荐）**：通过 [CrispASR](https://github.com/CrispStrobe/CrispASR)（MIT，ggml，Metal/CUDA/Vulkan）运行 `cstr/qwen3-asr-0.6b-GGUF` 的 q8_0（~960MB）。识别程序（~19MB）按平台从 GitHub Release 按需下载。它按 ~30 秒一段输出，再按句拆分、按字数分配时间。中英文都准、自带标点（qiaomu-clipper 也把它列为中文首选）。
+  - **Whisper**（large-v3-turbo / small / base）：whisper.cpp 经 `whisper-rs` 编进本程序，以 `--asr-worker` 子进程运行（崩溃不拖垮主程序），支持语言最多、可实时逐句显示。
+  - 模型优先从 hf-mirror.com 下载，失败回退 huggingface.co。
+  - TODO：Qwen3 分支的音频解码目前在主进程（spawn_blocking）里做，应改走 `--asr-worker` 的解码模式，避免坏文件拖垮主程序。
 - **音频解码**：播客 mp3/m4a/aac 用 `symphonia` + 重采样，无需 ffmpeg；YouTube 音频用 yt-dlp 取 m4a（按需下载 yt-dlp 独立程序）。
 - **翻译**：沿用乔木剪藏的分批策略（≤6 段/3500 字，邻近上下文，JSON 输出 + 块格式兜底）。
 - **问答**：整集带时间戳文稿直接进上下文（主流模型 128k+ 足够一集）；超长时按章节检索。回答要求以 `[mm:ss]` 引用，前端渲染为可点击跳转。

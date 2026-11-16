@@ -237,7 +237,7 @@ function Generating({ ep }: { ep: Episode }) {
             <div className="line-text"><p className="orig">{s.text}</p></div>
           </div>
         ))}
-        {!asr.live.length && <p className="muted center">识别出的文字会实时出现在这里</p>}
+        {!asr.live.length && <p className="muted center">{useStore.getState().settings.asrModel === "qwen3-asr" ? "Qwen3-ASR 识别完成后会一次性显示全部文字" : "识别出的文字会实时出现在这里"}</p>}
       </div>
     </div>
   );
