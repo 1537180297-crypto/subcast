@@ -742,6 +742,9 @@ const dict: Record<string, string> = {
   "字幕、精读和收听进度都会保留。": "Subtitles, deep reads and listening progress are kept.",
   "取消订阅「{name}」？": "Unsubscribe from {name}?",
   "已生成的字幕、精读和收听进度会保留。": "Subtitles, deep reads and listening progress you already have are kept.",
+  "不再显示": "Don't show again",
+  "好的，不再显示。可以在设置 › 通用里重新打开": "Got it. You can turn it back on in Settings › General.",
+  "在发现页顶部推荐「词元之外」": "Feature Next Token at the top of Discover",
 };
 
 export default dict;

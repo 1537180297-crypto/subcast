@@ -33,6 +33,8 @@ export interface Settings {
   youtubePromo: boolean;
   /** Download new versions in the background; they install on the next restart. */
   autoUpdate: boolean;
+  /** The Discover banner for our own show was closed by the user. */
+  homeBannerHidden: boolean;
   /** Upload transcripts we make to the shared library (anonymous; reading shared ones is always on). */
   shareTranscripts: boolean;
 }
@@ -150,6 +152,7 @@ export const DEFAULTS: Settings = {
   uiLang: "auto",
   youtubePromo: true,
   autoUpdate: true,
+  homeBannerHidden: false,
   shareTranscripts: true,
 };
 

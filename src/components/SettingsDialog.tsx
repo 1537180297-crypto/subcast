@@ -235,6 +235,7 @@ export function SettingsDialog() {
               </label>
               <p className="muted small">{t("切换后立即生效。字幕仍翻译成中文。")}</p>
               <label className="check"><input type="checkbox" checked={settings.youtubePromo} onChange={(e) => saveSettings({ youtubePromo: e.target.checked })} /> {t("推荐节目的 YouTube 频道")}</label>
+              {settings.youtubePromo && <label className="check"><input type="checkbox" checked={!settings.homeBannerHidden} onChange={(e) => saveSettings({ homeBannerHidden: !e.target.checked })} /> {t("在发现页顶部推荐「词元之外」")}</label>}
               <p className="muted small">{t("节目有官方 YouTube 频道时，在节目页和单集页显示订阅入口，不影响 App 内播放。")}</p>
               <label className="check"><input type="checkbox" checked={settings.shareTranscripts} onChange={(e) => saveSettings({ shareTranscripts: e.target.checked })} /> {t("分享识别好的字幕")}</label>
               <p className="muted small">{t("字幕匿名上传到公共库，别人打开同一集就能直接用，帮他们省一次识别。只上传字幕文本，不含音频。关闭后仍能使用别人分享的字幕。")}</p>
@@ -425,11 +426,11 @@ function About() {
           <button className="btn sm" onClick={() => openUrl(REPO)}><Github size={13} /> {t("源代码")}</button>
         </div>
       </div>
+      <HomeShowCard />
       <div className="about-qr">
         <div className="qr-card"><img src={wechatQr} alt={t("公众号二维码")} /><p className="qr-title">{t("关注公众号")}</p><p className="muted small">{t("微信搜索「向阳乔木推荐看」")}</p></div>
         <div className="qr-card"><img src={rewardQr} alt={t("赞赏码")} /><p className="qr-title">{t("请我喝杯咖啡")}</p><p className="muted small">{t("微信扫码赞赏")}</p></div>
       </div>
-      <HomeShowCard />
       <div className="about-links">{links.map(([label, u]) => <button key={u} className="link-btn" onClick={() => openUrl(u)}>{label}</button>)}</div>
       <p className="muted small center">{t("订阅数据、字幕和 Key 都保存在本机。使用云端识别、翻译或 AI 功能时，相关内容会发送到你选择的服务。")}</p>
       <p className="muted small center">{t("© {year} 向阳乔木 · MIT", { year: new Date().getFullYear() })}</p>

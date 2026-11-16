@@ -479,6 +479,8 @@ export function DiscoverView() {
   const [adding, setAdding] = useState<string | null>(null);
   const [topics, setTopics] = useState<Topic[]>([]);
   const promo = usePromo();
+  const bannerHidden = useStore((s) => s.settings.homeBannerHidden);
+  const showBanner = promo && !bannerHidden;
   const subscribed = (p: Pick) => isSubscribed(p, shows);
   const home = PICKS.find((p) => p.input === HOME_SHOW_FEED);
   const add = async (input: string, title: string) => {
@@ -496,10 +498,10 @@ export function DiscoverView() {
     <div className="page">
       <h1 className="page-title">{t("发现")}</h1>
       <p className="muted page-sub">{t("精选海外与中文好节目，订阅后字幕和中文翻译开箱即用。想找别的节目，用上方搜索框。")}</p>
-      {promo && home && !topics.length && <HomeShowBanner subscribed={subscribed(home)} busy={adding === home.input} onSubscribe={() => void add(home.input, pickName(home))} onOpen={() => go({ kind: "channel", input: home.input })} />}
+      {showBanner && home && !topics.length && <HomeShowBanner onHide={() => { void useStore.getState().saveSettings({ homeBannerHidden: true }); notify(t("好的，不再显示。可以在设置 › 通用里重新打开")); }} subscribed={subscribed(home)} busy={adding === home.input} onSubscribe={() => void add(home.input, pickName(home))} onOpen={() => go({ kind: "channel", input: home.input })} />}
       <TopicChips topics={topics} setTopics={setTopics} />
       <div className="tile-grid">
-        {visible(topics).filter((p) => !(promo && p === home && !topics.length)).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} onOpen={() => go({ kind: "channel", input: p.input })} action={subBtn(p.input, pickName(p), subscribed(p))} />)}
+        {visible(topics).filter((p) => !(showBanner && p === home && !topics.length)).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} onOpen={() => go({ kind: "channel", input: p.input })} action={subBtn(p.input, pickName(p), subscribed(p))} />)}
       </div>
     </div>
   );

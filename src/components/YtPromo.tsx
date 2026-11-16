@@ -1,6 +1,6 @@
 // Promotion for the author's own podcast (词元之外 · Next Token) and its YouTube channel.
-// Every slot here follows the "推荐节目的 YouTube 频道" setting.
-import { Check, Loader2, Plus, Youtube } from "lucide-react";
+// The slots follow the "推荐节目的 YouTube 频道" setting, except the About card; the Discover banner can also be closed for good.
+import { Check, Loader2, Plus, X, Youtube } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { t } from "../lib/i18n";
 import { pickName } from "../lib/picks";
@@ -26,12 +26,13 @@ export function AlsoOn({ feedUrl }: { feedUrl?: string }) {
 }
 
 /** Discover's top banner: our own show, with subscribing in the app and on YouTube side by side. */
-export function HomeShowBanner({ subscribed, busy, onSubscribe, onOpen }: { subscribed: boolean; busy: boolean; onSubscribe: () => void; onOpen: () => void }) {
+export function HomeShowBanner({ subscribed, busy, onSubscribe, onOpen, onHide }: { subscribed: boolean; busy: boolean; onSubscribe: () => void; onOpen: () => void; onHide: () => void }) {
   const p = homeShow();
   const yt = showLinks(p?.input).youtube;
   if (!p || !yt) return null;
   return (
     <div className="home-show" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onOpen())}>
+      <button type="button" className="icon-btn sm home-show-close" title={t("不再显示")} aria-label={t("不再显示")} onClick={(e) => { e.stopPropagation(); onHide(); }}><X size={15} /></button>
       <img src={p.cover} alt="" />
       <div className="home-show-body">
         <p className="home-show-kicker">{t("主创的播客")}</p>
@@ -65,10 +66,10 @@ export function YtVideoStrip({ channel, name, cover }: { channel: string; name: 
 
 /** About page: a short card for our own show. */
 export function HomeShowCard() {
-  const promo = usePromo();
+  // Always shown on the About page: it is where the author introduces himself.
   const p = homeShow();
   const yt = showLinks(p?.input).youtube;
-  if (!promo || !p || !yt) return null;
+  if (!p || !yt) return null;
   return (
     <div className="home-card">
       <img src={p.cover} alt="" />
