@@ -10,7 +10,7 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { ArrowLeft, Captions, ChevronDown, ExternalLink, MessageCircle, Play, ScrollText } from "lucide-react";
+import { Captions, ChevronDown, ExternalLink, MessageCircle, Play, ScrollText } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
 import { date, duration, notesText } from "../lib/format";
@@ -110,24 +110,23 @@ function Notes({ text }: { text: string }) {
 }
 
 function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: Tab) => void }) {
-  const { back, current, load } = useStore();
+  const { current, load } = useStore();
   const titleZh = useZh(ep.title);
   const isCurrent = current?.id === ep.id;
   const notes = notesText(ep.notes);
 
   return (
     <div className="episode">
-      <header className="ep-head">
-        <button className="icon-btn" onClick={back} title="返回"><ArrowLeft size={18} /></button>
-        <div className="ep-title">
-          <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? <span key="s">{showName(ep.showTitle)}</span> : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
-          <h1>{titleZh ?? ep.title}</h1>
-          {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
-        </div>
-        {ep.link && <button className="btn ghost sm" onClick={() => openUrl(ep.link!)}><ExternalLink size={13} /> {ep.videoId ? "在 YouTube 打开" : "节目网页"}</button>}
-      </header>
       <div className="ep-body">
         <section className="ep-left">
+          <div className="ep-title-block">
+            <div className="ep-title">
+              <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? <span key="s">{showName(ep.showTitle)}</span> : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
+              <h1>{titleZh ?? ep.title}</h1>
+              {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
+            </div>
+            {ep.link && <button className="round-btn" title={ep.videoId ? "在 YouTube 打开" : "节目网页"} onClick={() => openUrl(ep.link!)}><ExternalLink size={15} /></button>}
+          </div>
           {ep.videoId ? (
             <YouTubePlayer ep={ep} overlay={<SubtitleOverlay ep={ep} />} />
           ) : (

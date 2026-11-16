@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Link2, Loader2, MoreHorizontal, Plus, RefreshCw, Search, Youtube } from "lucide-react";
-import { api, errorText, type Episode, type SearchResult, type Show } from "../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { Check, ChevronDown, ChevronRight, Link2, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Youtube } from "lucide-react";
+import { api, errorText, type Episode, type Show } from "../lib/api";
 import { date, duration } from "../lib/format";
 import { PICKS, TOPICS, shortName, type Pick, type Topic } from "../lib/picks";
 import { useShowName, useZh } from "../lib/zh";
 import { useStore } from "../store";
-import { BiTitle } from "./Bi";
 
 // ---- episode rows -------------------------------------------------------------------------------
 
@@ -29,6 +28,7 @@ function ShowName({ title }: { title?: string }) {
 function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const current = useStore((s) => s.current);
+  const zh = useZh(ep.title);
   const pct = ep.duration && ep.progress ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   return (
     <div className={`ep-row ${current?.id === ep.id ? "playing" : ""}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
@@ -37,7 +37,8 @@ function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
         {pct > 0 && <div className="thumb-progress"><div style={{ width: `${pct}%` }} /></div>}
       </div>
       <div className="ep-meta">
-        <BiTitle text={ep.title} className="ep-name" subClassName="clamp1" />
+        <p className="ep-name clamp1">{zh ?? ep.title}</p>
+        {zh && zh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
         <p className="meta-line">
           {showShow && ep.showId !== "single" && <ShowName title={ep.showTitle} />}
           <span>{[date(ep.published), duration(ep.duration)].filter(Boolean).join(" · ")}</span>
@@ -51,54 +52,71 @@ function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
 function EpisodeList({ episodes, showShow }: { episodes: Episode[] | null; showShow: boolean }) {
   if (episodes == null) return <div className="panel-empty"><Loader2 className="spin" /></div>;
   if (!episodes.length) return <div className="panel-empty"><p className="muted">这里还没有内容</p></div>;
-  return <div className="ep-list">{episodes.map((e) => <EpisodeRow key={e.id} ep={e} showShow={showShow} />)}</div>;
+  return <div className="ep-grid">{episodes.map((e) => <EpisodeRow key={e.id} ep={e} showShow={showShow} />)}</div>;
 }
 
 // ---- home ---------------------------------------------------------------------------------------
 
-function ContinueCard({ ep }: { ep: Episode }) {
+function ContinueHero({ ep }: { ep: Episode }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const zh = useZh(ep.title);
   const pct = ep.duration ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
+  const left = ep.duration ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
   return (
-    <div className="continue-card" role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
-      {ep.cover ? <img src={ep.cover} alt="" /> : <div className="cover-fallback" />}
-      <p className="ep-name">{zh ?? ep.title}</p>
-      <div className="continue-bar"><div style={{ width: `${pct}%` }} /></div>
+    <div className="hero" role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
+      {ep.cover ? <img className={ep.videoId ? "wide" : ""} src={ep.cover} alt="" /> : <div className="cover-fallback" />}
+      <div className="hero-meta">
+        <p className="meta-line">继续收听{ep.showTitle && ep.showId !== "single" ? <> · <ShowName title={ep.showTitle} /></> : null}</p>
+        <p className="hero-title">{zh ?? ep.title}</p>
+        {zh && zh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
+        <div className="hero-foot">
+          <div className="hero-bar"><div style={{ width: `${pct}%` }} /></div>
+          {left > 0 && <span className="muted small">还剩 {left} 分钟</span>}
+          <button className="btn primary sm" onClick={(e) => { e.stopPropagation(); openEpisode(ep); setTimeout(() => useStore.getState().player?.play(), 600); }}><Play size={13} /> 继续播放</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShowTile({ show }: { show: Show }) {
+  const go = useStore((s) => s.go);
+  const { zh, orig } = useShowName(show.title);
+  return (
+    <div className="show-tile" role="button" tabIndex={0} onClick={() => go({ kind: "show", id: show.id })} onKeyDown={(e) => e.key === "Enter" && go({ kind: "show", id: show.id })}>
+      <div className="tile-cover">{show.cover ? <img src={show.cover} alt="" loading="lazy" /> : <div className="cover-fallback">{orig.slice(0, 1)}</div>}</div>
+      <p className="tile-name clamp1">{zh ?? orig}</p>
+      {zh && <p className="tile-sub clamp1">{orig}</p>}
     </div>
   );
 }
 
 export function LatestView() {
-  const { shows, reloadShows, notify, settings } = useStore();
+  const { shows, settings, set, go } = useStore();
   const [eps, setEps] = useState<Episode[] | null>(null);
-  const [recent, setRecent] = useState<Episode[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [recent, setRecent] = useState<Episode | null>(null);
+  const [limit, setLimit] = useState(40);
   useEffect(() => {
-    api.listEpisodes(undefined, 120).then(setEps);
-    api.recentEpisodes().then((r) => setRecent(r.filter((e) => e.progress > 5 && (!e.duration || e.progress < e.duration * 0.97)).slice(0, 6)));
+    api.listEpisodes(undefined, 200).then(setEps);
+    api.recentEpisodes().then((r) => setRecent(r.find((e) => e.progress > 5 && (!e.duration || e.progress < e.duration * 0.97)) ?? null));
   }, [shows]);
   if (!shows.length && !settings.onboarded) return <Onboarding />;
-  const refresh = async () => {
-    setBusy(true);
-    try { await api.refreshAll(); await reloadShows(); setEps(await api.listEpisodes(undefined, 120)); } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
-  };
   return (
     <div className="page">
-      <div className="page-head">
-        <h1 className="page-title">首页</h1>
-        <button className="btn ghost sm" onClick={refresh} disabled={busy}>{busy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} 检查更新</button>
-      </div>
-      {recent.length > 0 && (
-        <section>
-          <h2 className="section-title">继续收听</h2>
-          <div className="continue-strip">{recent.map((e) => <ContinueCard key={e.id} ep={e} />)}</div>
-        </section>
-      )}
-      <h2 className="section-title">最新单集</h2>
-      {!shows.length ? (
-        <div className="panel-empty"><p className="muted">还没有订阅节目</p><button className="btn primary" onClick={() => useStore.getState().go({ kind: "discover" })}>去发现节目</button></div>
-      ) : <EpisodeList episodes={eps} showShow />}
+      {recent && <ContinueHero ep={recent} />}
+      <section>
+        <h2 className="module-title" role="button" tabIndex={0} onClick={() => go({ kind: "discover" })}>订阅节目 <ChevronRight size={16} /></h2>
+        <div className="tile-strip">
+          {shows.slice(0, 12).map((s) => <ShowTile key={s.id} show={s} />)}
+          <div className="show-tile add" role="button" tabIndex={0} onClick={() => set({ addOpen: true })}><div className="tile-cover dashed"><Plus size={22} /></div><p className="tile-name">添加</p></div>
+        </div>
+      </section>
+      <section>
+        <h2 className="module-title">最新单集</h2>
+        {!shows.length ? <div className="panel-empty"><p className="muted">还没有订阅节目</p><button className="btn primary" onClick={() => go({ kind: "discover" })}>去发现节目</button></div>
+          : <EpisodeList episodes={eps?.slice(0, limit) ?? null} showShow />}
+        {eps && eps.length > limit && <div className="center"><button className="btn" onClick={() => setLimit(limit + 40)}>加载更多</button></div>}
+      </section>
     </div>
   );
 }
@@ -186,15 +204,16 @@ export function ShowView({ id }: { id: string }) {
 
 function PickCard({ p, selected, subscribed, onClick, action }: { p: Pick; selected?: boolean; subscribed: boolean; onClick?: () => void; action?: React.ReactNode }) {
   return (
-    <div className={`pick ${selected ? "selected" : ""} ${subscribed ? "done" : ""}`} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined} aria-pressed={onClick ? selected : undefined}
+    <div className={`pick-tile ${selected ? "selected" : ""} ${subscribed ? "done" : ""}`} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined} aria-pressed={onClick ? selected : undefined}
       onClick={onClick} onKeyDown={(e) => onClick && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onClick())}>
-      <img src={p.cover} alt="" loading="lazy" />
-      <div className="pick-meta">
-        <p className="ep-name">{p.zh}{p.video && <span className="dot-status"><Youtube size={11} /> 视频</span>}</p>
-        <p className="meta-line clamp1">{p.zh !== p.title ? `${p.title} · ` : ""}{p.by}</p>
-        <p className="pick-intro">{p.intro}</p>
+      <div className="tile-cover">
+        <img src={p.cover} alt="" loading="lazy" />
+        {p.video && <span className="tile-badge"><Youtube size={11} /> 视频</span>}
+        {onClick ? <span className={`pick-check ${selected ? "on" : ""}`}>{selected && <Check size={13} strokeWidth={3} />}</span> : <div className="tile-action">{action}</div>}
       </div>
-      {action ?? (onClick && <span className={`pick-check ${selected ? "on" : ""}`}>{selected && <Check size={13} strokeWidth={3} />}</span>)}
+      <p className="tile-name clamp1">{p.zh}</p>
+      <p className="tile-sub clamp1">{p.zh !== p.title ? p.title : p.by}</p>
+      <p className="pick-intro">{p.intro}</p>
     </div>
   );
 }
@@ -234,7 +253,7 @@ function Onboarding() {
       <h1 className="hero-title">先挑几个想听的节目</h1>
       <p className="hero-sub">订阅后自动拉取最新几集，字幕和中文翻译开箱即用。</p>
       <TopicChips topics={topics} setTopics={setTopics} />
-      <div className="pick-grid">
+      <div className="tile-grid">
         {visible(topics).map((p) => <PickCard key={p.id} p={p} selected={chosen.has(p.id)} subscribed={false} onClick={() => toggle(p.id)} />)}
       </div>
       <div className="onboard-bar">
@@ -249,22 +268,9 @@ function Onboarding() {
 
 export function DiscoverView() {
   const { shows, reloadShows, notify, go } = useStore();
-  const [term, setTerm] = useState("");
-  const [country, setCountry] = useState("US");
-  const [results, setResults] = useState<SearchResult[] | null>(null);
-  const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
   const [topics, setTopics] = useState<Topic[]>([]);
-  const timer = useRef<number | undefined>(undefined);
   const subscribed = (p: Pick) => shows.some((s) => s.feedUrl === p.input || s.title === p.title || shortName(s.title) === shortName(p.title));
-  useEffect(() => {
-    window.clearTimeout(timer.current);
-    if (!term.trim()) { setResults(null); return; }
-    timer.current = window.setTimeout(async () => {
-      setLoading(true);
-      try { setResults(await api.searchPodcasts(term.trim(), country)); } catch (err) { notify(errorText(err)); } finally { setLoading(false); }
-    }, 350);
-  }, [term, country]);
   const add = async (input: string, title: string) => {
     setAdding(input);
     try {
@@ -274,42 +280,16 @@ export function DiscoverView() {
     } catch (err) { notify(errorText(err)); } finally { setAdding(null); }
   };
   const SubBtn = ({ input, title, done }: { input: string; title: string; done: boolean }) => done
-    ? <span className="sub-done"><Check size={14} /> 已订阅</span>
-    : <button className="btn sm" onClick={(e) => { e.stopPropagation(); void add(input, title); }} disabled={adding != null}>{adding === input ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} 订阅</button>;
+    ? <span className="tile-done" title="已订阅"><Check size={16} /></span>
+    : <button className="tile-add" title="订阅" onClick={(e) => { e.stopPropagation(); void add(input, title); }} disabled={adding != null}>{adding === input ? <Loader2 size={16} className="spin" /> : <Plus size={18} />}</button>;
   return (
     <div className="page">
-      <div className="page-head"><h1 className="page-title">发现</h1></div>
-      <div className="search-box">
-        <Search size={16} />
-        <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="搜索播客名称，例如 Lex Fridman、硅谷101" spellCheck={false} />
-        {loading && <Loader2 size={14} className="spin" />}
-        <select value={country} onChange={(e) => setCountry(e.target.value)} aria-label="地区">
-          <option value="US">美国</option><option value="GB">英国</option><option value="CN">中国</option><option value="JP">日本</option>
-        </select>
+      <h1 className="page-title">发现</h1>
+      <p className="muted page-sub">精选海外与中文好节目，订阅后字幕和中文翻译开箱即用。想找别的节目，用上方搜索框。</p>
+      <TopicChips topics={topics} setTopics={setTopics} />
+      <div className="tile-grid">
+        {visible(topics).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} action={<SubBtn input={p.input} title={p.zh} done={subscribed(p)} />} />)}
       </div>
-      {results ? (
-        <section>
-          <h2 className="section-title">搜索结果</h2>
-          {results.length === 0 ? <p className="muted">没有找到，换个关键词或地区试试</p> : (
-            <div className="pick-grid">
-              {results.map((r) => (
-                <div className="pick" key={r.feedUrl}>
-                  {r.cover ? <img src={r.cover} alt="" loading="lazy" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
-                  <div className="pick-meta"><BiTitle text={r.title} className="ep-name" subClassName="clamp1" /><p className="meta-line clamp1">{r.author}{r.genre ? ` · ${r.genre}` : ""}</p></div>
-                  <SubBtn input={r.feedUrl} title={r.title} done={shows.some((s) => s.feedUrl === r.feedUrl)} />
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      ) : (
-        <section>
-          <TopicChips topics={topics} setTopics={setTopics} />
-          <div className="pick-grid">
-            {visible(topics).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} action={<SubBtn input={p.input} title={p.zh} done={subscribed(p)} />} />)}
-          </div>
-        </section>
-      )}
     </div>
   );
 }

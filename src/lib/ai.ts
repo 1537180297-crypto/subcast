@@ -57,7 +57,7 @@ export function transcriptForModel(segments: Segment[], translation?: (string | 
   return text;
 }
 
-const QA_SYSTEM = (title: string, show: string, transcript: string) => `你是「声渡」的节目助手，帮助中文用户理解一期海外播客/视频。
+const QA_SYSTEM = (title: string, show: string, transcript: string) => `你是 SubCast 的节目助手，帮助中文用户理解一期海外播客/视频。
 节目：${show}
 本期：${title}
 

@@ -33,7 +33,8 @@
     "allow-set-api-key",
     "allow-has-api-key",
     "allow-llm-chat",
-    "allow-translate-texts"
+    "allow-translate-texts",
+    "core:window:allow-start-dragging"
   ],
   "remote": {
     "urls": [

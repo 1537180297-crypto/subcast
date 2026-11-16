@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
-import { AddDialog, MiniPlayer, Sidebar, Toast } from "./components/Chrome";
+import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
 import { DiscoverView, LatestView, RecentView, ShowView } from "./components/Lists";
 import { EpisodeView } from "./components/EpisodeView";
 import { AudioEngine, cycleMode, cycleRate } from "./components/Players";
@@ -42,6 +42,7 @@ export default function App() {
     <div className="app">
       <Sidebar />
       <main className="main">
+        <TopBar />
         {view.kind === "latest" && <LatestView />}
         {view.kind === "recent" && <RecentView />}
         {view.kind === "discover" && <DiscoverView />}

@@ -390,11 +390,17 @@ pub fn run() {
             let url = tauri::WebviewUrl::App("index.html".into());
             #[cfg(not(debug_assertions))]
             let url = tauri::WebviewUrl::External(format!("http://localhost:{LOCAL_PORT}").parse().unwrap());
-            tauri::WebviewWindowBuilder::new(app, "main", url)
-                .title("SubCast · 声渡")
+            let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
+                .title("SubCast")
                 .inner_size(1360.0, 880.0)
-                .min_inner_size(980.0, 640.0)
-                .build()?;
+                .min_inner_size(980.0, 640.0);
+            // macOS: no title bar; the traffic lights sit inside the sidebar and the page draws its own drag areas.
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true)
+                .traffic_light_position(tauri::LogicalPosition::new(18.0, 22.0));
+            builder.build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

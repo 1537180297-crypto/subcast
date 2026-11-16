@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
-import { Compass, History, Inbox, Loader2, Pause, Play, Plus, Settings as Cog, X } from "lucide-react";
-import { api, errorText } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, Compass, History, Inbox, Link2, Loader2, Pause, Play, Plus, Search, Settings as Cog, X } from "lucide-react";
+import { api, errorText, type SearchResult } from "../lib/api";
 import { useStore, type View } from "../store";
 import { showName } from "../lib/picks";
 import { useShowName } from "../lib/zh";
 import { useJobs } from "../lib/jobs";
-import { ZhText } from "./Bi";
+import { BiTitle, ZhText } from "./Bi";
+import logoUrl from "../assets/logo.png";
 import { showIcon } from "./Lists";
 
 export function Sidebar() {
@@ -16,22 +17,24 @@ export function Sidebar() {
   );
   return (
     <aside className="sidebar">
+      <div className="traffic-space" data-tauri-drag-region />
       <div className="brand" data-tauri-drag-region>
-        <div className="logo">渡</div>
-        <p className="brand-name">声渡 <span>SubCast</span></p>
+        <img className="logo-img" src={logoUrl} alt="" />
+        <p className="brand-name">SubCast</p>
       </div>
-      <button className="add-field" onClick={() => set({ addOpen: true })}><Plus size={14} /> 粘贴链接或搜索…</button>
       <nav>
         <Nav v={{ kind: "latest" }} icon={<Inbox size={16} />} label="首页" />
         <Nav v={{ kind: "recent" }} icon={<History size={16} />} label="继续收听" />
         <Nav v={{ kind: "discover" }} icon={<Compass size={16} />} label="发现" />
       </nav>
-      <p className="side-label">我的订阅</p>
+      <div className="side-sep" />
+      <div className="side-head"><span>订阅</span><button className="icon-btn sm" title="添加节目" onClick={() => set({ addOpen: true })}><Plus size={14} /></button></div>
       <div className="show-list">
         {shows.map((s) => (
           <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={s.title}>
             <span className="show-cover">{showIcon(s)}</span>
             <SideName title={s.title} />
+            {s.unplayed > 0 && <span className="unplayed">{s.unplayed > 99 ? "99+" : s.unplayed}</span>}
           </button>
         ))}
         {!shows.length && <p className="muted small side-empty">还没有订阅</p>}
@@ -39,6 +42,71 @@ export function Sidebar() {
       <TaskChip />
       <button className="nav settings-btn" onClick={() => useStore.getState().openSettings()}><Cog size={16} /><span>设置</span></button>
     </aside>
+  );
+}
+
+const PLACEHOLDERS = ["粘贴 YouTube / 小宇宙 / 播客链接，或搜索节目名", "试试搜 Lex Fridman", "粘贴一个 YouTube 视频链接，直接看双语字幕"];
+const placeholder = PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)];
+const looksLikeLink = (t: string) => /^(https?:\/\/|@)|youtube\.com|youtu\.be|xiaoyuzhoufm\.com|feed\.xyzfm\.space|podcasts\.apple\.com|\.(xml|rss)\b/i.test(t.trim());
+
+/** The bar above every page: back, one search box that subscribes to pasted links or searches by name, settings. */
+export function TopBar() {
+  const { history, back, reloadShows, go, openEpisode, notify, shows } = useStore();
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [adding, setAdding] = useState<string | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const link = looksLikeLink(q);
+  useEffect(() => {
+    window.clearTimeout(timer.current);
+    if (!q.trim() || link) { setResults(null); return; }
+    timer.current = window.setTimeout(async () => {
+      setBusy(true);
+      try { setResults((await api.searchPodcasts(q.trim(), /[\u4e00-\u9fff]/.test(q) ? "CN" : "US")).slice(0, 8)); } catch { setResults([]); } finally { setBusy(false); }
+    }, 300);
+  }, [q]);
+  const subscribe = async (input: string) => {
+    setAdding(input);
+    try {
+      const r = await api.addSubscription(input);
+      setQ(""); setOpen(false); setResults(null);
+      if (r.show) { await reloadShows(); notify(`已订阅「${r.show.title}」`); go({ kind: "show", id: r.show.id }); }
+      else if (r.episode) openEpisode(r.episode);
+    } catch (e) { notify(errorText(e)); } finally { setAdding(null); }
+  };
+  const submit = () => { if (link) void subscribe(q.trim()); else if (results?.[0]) void subscribe(results[0].feedUrl); };
+  return (
+    <div className="topbar" data-tauri-drag-region>
+      <button className="round-btn" onClick={back} disabled={!history.length} aria-label="返回"><ChevronLeft size={18} /></button>
+      <div className="search-wrap">
+        <div className={`top-search ${open ? "focus" : ""}`}>
+          {link ? <Link2 size={16} /> : <Search size={16} />}
+          <input value={q} placeholder={placeholder} spellCheck={false} autoCapitalize="off" autoCorrect="off"
+            onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
+          {busy || adding ? <Loader2 size={14} className="spin" /> : link && <span className="kbd-hint">回车订阅</span>}
+        </div>
+        {open && results && (
+          <div className="search-drop">
+            {results.length === 0 ? <p className="muted small center">没有找到，换个关键词试试</p> : results.map((r) => {
+              const done = shows.some((s) => s.feedUrl === r.feedUrl);
+              return (
+                <div key={r.feedUrl} className="drop-row" onMouseDown={(e) => e.preventDefault()}>
+                  {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
+                  <div className="drop-meta"><BiTitle text={r.title} className="ep-name" subClassName="clamp1" /><p className="meta-line clamp1">{r.author}</p></div>
+                  {done ? <span className="sub-done">已订阅</span> : <button className="btn sm" onClick={() => subscribe(r.feedUrl)} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} 订阅</button>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div className="spacer" data-tauri-drag-region />
+      <button className="round-btn" onClick={() => useStore.getState().openSettings()} aria-label="设置"><Cog size={17} /></button>
+    </div>
   );
 }
 
