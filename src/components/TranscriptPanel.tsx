@@ -6,7 +6,7 @@ import { clock } from "../lib/format";
 import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 
-const SOURCE_LABEL: Record<string, string> = { youtube: "YouTube 字幕", "youtube-auto": "YouTube 自动字幕", rss: "节目方文字稿", whisper: "本机识别", cloud: "云端识别" };
+const SOURCE_LABEL: Record<string, string> = { youtube: "YouTube 字幕", "youtube-auto": "YouTube 自动字幕", rss: "节目方文字稿", whisper: "本机识别", cloud: "云端识别", qiaomu: "精读站原文 · 时间为估算" };
 
 export function activeIndex(segments: Segment[], time: number): number {
   let lo = 0, hi = segments.length - 1, found = -1;

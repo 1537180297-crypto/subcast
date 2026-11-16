@@ -4,6 +4,7 @@ mod feeds;
 mod llm;
 mod model;
 mod net;
+mod qiaomu;
 mod transcript;
 mod translate;
 mod youtube;
@@ -54,6 +55,19 @@ fn store(state: &AppState, show: &Show, eps: &[Episode]) -> Res<()> {
     Ok(())
 }
 
+/// Fetches any subscription's latest state. 乔木精读 channels also bring curated Chinese titles, which go straight
+/// into the translation cache so the UI shows them instead of machine translations.
+async fn fetch_any(state: &AppState, feed_url: &str, kind: &str) -> anyhow::Result<(Show, Vec<Episode>)> {
+    if kind == "qiaomu" {
+        let id = qiaomu::site_id(feed_url).ok_or_else(|| anyhow::anyhow!("不是精读频道"))?;
+        let ch = qiaomu::channel(&id).await?;
+        let conn = state.db.lock().unwrap();
+        for (orig, zh) in &ch.zh_titles { let _ = db::tr_put(&conn, &short_hash(&format!("zh-CN|{orig}"), 24), zh); }
+        return Ok((ch.show, ch.episodes));
+    }
+    feeds::fetch_show(feed_url, kind).await
+}
+
 async fn single_youtube(state: &AppState, video_id: &str) -> Res<Episode> {
     let info = youtube::video_info(video_id).await.map_err(e)?;
     let ep = Episode {
@@ -74,17 +88,24 @@ async fn single_youtube(state: &AppState, video_id: &str) -> Res<Episode> {
     Ok(db::get_episode(&conn, &ep.id).map_err(e)?.unwrap_or(ep))
 }
 
-#[tauri::command]
-async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Added> {
-    let (show, eps) = match feeds::resolve(&input).await.map_err(e)? {
-        feeds::Source::YouTubeVideo(id) => return Ok(Added { show: None, episode: Some(single_youtube(&state, &id).await?) }),
+enum Fetched { Show(Show, Vec<Episode>), Single(Episode) }
+
+/// Reads whatever the user pasted (or a curated channel) without subscribing.
+async fn fetch_input(state: &AppState, input: &str) -> Res<Fetched> {
+    let normalized = if input.trim().starts_with("http") { input.trim().to_string() } else { format!("https://{}", input.trim()) };
+    if let Some(id) = qiaomu::site_id(&normalized) {
+        let (show, eps) = fetch_any(state, &qiaomu::feed_url(&id), "qiaomu").await.map_err(e)?;
+        return Ok(Fetched::Show(show, eps));
+    }
+    let (show, eps) = match feeds::resolve(input).await.map_err(e)? {
+        feeds::Source::YouTubeVideo(id) => return Ok(Fetched::Single(single_youtube(state, &id).await?)),
         feeds::Source::XiaoyuzhouEpisode(url) => {
             let mut ep = feeds::xiaoyuzhou_episode(&url).await.map_err(e)?;
             ep.id = short_hash(&format!("single:{}", ep.guid), 20);
             let mut conn = state.db.lock().unwrap();
             db::upsert_episodes(&mut conn, std::slice::from_ref(&ep)).map_err(e)?;
             let ep = db::get_episode(&conn, &ep.id).map_err(e)?.unwrap_or(ep);
-            return Ok(Added { show: None, episode: Some(ep) });
+            return Ok(Fetched::Single(ep));
         }
         feeds::Source::Xiaoyuzhou(url) => feeds::xiaoyuzhou_show(&url).await.map_err(e)?,
         feeds::Source::Feed(url) => match feeds::fetch_show(&url, "podcast").await {
@@ -98,14 +119,39 @@ async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Adde
         },
     };
     if eps.is_empty() { return Err("这个订阅源里没有可播放的节目".into()); }
-    store(&state, &show, &eps)?;
-    Ok(Added { show: Some(show), episode: None })
+    Ok(Fetched::Show(show, eps))
+}
+
+#[tauri::command]
+async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Added> {
+    match fetch_input(&state, &input).await? {
+        Fetched::Single(ep) => Ok(Added { show: None, episode: Some(ep) }),
+        Fetched::Show(show, eps) => { store(&state, &show, &eps)?; Ok(Added { show: Some(show), episode: None }) }
+    }
+}
+
+#[derive(Serialize)]
+struct Preview { show: Show, episodes: Vec<Episode> }
+
+/// A channel page before subscribing: its episodes are saved (so they can be opened and played) but the show is
+/// not, so it stays out of the sidebar and the home feed until the user subscribes.
+#[tauri::command]
+async fn preview_show(state: State<'_, AppState>, input: String) -> Res<Preview> {
+    match fetch_input(&state, &input).await? {
+        Fetched::Single(_) => Err("这是单集链接，不是频道".into()),
+        Fetched::Show(show, eps) => {
+            let mut conn = state.db.lock().unwrap();
+            db::upsert_episodes(&mut conn, &eps).map_err(e)?;
+            let episodes = db::list_episodes(&conn, Some(&show.id), 300).map_err(e)?;
+            Ok(Preview { show, episodes })
+        }
+    }
 }
 
 #[tauri::command]
 async fn refresh_show(state: State<'_, AppState>, id: String) -> Res<Show> {
     let show = db::get_show(&state.db.lock().unwrap(), &id).map_err(e)?.ok_or("节目不存在")?;
-    let (fresh, eps) = feeds::fetch_show(&show.feed_url, &show.kind).await.map_err(e)?;
+    let (fresh, eps) = fetch_any(&state, &show.feed_url, &show.kind).await.map_err(e)?;
     let fresh = Show { id: show.id.clone(), kind: show.kind.clone(), ..fresh };
     store(&state, &fresh, &eps)?;
     Ok(fresh)
@@ -116,7 +162,7 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<usize> {
     let shows = db::list_shows(&state.db.lock().unwrap()).map_err(e)?;
     let mut ok = 0;
     for chunk in shows.chunks(6) {
-        let results = futures_util::future::join_all(chunk.iter().map(|s| feeds::fetch_show(&s.feed_url, &s.kind))).await;
+        let results = futures_util::future::join_all(chunk.iter().map(|s| fetch_any(&state, &s.feed_url, &s.kind))).await;
         for (s, r) in chunk.iter().zip(results) {
             if let Ok((fresh, eps)) = r {
                 let fresh = Show { id: s.id.clone(), kind: s.kind.clone(), ..fresh };
@@ -182,6 +228,18 @@ async fn fetch_official_transcript(state: State<'_, AppState>, episode_id: Strin
     } else {
         None
     };
+    // 乔木精读 episodes carry the original transcript on their page (untimed; spread across the episode).
+    let t = match t {
+        Some(t) => Some(t),
+        None if ep.transcript_type.as_deref() == Some("qiaomu") => match &ep.link {
+            Some(link) => {
+                let d = qiaomu::detail(link).await.map_err(e)?;
+                d.transcript.map(|text| Transcript { episode_id: ep.id.clone(), source: "qiaomu".into(), language: "auto".into(), segments: qiaomu::transcript_segments(&text, ep.duration.unwrap_or(3600.0)) })
+            }
+            None => None,
+        },
+        None => None,
+    };
     if let Some(t) = &t {
         if t.segments.is_empty() { return Ok(None); }
         db::save_transcript(&state.db.lock().unwrap(), t).map_err(e)?;
@@ -195,6 +253,18 @@ struct AsrEvent { episode_id: String, stage: String, progress: f64, message: Opt
 
 fn asr_emit(app: &AppHandle, id: &str, stage: &str, progress: f64, message: Option<String>, segment: Option<Segment>) {
     let _ = app.emit("asr", AsrEvent { episode_id: id.into(), stage: stage.into(), progress, message, segment });
+}
+
+/// A 乔木精读 episode's page: fills in its audio address and keeps the Chinese deep-read.
+#[tauri::command]
+async fn qiaomu_detail(state: State<'_, AppState>, episode_id: String) -> Res<qiaomu::Detail> {
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let link = ep.link.clone().ok_or("这集没有网页")?;
+    let d = qiaomu::detail(&link).await.map_err(e)?;
+    let conn = state.db.lock().unwrap();
+    if let (Some(a), None) = (&d.audio, &ep.audio_url) { let _ = db::set_audio_url(&conn, &ep.id, a); }
+    if let Some(h) = &d.deep_read { let _ = db::set_blob(&conn, &ep.id, "deep-read", h); }
+    Ok(qiaomu::Detail { transcript: None, ..d })
 }
 
 #[tauri::command]
@@ -415,7 +485,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -425,6 +495,18 @@ pub fn run() {
 mod live {
     //! Network tests against real services: `cargo test -- --ignored --nocapture`.
     use super::*;
+    #[tokio::test]
+    #[ignore]
+    async fn qiaomu_channels() {
+        for id in ["lex", "nopriors", "zhangxiaojun"] {
+            let ch = crate::qiaomu::channel(id).await.unwrap();
+            let ep = &ch.episodes[0];
+            println!("{id}: {} | cover={:?} | eps={} | zh={} | first={} video={:?}", ch.show.title, ch.show.cover, ch.episodes.len(), ch.zh_titles.len(), ep.title, ep.video_id);
+            let d = crate::qiaomu::detail(ep.link.as_ref().unwrap()).await.unwrap();
+            println!("  audio={:?} deep={} transcript={}", d.audio, d.deep_read.as_ref().map(|h| h.len()).unwrap_or(0), d.transcript.as_ref().map(|t| t.len()).unwrap_or(0));
+            if let Some(t) = &d.transcript { let segs = crate::qiaomu::transcript_segments(t, ep.duration.unwrap_or(3600.0)); println!("  segs={} first={:?}", segs.len(), segs.first().map(|s| s.text.chars().take(80).collect::<String>())); }
+        }
+    }
     #[tokio::test]
     #[ignore]
     async fn sources() {

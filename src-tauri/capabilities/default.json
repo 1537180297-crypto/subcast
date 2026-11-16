@@ -35,6 +35,8 @@
     "allow-llm-chat",
     "allow-translate-texts",
     "allow-youtube-stream",
+    "allow-qiaomu-detail",
+    "allow-preview-show",
     "core:window:allow-start-dragging"
   ],
   "remote": {

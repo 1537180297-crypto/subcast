@@ -126,6 +126,11 @@ pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>> {
     Ok(conn.query_row(&sql, [id], episode_from).optional()?)
 }
 
+pub fn set_audio_url(conn: &Connection, id: &str, url: &str) -> Result<()> {
+    conn.execute("UPDATE episodes SET audio_url=?2 WHERE id=?1", params![id, url])?;
+    Ok(())
+}
+
 pub fn set_progress(conn: &Connection, id: &str, seconds: f64) -> Result<()> {
     conn.execute("UPDATE episodes SET progress=?2 WHERE id=?1", params![id, seconds.max(0.01)])?;
     Ok(())

@@ -7,6 +7,7 @@ export type View =
   | { kind: "recent" }
   | { kind: "discover" }
   | { kind: "show"; id: string }
+  | { kind: "channel"; input: string }
   | { kind: "episode"; id: string };
 
 export interface PlayerHandle {

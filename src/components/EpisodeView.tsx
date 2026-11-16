@@ -11,7 +11,10 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { Captions, ChevronDown, ExternalLink, MessageCircle, Play, ScrollText } from "lucide-react";
+import { BookOpen, Captions, ChevronDown, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, ScrollText } from "lucide-react";
+import { Splitter } from "./Splitter";
+import { DeepRead } from "./DeepRead";
+import { PANEL, useLayout } from "../lib/layout";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
 import { date, duration, notesText } from "../lib/format";
@@ -23,7 +26,7 @@ import { ChatPanel, SummaryPanel } from "./AiPanels";
 import { Controls, YouTubePlayer } from "./Players";
 import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 
-type Tab = "transcript" | "chat" | "summary";
+type Tab = "transcript" | "deep" | "chat" | "summary";
 
 /** Splits a long subtitle block into screen-sized pieces at word / punctuation boundaries. */
 export function pieces(text: string, cjk: boolean): string[] {
@@ -74,9 +77,14 @@ export function EpisodeView({ id }: { id: string }) {
   const [tab, setTab] = useState<Tab>("transcript");
 
   useEffect(() => {
-    api.getEpisode(id).then((e) => {
+    api.getEpisode(id).then(async (e) => {
       if (!e) return;
+      // 乔木精读 episodes learn their audio address from their page the first time they are opened.
+      if (e.transcriptType === "qiaomu" && !e.audioUrl) {
+        try { await api.qiaomuDetail(e.id); e = (await api.getEpisode(id)) ?? e; } catch { /* plays video, or shows the error later */ }
+      }
       setEp(e);
+      if (e.transcriptType === "qiaomu") setTab((t) => (t === "transcript" ? "deep" : t));
       void loadTranscript(e);
       // Opening an episode loads it into the player, unless something else is playing.
       const s = useStore.getState();
@@ -88,8 +96,8 @@ export function EpisodeView({ id }: { id: string }) {
   return <EpisodeBody ep={ep} tab={tab} setTab={setTab} />;
 }
 
-function Notes({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+function Notes({ text, defaultOpen = false }: { text: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   const [orig, setOrig] = useState(false);
   const zh = useZhParagraphs(text, open);
   const paras = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
@@ -115,10 +123,11 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
   const titleZh = useZh(ep.title);
   const isCurrent = current?.id === ep.id;
   const notes = notesText(ep.notes);
+  const { panel, panelOpen, put } = useLayout();
 
   return (
     <div className="episode">
-      <div className="ep-body">
+      <div className={`ep-body ${panelOpen ? "" : "panel-collapsed"}`} style={{ "--panel-w": `${panelOpen ? panel : 0}px` } as React.CSSProperties}>
         <div className="ep-leftcol">
         <TopBar />
         <section className="ep-left">
@@ -128,6 +137,7 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
               <h1>{titleZh ?? ep.title}</h1>
               {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
             </div>
+            {!panelOpen && <button className="round-btn" title="显示字幕栏（⌘\\）" onClick={() => put({ panelOpen: true })}><PanelRightOpen size={15} /></button>}
             {ep.link && <button className="round-btn" title={ep.videoId ? "在 YouTube 打开" : "节目网页"} onClick={() => openUrl(ep.link!)}><ExternalLink size={15} /></button>}
           </div>
           {ep.videoId ? (
@@ -141,23 +151,32 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
           {isCurrent ? <Controls /> : (
             <button className="btn primary" onClick={() => { load(ep); setTimeout(() => useStore.getState().player?.play(), 400); }}><Play size={14} /> 播放这一集</button>
           )}
-          {notes && <Notes text={notes} />}
         </section>
         </div>
-        <section className="ep-right">
+        {panelOpen && <Splitter value={panel} min={PANEL.min} max={PANEL.max} def={PANEL.def} snap={PANEL.snap} edge="left" label="字幕栏宽度" onChange={(w) => put({ panel: w })} onCollapse={() => put({ panelOpen: false })} />}
+        {panelOpen && <section className="ep-right">
           <div className="tabs" role="tablist" data-tauri-drag-region>
             <button role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /> 字幕</button>
+            {ep.transcriptType === "qiaomu" && <button role="tab" aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /> 精读</button>}
             <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /> 问答</button>
             <button role="tab" aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /> 导读</button>
+            <span className="spacer" data-tauri-drag-region />
+            <button className="icon-btn tabs-close" title="收起字幕栏（⌘\\）" onClick={() => put({ panelOpen: false })}><PanelRightClose size={16} /></button>
           </div>
           <div className="tab-body">
             <PanelBoundary key={tab}>
               {tab === "transcript" && <TranscriptPanel ep={ep} />}
               {tab === "chat" && <ChatPanel ep={ep} />}
-              {tab === "summary" && <SummaryPanel ep={ep} />}
+              {tab === "deep" && <DeepRead ep={ep}><div className="panel-empty"><p className="muted">这一集还没有精读</p></div></DeepRead>}
+              {tab === "summary" && (
+                <div className="guide-panel">
+                  {notes && <Notes text={notes} defaultOpen />}
+                  <div className="guide-summary"><SummaryPanel ep={ep} /></div>
+                </div>
+              )}
             </PanelBoundary>
           </div>
-        </section>
+        </section>}
       </div>
     </div>
   );

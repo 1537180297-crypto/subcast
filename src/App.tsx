@@ -1,8 +1,10 @@
+import { Splitter } from "./components/Splitter";
+import { SIDEBAR, useLayout } from "./lib/layout";
 import { useEffect } from "react";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
-import { DiscoverView, LatestView, RecentView, ShowView } from "./components/Lists";
+import { DiscoverView, LatestView, RecentView, ShowView, ChannelView } from "./components/Lists";
 import { EpisodeView } from "./components/EpisodeView";
 import { AudioEngine, cycleMode, cycleRate } from "./components/Players";
 import { useJobs } from "./lib/jobs";
@@ -17,7 +19,13 @@ export default function App() {
     void init();
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (t.closest("input, textarea, select, [contenteditable]")) return;
+      if (t.closest("input, textarea, select, [contenteditable], [role=separator]")) return;
+      if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "\\")) {
+        e.preventDefault();
+        const l = useLayout.getState();
+        if (e.key === "b") l.put({ sideOpen: !l.sideOpen }); else l.put({ panelOpen: !l.panelOpen });
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const { player, time, current } = useStore.getState();
       const segs = current ? useJobs.getState().transcripts[current.id]?.segments : undefined;
@@ -37,16 +45,19 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const { sidebar, sideOpen, put: putLayout } = useLayout();
   if (!ready) return <div className="boot" />;
   return (
-    <div className="app">
+    <div className={`app ${sideOpen ? "" : "side-collapsed"}`} style={{ "--sidebar-w": `${sideOpen ? sidebar : 0}px` } as React.CSSProperties}>
       <Sidebar />
+      {sideOpen && <Splitter value={sidebar} min={SIDEBAR.min} max={SIDEBAR.max} def={SIDEBAR.def} snap={SIDEBAR.snap} edge="right" label="侧栏宽度" onChange={(w) => putLayout({ sidebar: w })} onCollapse={() => putLayout({ sideOpen: false })} />}
       <main className="main">
         {view.kind !== "episode" && <TopBar />}
         {view.kind === "latest" && <LatestView />}
         {view.kind === "recent" && <RecentView />}
         {view.kind === "discover" && <DiscoverView />}
         {view.kind === "show" && <ShowView key={view.id} id={view.id} />}
+        {view.kind === "channel" && <ChannelView key={view.input} input={view.input} />}
         {view.kind === "episode" && <EpisodeView key={view.id} id={view.id} />}
       </main>
       <MiniPlayer />

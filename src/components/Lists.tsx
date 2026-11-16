@@ -2,22 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Link2, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Youtube } from "lucide-react";
 import { api, errorText, type Episode, type Show } from "../lib/api";
 import { date, duration } from "../lib/format";
-import { PICKS, TOPICS, shortName, type Pick, type Topic } from "../lib/picks";
+import { PICKS, TOPICS, isSubscribed, sameFeed, type Pick, type Topic } from "../lib/picks";
 import { useShowName, useZh } from "../lib/zh";
 import { useStore } from "../store";
 
 // ---- episode rows -------------------------------------------------------------------------------
-
-function Status({ ep }: { ep: Episode }) {
-  const pct = ep.duration && ep.progress > 5 ? Math.round((ep.progress / ep.duration) * 100) : 0;
-  return (
-    <>
-      {ep.hasTranscript ? <span className="dot-status ok">● 有字幕</span> : ep.transcriptUrl ? <span className="dot-status">○ 有字幕</span> : null}
-      {pct > 0 && pct < 97 && <span className="dot-status">▶ 听到 {pct}%</span>}
-      {ep.videoId && <span className="dot-status"><Youtube size={11} /> 视频</span>}
-    </>
-  );
-}
 
 function ShowName({ title }: { title?: string }) {
   if (!title) return null;
@@ -25,34 +14,70 @@ function ShowName({ title }: { title?: string }) {
   return <span className="show-name">{zh ?? orig}</span>;
 }
 
+/** One episode, built for scanning: who and when on a small first line, the title in full (up to two lines),
+ *  the original title muted underneath, and status only when it means something. */
 function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const current = useStore((s) => s.current);
   const zh = useZh(ep.title);
-  const pct = ep.duration && ep.progress ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
+  const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
+  const deep = ep.transcriptType === "qiaomu";
   return (
-    <div className={`ep-row ${current?.id === ep.id ? "playing" : ""}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
-      <div className={`thumb ${ep.videoId ? "wide" : ""}`}>
-        {ep.cover ? <img src={ep.cover} alt="" loading="lazy" /> : <div className="cover-fallback" />}
-        {pct > 0 && <div className="thumb-progress"><div style={{ width: `${pct}%` }} /></div>}
-      </div>
-      <div className="ep-meta">
-        <p className="ep-name clamp1">{zh ?? ep.title}</p>
-        {zh && zh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
-        <p className="meta-line">
+    <div className={`ep-item ${current?.id === ep.id ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
+      {showShow && <div className="ep-thumb">{ep.cover ? <img src={ep.cover} alt="" loading="lazy" /> : <div className="cover-fallback" />}</div>}
+      <div className="ep-body-col">
+        <p className="ep-kicker">
           {showShow && ep.showId !== "single" && <ShowName title={ep.showTitle} />}
-          <span>{[date(ep.published), duration(ep.duration)].filter(Boolean).join(" · ")}</span>
-          <Status ep={ep} />
+          <span>{date(ep.published)}</span>
+          {ep.duration ? <span>{duration(ep.duration)}</span> : null}
         </p>
+        <p className="ep-title2">{zh ?? ep.title}</p>
+        {zh && zh !== ep.title && <p className="ep-orig">{ep.title}</p>}
+        {(deep || ep.hasTranscript || ep.videoId || pct > 0) && (
+          <p className="ep-tags">
+            {deep && <span className="tag deep">精读</span>}
+            {ep.hasTranscript && <span className="tag">字幕</span>}
+            {ep.videoId && <span className="tag">视频</span>}
+            {pct > 0 && pct < 97 && <span className="tag progress"><span className="mini-bar"><span style={{ width: `${pct}%` }} /></span>剩 {Math.max(1, Math.round(((ep.duration ?? 0) - ep.progress) / 60))} 分钟</span>}
+            {pct >= 97 && <span className="tag">已听完</span>}
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
+function groupLabel(ms?: number | null): string {
+  if (!ms) return "更早";
+  const d = new Date(ms), now = new Date();
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff <= 0) return "今天";
+  if (diff === 1) return "昨天";
+  if (diff < 7) return "本周";
+  if (diff < 30) return "本月";
+  return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1} 月` : `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`;
+}
+
 function EpisodeList({ episodes, showShow }: { episodes: Episode[] | null; showShow: boolean }) {
   if (episodes == null) return <div className="panel-empty"><Loader2 className="spin" /></div>;
   if (!episodes.length) return <div className="panel-empty"><p className="muted">这里还没有内容</p></div>;
-  return <div className="ep-grid">{episodes.map((e) => <EpisodeRow key={e.id} ep={e} showShow={showShow} />)}</div>;
+  const groups: { label: string; items: Episode[] }[] = [];
+  for (const e of episodes) {
+    const label = groupLabel(e.published);
+    if (groups[groups.length - 1]?.label !== label) groups.push({ label, items: [] });
+    groups[groups.length - 1].items.push(e);
+  }
+  return (
+    <div className="ep-feed">
+      {groups.map((g) => (
+        <section key={g.label} className="ep-group">
+          <h3 className="ep-group-h">{g.label}</h3>
+          {g.items.map((e) => <EpisodeRow key={e.id} ep={e} showShow={showShow} />)}
+        </section>
+      ))}
+    </div>
+  );
 }
 
 // ---- home ---------------------------------------------------------------------------------------
@@ -202,13 +227,14 @@ export function ShowView({ id }: { id: string }) {
 
 // ---- picks: onboarding and discover --------------------------------------------------------------
 
-function PickCard({ p, selected, subscribed, onClick, action }: { p: Pick; selected?: boolean; subscribed: boolean; onClick?: () => void; action?: React.ReactNode }) {
+function PickCard({ p, selected, subscribed, onClick, onOpen, action }: { p: Pick; selected?: boolean; subscribed: boolean; onClick?: () => void; onOpen?: () => void; action?: React.ReactNode }) {
+  const press = onClick ?? onOpen;
   return (
-    <div className={`pick-tile ${selected ? "selected" : ""} ${subscribed ? "done" : ""}`} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined} aria-pressed={onClick ? selected : undefined}
-      onClick={onClick} onKeyDown={(e) => onClick && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onClick())}>
+    <div className={`pick-tile ${selected ? "selected" : ""} ${subscribed ? "done" : ""}`} role={press ? "button" : undefined} tabIndex={press ? 0 : undefined} aria-pressed={onClick ? selected : undefined}
+      onClick={press} onKeyDown={(e) => press && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), press())}>
       <div className="tile-cover">
         <img src={p.cover} alt="" loading="lazy" />
-        {p.video && <span className="tile-badge"><Youtube size={11} /> 视频</span>}
+        {p.deep ? <span className="tile-badge deep">精读</span> : p.video && <span className="tile-badge"><Youtube size={11} /> 视频</span>}
         {onClick ? <span className={`pick-check ${selected ? "on" : ""}`}>{selected && <Check size={13} strokeWidth={3} />}</span> : <div className="tile-action">{action}</div>}
       </div>
       <p className="tile-name clamp1">{p.zh}</p>
@@ -233,7 +259,7 @@ const visible = (topics: Topic[]) => PICKS.filter((p) => !topics.length || p.top
 function Onboarding() {
   const { reloadShows, saveSettings, set, notify } = useStore();
   const [topics, setTopics] = useState<Topic[]>(["AI 前沿", "创业投资"]);
-  const [chosen, setChosen] = useState<Set<string>>(() => new Set(["dwarkesh", "no-priors", "zhang"]));
+  const [chosen, setChosen] = useState<Set<string>>(() => new Set(["no-priors", "lex", "zhang", "latetalk"]));
   const [progress, setProgress] = useState<string | null>(null);
   const toggle = (id: string) => setChosen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const start = async () => {
@@ -270,7 +296,7 @@ export function DiscoverView() {
   const { shows, reloadShows, notify, go } = useStore();
   const [adding, setAdding] = useState<string | null>(null);
   const [topics, setTopics] = useState<Topic[]>([]);
-  const subscribed = (p: Pick) => shows.some((s) => s.feedUrl === p.input || s.title === p.title || shortName(s.title) === shortName(p.title));
+  const subscribed = (p: Pick) => isSubscribed(p, shows);
   const add = async (input: string, title: string) => {
     setAdding(input);
     try {
@@ -288,8 +314,53 @@ export function DiscoverView() {
       <p className="muted page-sub">精选海外与中文好节目，订阅后字幕和中文翻译开箱即用。想找别的节目，用上方搜索框。</p>
       <TopicChips topics={topics} setTopics={setTopics} />
       <div className="tile-grid">
-        {visible(topics).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} action={<SubBtn input={p.input} title={p.zh} done={subscribed(p)} />} />)}
+        {visible(topics).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} onOpen={() => go({ kind: "channel", input: p.input })} action={<SubBtn input={p.input} title={p.zh} done={subscribed(p)} />} />)}
       </div>
+    </div>
+  );
+}
+
+/** A channel before subscribing: what it is, its latest episodes (playable), and one clear subscribe button. */
+export function ChannelView({ input }: { input: string }) {
+  const { shows, reloadShows, notify, go } = useStore();
+  const pick = PICKS.find((p) => sameFeed(p.input, input));
+  const sub = shows.find((s) => sameFeed(s.feedUrl, input) || (pick?.deep && sameFeed(s.feedUrl, pick.input)));
+  const [data, setData] = useState<{ show: Show; episodes: Episode[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const names = useShowName(data?.show.title ?? pick?.title ?? "");
+  useEffect(() => {
+    setData(null); setError(null);
+    api.previewShow(input).then(setData).catch((e) => setError(errorText(e)));
+  }, [input]);
+  const subscribe = async () => {
+    setBusy(true);
+    try {
+      const r = await api.addSubscription(input);
+      await reloadShows();
+      if (r.show) { notify(`已订阅「${pick?.zh ?? r.show.title}」`); go({ kind: "show", id: r.show.id }); }
+    } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
+  };
+  const cover = pick?.cover ?? data?.show.cover;
+  const desc = pick?.intro ?? (data?.show.description ?? "").replace(/<[^>]+>/g, "").trim().slice(0, 300);
+  return (
+    <div className="page">
+      <div className="show-head">
+        {cover ? <img src={cover} alt="" /> : <div className="cover-fallback" />}
+        <div className="show-info">
+          <p className="meta-line">{pick?.deep ? "乔木精读 · 中文标题、精读长文与原文文稿" : pick?.by ?? data?.show.author ?? "频道"}</p>
+          <h1 className="show-title-h">{pick?.zh ?? names.zh ?? names.orig}</h1>
+          {(pick ? pick.zh !== pick.title : names.zh) && <span className="orig-line clamp1">{pick?.title ?? data?.show.title}</span>}
+          {desc && <p className="show-desc clamp3">{desc}</p>}
+          <div className="row-actions">
+            {sub
+              ? <button className="btn sm" onClick={() => go({ kind: "show", id: sub.id })}><Check size={13} /> 已订阅 · 查看</button>
+              : <button className="btn primary" onClick={subscribe} disabled={busy}>{busy ? <Loader2 size={14} className="spin" /> : <Plus size={15} />} 订阅</button>}
+            {data && <span className="muted small">{data.episodes.length} 期节目 · 不订阅也可以直接收听</span>}
+          </div>
+        </div>
+      </div>
+      {error ? <div className="panel-empty"><p className="error-text">{error}</p></div> : <EpisodeList episodes={data?.episodes ?? null} showShow={false} />}
     </div>
   );
 }
