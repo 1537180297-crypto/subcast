@@ -26,6 +26,26 @@
       "icons/icon.ico"
     ],
     "shortDescription": "海外播客与 YouTube 双语字幕、AI 问答",
-    "category": "Education"
+    "category": "Education",
+    "copyright": "© 2026 Qiaomu",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "hardenedRuntime": true,
+      "dmg": {
+        "background": "dmg/background.tiff",
+        "windowSize": {
+          "width": 640,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 170,
+          "y": 196
+        },
+        "applicationFolderPosition": {
+          "x": 470,
+          "y": 196
+        }
+      }
+    }
   }
 }

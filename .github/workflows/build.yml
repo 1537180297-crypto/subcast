@@ -5,6 +5,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
 jobs:
   build:
     strategy:
@@ -12,12 +16,16 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
+            target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
-          - platform: macos-13
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
           - platform: windows-latest
+            target: x86_64-pc-windows-msvc
             args: ""
           - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
             args: ""
     runs-on: ${{ matrix.platform }}
     permissions:
@@ -30,24 +38,72 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || matrix.platform == 'macos-13' && 'x86_64-apple-darwin' || '' }}
+          targets: ${{ startsWith(matrix.platform, 'macos') && matrix.target || '' }}
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
       - name: Linux dependencies
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config cmake clang
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config cmake clang libclang-dev
       - name: Windows dependencies
         if: startsWith(matrix.platform, 'windows')
-        run: choco install -y llvm cmake --no-progress
+        shell: pwsh
+        run: |
+          # whisper-rs-sys runs bindgen (needs libclang) and CMake. The image ships both; fall back to choco.
+          if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) { choco install -y llvm --no-progress }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { choco install -y cmake --no-progress }
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - run: npm ci
-      - uses: tauri-apps/tauri-action@v0
+      - name: Check signing secrets
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_ID" ]; then echo "apple=true" >> "$GITHUB_OUTPUT"; else echo "apple=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Build (macOS, signed + notarized)
+        if: startsWith(matrix.platform, 'macos') && steps.signing.outputs.apple == 'true'
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: SubCast ${{ github.ref_name }}
           releaseDraft: true
           args: ${{ matrix.args }}
+      - name: Build
+        if: ${{ !(startsWith(matrix.platform, 'macos') && steps.signing.outputs.apple == 'true') }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No Apple secrets: build an ad-hoc signed macOS bundle instead of failing on the Developer ID lookup.
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && '-' || '' }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: SubCast ${{ github.ref_name }}
+          releaseDraft: true
+          args: ${{ matrix.args }}
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: subcast-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/**/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/bundle/msi/*.msi
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/rpm/*.rpm
+            src-tauri/target/**/release/bundle/appimage/*.AppImage
