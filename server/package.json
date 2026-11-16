@@ -4,7 +4,7 @@
   "private": true,
   "description": "SubCast (声渡) shared transcripts API",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "engines": {
     "node": ">=22.13"
   },

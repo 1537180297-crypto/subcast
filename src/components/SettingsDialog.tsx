@@ -435,7 +435,7 @@ function About() {
       <div className="about-foot">
         {links.map(([label, u]) => <button key={u} className="link-btn" onClick={() => openUrl(u)}>{label}</button>)}
         <span className="spacer" />
-        <span className="muted small">{t("© {year} 向阳乔木 · MIT", { year: new Date().getFullYear() })}</span>
+        <span className="muted small">{t("© {year} 向阳乔木 · AGPL-3.0", { year: new Date().getFullYear() })}</span>
       </div>
     </div>
   );

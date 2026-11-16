@@ -287,7 +287,7 @@ const dict: Record<string, string> = {
   "赞赏码": "Tip QR code",
   "请我喝杯咖啡": "Buy me a coffee",
   "微信扫码赞赏": "Scan with WeChat to leave a tip",
-  "© {year} 向阳乔木 · MIT": "© {year} Xiangyang Qiaomu · MIT",
+  "© {year} 向阳乔木 · AGPL-3.0": "© {year} Xiangyang Qiaomu · AGPL-3.0",
   "正在加载": "Loading",
   "正在加载字幕": "Loading subtitles",
   "正在加载精读": "Loading deep read",

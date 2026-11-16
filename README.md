@@ -49,4 +49,6 @@ Tauri 2（Rust）+ React/TypeScript。所有网络请求在 Rust 侧完成（绕
 
 ## License
 
-MIT
+[AGPL-3.0](LICENSE)。可以自由使用、修改和再分发；分发修改版或把它做成网络服务时，必须以 AGPL-3.0 公开完整源码。
+
+AGPL-3.0. You may use, modify and redistribute it; if you distribute a modified version or run it as a network service, you must release its complete source under AGPL-3.0.

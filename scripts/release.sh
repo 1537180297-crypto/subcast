@@ -30,7 +30,7 @@ KEY="$HOME/.tauri/subcast-updater.key"
 IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application: xiangyang qiao (BRCU3DPFH4)}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-notary}"
 SSH_HOST="${SSH_HOST:-myvps}"
-SITE_ROOT="${SITE_ROOT:-/var/www/subcast.qiaomu.ai}"
+SITE_ROOT="${SITE_ROOT:-/www/wwwroot/subcast.qiaomu.ai}" # aaPanel vhost root, same as the website's deploy.sh
 BASE_URL="https://subcast.qiaomu.ai/download/$VERSION"
 mkdir -p "$OUT"
 
@@ -115,14 +115,29 @@ console.log("platforms:", Object.keys(platforms).join(", ") || "(none)");
 console.log("downloads:", Object.keys(dl).join(", ") || "(none)");
 JS
 
+# Version-free names, so a link always gets the newest build:
+#   https://subcast.qiaomu.ai/download/latest/<name>   (symlinks on the server)
+#   https://github.com/joeseesun/subcast/releases/latest/download/<name>   (copies on the release)
+stable_pairs() { # prints "versioned-file stable-name" lines for what exists in $OUT
+  for pair in "_aarch64.dmg:SubCast-mac-apple-silicon.dmg" "_x64.dmg:SubCast-mac-intel.dmg" "-setup.exe:SubCast-windows-setup.exe" \
+              ".msi:SubCast-windows.msi" ".AppImage:SubCast-linux.AppImage" ".deb:SubCast-linux.deb" ".rpm:SubCast-linux.rpm"; do
+    f=$(cd "$OUT" && ls -1 *"${pair%%:*}" 2>/dev/null | grep -v '\.sig$' | head -1 || true)
+    [ -n "$f" ] && echo "$f ${pair#*:}"
+  done
+}
+
 if [ "$PUBLISH" = 1 ]; then
   echo "==> uploading to $SSH_HOST:$SITE_ROOT/download/"
-  ssh "$SSH_HOST" "mkdir -p '$SITE_ROOT/download/$VERSION'"
-  rsync -av --progress "$OUT/" "$SSH_HOST:$SITE_ROOT/download/$VERSION/"
+  ssh "$SSH_HOST" "mkdir -p '$SITE_ROOT/download/$VERSION' '$SITE_ROOT/download/latest'"
+  rsync -av --progress --exclude latest.json "$OUT/" "$SSH_HOST:$SITE_ROOT/download/$VERSION/"
+  LINKS=$(stable_pairs | while read -r f name; do printf "ln -sfn '../%s/%s' '%s/download/latest/%s'; " "$VERSION" "$f" "$SITE_ROOT" "$name"; done)
+  ssh "$SSH_HOST" "$LINKS"
   # latest.json goes last so clients never see a manifest whose files are not there yet.
   rsync -av "$OUT/latest.json" "$SSH_HOST:$SITE_ROOT/download/latest.json"
   if gh release view "$TAG" >/dev/null 2>&1; then
-    gh release upload "$TAG" --clobber "$OUT"/*.dmg "$OUT"/*.app.tar.gz "$OUT"/*.app.tar.gz.sig "$OUT/latest.json"
+    STABLE="$(mktemp -d)"
+    stable_pairs | while read -r f name; do cp "$OUT/$f" "$STABLE/$name"; done
+    gh release upload "$TAG" --clobber "$OUT"/*.dmg "$OUT"/*.app.tar.gz "$OUT"/*.app.tar.gz.sig "$OUT/latest.json" "$STABLE"/*
   fi
   echo "published $VERSION"
 else
