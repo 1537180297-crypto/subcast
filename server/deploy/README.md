@@ -59,7 +59,7 @@ python3 ~/.agents/skills/qiaomu-vps-website-ops/scripts/qiaomu_vps_site_check.py
 每天快照 SQLite（gzip，保留 30 份在 `data/backups/`）：
 
 ```bash
-ssh myvps 'echo "17 3 * * * subcast cd /opt/qiaomu-apps/subcast-api && /usr/bin/node --disable-warning=ExperimentalWarning src/backup.js" > /etc/cron.d/subcast-api-backup'
+ssh myvps 'echo "17 3 * * * root docker exec qiaomu-subcast-api node --disable-warning=ExperimentalWarning src/backup.js >/dev/null 2>&1" > /etc/cron.d/subcast-api-backup'
 ```
 
 ## 8. 更新流程
@@ -70,4 +70,4 @@ ssh myvps 'echo "17 3 * * * subcast cd /opt/qiaomu-apps/subcast-api && /usr/bin/
 
 ## Deploy notes (English)
 
-systemd standalone Node service (no Docker) on 127.0.0.1:8787, exposed as `https://subcast.qiaomu.ai/api/` through an Nginx location. The VPS runs Node v22.23.4 at `/usr/bin/node`; `node:sqlite` works without flags and there are no npm dependencies, so no `npm install` is needed on the server. Steps: create the `subcast` system user, rsync `server/` to `/opt/qiaomu-apps/subcast-api/` (excluding `data`), write the `.env` file (PORT/HOST/DATA_DIR/ADMIN_TOKEN), install `subcast-api.service`, add the `location /api/` snippet to the subcast.qiaomu.ai vhost, `nginx -t && nginx -s reload`, then verify `/api/health`. Optional daily cron runs `src/backup.js` (gzipped VACUUM INTO snapshots, 30 kept). Updates: rsync + `systemctl restart subcast-api`.
+Docker Compose on myvps (`/opt/qiaomu-apps/subcast-api`, stock `node:22-alpine`, code mounted read-only, database in `data/` on the host), bound to 127.0.0.1:8787 and exposed as `https://subcast.qiaomu.ai/api/` through the `location /api/` block in the site's vhost. The `.env` (ADMIN_TOKEN) is generated on the server. Updates: rsync `server/` then `docker compose restart`. A daily cron runs `src/backup.js` inside the container (gzipped VACUUM INTO snapshots, 30 kept). `subcast-api.service` is the earlier systemd variant, kept for reference.
