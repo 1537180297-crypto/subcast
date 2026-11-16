@@ -158,6 +158,30 @@ pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc
     Err(anyhow!("没有找到下载的音频"))
 }
 
+/// A playable address for videos whose owners block the embedded player: YouTube's HLS master playlist
+/// (adaptive quality, plays natively in WebKit) or, failing that, a single file with both audio and video.
+pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str) -> Result<String> {
+    let mut cmd = tokio::process::Command::new(ytdlp);
+    cmd.args(["-j", "--no-playlist", "--no-warnings"]);
+    let proxy = net::proxy();
+    if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).kill_on_drop(true);
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+    let out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await.map_err(|_| anyhow!("获取视频地址超时"))?.context("无法启动 yt-dlp")?;
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
+        anyhow!("无法获取视频地址：{}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("").chars().take(200).collect::<String>())
+    })?;
+    let formats = info["formats"].as_array().cloned().unwrap_or_default();
+    if let Some(u) = formats.iter().filter(|f| f["protocol"].as_str().is_some_and(|p| p.starts_with("m3u8"))).find_map(|f| f["manifest_url"].as_str()) {
+        return Ok(u.to_string());
+    }
+    formats.iter().rev()
+        .filter(|f| f["vcodec"].as_str().is_some_and(|v| v != "none") && f["acodec"].as_str().is_some_and(|a| a != "none") && f["protocol"].as_str() == Some("https"))
+        .find_map(|f| f["url"].as_str().map(str::to_string))
+        .ok_or_else(|| anyhow!("这个视频没有可直接播放的格式"))
+}
+
 // ---- CrispASR (runs Qwen3-ASR) ----------------------------------------------------------------------
 
 const CRISPASR_VERSION: &str = "v0.8.54";

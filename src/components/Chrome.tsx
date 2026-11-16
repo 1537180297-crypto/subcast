@@ -105,7 +105,6 @@ export function TopBar() {
         )}
       </div>
       <div className="spacer" data-tauri-drag-region />
-      <button className="round-btn" onClick={() => useStore.getState().openSettings()} aria-label="设置"><Cog size={17} /></button>
     </div>
   );
 }

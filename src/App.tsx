@@ -42,7 +42,7 @@ export default function App() {
     <div className="app">
       <Sidebar />
       <main className="main">
-        <TopBar />
+        {view.kind !== "episode" && <TopBar />}
         {view.kind === "latest" && <LatestView />}
         {view.kind === "recent" && <RecentView />}
         {view.kind === "discover" && <DiscoverView />}

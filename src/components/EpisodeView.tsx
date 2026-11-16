@@ -1,3 +1,4 @@
+import { TopBar } from "./Chrome";
 import { Component, useEffect, useState, type ReactNode } from "react";
 
 class PanelBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -118,6 +119,8 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
   return (
     <div className="episode">
       <div className="ep-body">
+        <div className="ep-leftcol">
+        <TopBar />
         <section className="ep-left">
           <div className="ep-title-block">
             <div className="ep-title">
@@ -140,8 +143,9 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
           )}
           {notes && <Notes text={notes} />}
         </section>
+        </div>
         <section className="ep-right">
-          <div className="tabs" role="tablist">
+          <div className="tabs" role="tablist" data-tauri-drag-region>
             <button role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /> 字幕</button>
             <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /> 问答</button>
             <button role="tab" aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /> 导读</button>

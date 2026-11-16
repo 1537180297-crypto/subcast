@@ -198,6 +198,15 @@ fn asr_emit(app: &AppHandle, id: &str, stage: &str, progress: f64, message: Opti
 }
 
 #[tauri::command]
+async fn youtube_stream(state: State<'_, AppState>, video_id: String) -> Res<String> {
+    let ytdlp = match asr::find_ytdlp(&state.data) {
+        Some(p) => p,
+        None => asr::install_ytdlp(&state.data, &std::sync::atomic::AtomicBool::new(false), |_, _| {}).await.map_err(e)?,
+    };
+    asr::youtube_stream_url(&ytdlp, &video_id).await.map_err(e)
+}
+
+#[tauri::command]
 async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String) -> Res<Transcript> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
     let spec = asr::spec(&model).ok_or("未知模型")?;
@@ -406,7 +415,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

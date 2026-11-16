@@ -64,11 +64,46 @@ function hideYouTubeCaptions(player: any) {
 
 export const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
 
+/** YouTube without YouTube's chrome: the embed runs with its controls off, cropped so the title bar and logo fall
+ *  outside the frame, under a shield that keeps hover UI from appearing. Our own controls and subtitles drive it.
+ *  Videos whose owners forbid embedding fall back to the HLS stream yt-dlp finds, played in a plain <video>. */
 export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.ReactNode }) {
-  const host = useRef<HTMLDivElement>(null);
+  const [native, setNative] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fallingBack, setFallingBack] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const fallback = async (why: string) => {
+    setFallingBack(true);
+    try { setNative(await api.youtubeStream(ep.videoId!)); setError(null); }
+    catch (e) { setError(`${why}。${String((e as any)?.message ?? e)}`); }
+    finally { setFallingBack(false); }
+  };
+  useEffect(() => { setNative(null); setError(null); }, [ep.id]);
+  const fullscreen = () => { const el = box.current; if (!el) return; document.fullscreenElement ? void document.exitFullscreen() : void el.requestFullscreen?.().catch(() => {}); };
+  return (
+    <div className="video" ref={box}>
+      {native ? <NativeVideo ep={ep} src={native} onFullscreen={fullscreen} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
+      {fallingBack && <div className="video-note"><span className="spin-dot" /> 作者限制了嵌入播放，正在切换到直连播放…</div>}
+      {error && <div className="video-error">{error}</div>}
+      {overlay}
+    </div>
+  );
+}
+
+function PlayHint({ ep, show, onClick }: { ep: Episode; show: boolean; onClick: () => void }) {
+  return (
+    <div className={`video-poster ${show ? "on" : ""}`} onClick={onClick}>
+      <img src={`https://i.ytimg.com/vi/${ep.videoId}/maxresdefault.jpg`} onError={(e) => { const i = e.currentTarget; if (!i.dataset.f) { i.dataset.f = "1"; i.src = `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg`; } }} alt="" />
+      <span className="big-play"><Play size={28} fill="currentColor" /></span>
+    </div>
+  );
+}
+
+function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onFullscreen: () => void; onBlocked: (why: string) => void; onError: (m: string) => void }) {
+  const host = useRef<HTMLDivElement>(null);
   const rate = useStore((s) => s.settings.playbackRate);
   const playerRef = useRef<any>(null);
+  const [state, setState] = useState(-1);
 
   useEffect(() => {
     let player: any, timer: number | undefined, disposed = false;
@@ -81,11 +116,10 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
         width: "100%",
         height: "100%",
         host: "https://www.youtube.com",
-        playerVars: { playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, iv_load_policy: 3, start: Math.floor(ep.progress > 5 ? ep.progress : 0), origin: window.location.origin },
+        playerVars: { controls: 0, disablekb: 1, fs: 0, playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, iv_load_policy: 3, start: Math.floor(ep.progress > 5 ? ep.progress : 0), origin: window.location.origin },
         events: {
           onReady: () => {
             playerRef.current = player;
-            // Our own subtitles replace YouTube's.
             hideYouTubeCaptions(player);
             player.setPlaybackRate?.(useStore.getState().settings.playbackRate);
             useStore.getState().set({
@@ -103,14 +137,18 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
             }, 250);
           },
           onStateChange: (e: any) => {
+            setState(e.data);
             useStore.getState().set({ playing: e.data === 1 });
             if (e.data === 1) hideYouTubeCaptions(player);
             if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
           },
-          onError: (e: any) => setError(e.data === 150 || e.data === 101 ? "视频作者不允许在其他应用中播放，可点「在 YouTube 打开」" : `视频无法播放（错误 ${e.data}）`),
+          onError: (e: any) => {
+            if ([100, 101, 150, 152, 153].includes(e.data)) onBlocked(e.data === 100 ? "视频不存在或已设为私享" : "视频作者不允许在其他应用中嵌入播放");
+            else onError(`视频无法播放（错误 ${e.data}）`);
+          },
         },
       });
-    }).catch((e) => setError(String(e.message ?? e)));
+    }).catch((e) => onError(String(e.message ?? e)));
     return () => {
       disposed = true;
       window.clearInterval(timer);
@@ -121,16 +159,54 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
   }, [ep.id]);
 
   useEffect(() => { playerRef.current?.setPlaybackRate?.(rate); }, [rate]);
-
+  const toggle = () => useStore.getState().player?.toggle();
   return (
-    <div className="video">
-      <div className="video-host" ref={host} />
-      {error && <div className="video-error">{error}</div>}
-      {overlay}
-    </div>
+    <>
+      <div className="video-host crop" ref={host} />
+      <div className="video-shield" onClick={toggle} onDoubleClick={onFullscreen} />
+      <PlayHint ep={ep} show={state === -1 || state === 5 || state === 0} onClick={toggle} />
+      {state === 2 && <span className="paused-mark" onClick={toggle}><Play size={22} fill="currentColor" /></span>}
+    </>
   );
 }
 
+function NativeVideo({ ep, src, onFullscreen }: { ep: Episode; src: string; onFullscreen: () => void }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const rate = useStore((s) => s.settings.playbackRate);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let hls: any;
+    if (!src.includes(".m3u8") && !src.includes("/hls_") || el.canPlayType("application/vnd.apple.mpegurl")) el.src = src;
+    else void import("hls.js").then(({ default: Hls }) => { hls = new Hls(); hls.loadSource(src); hls.attachMedia(el); });
+    const handle = {
+      seek: (t: number) => { el.currentTime = t; void el.play().catch(() => {}); },
+      toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
+      play: () => void el.play().catch(() => {}),
+      setRate: (r: number) => { el.playbackRate = r; },
+    };
+    useStore.getState().set({ player: handle });
+    return () => {
+      hls?.destroy?.();
+      void api.setProgress(ep.id, el.currentTime);
+      const s = useStore.getState();
+      if (s.player === handle) s.set({ player: null, playing: false });
+    };
+  }, [src, ep.id]);
+  useEffect(() => { if (ref.current) ref.current.playbackRate = rate; }, [rate]);
+  return (
+    <>
+      <video ref={ref} className="video-native" playsInline preload="auto"
+        onLoadedMetadata={(e) => { const el = e.currentTarget; el.playbackRate = rate; if (ep.progress > 5 && ep.progress < el.duration - 10) el.currentTime = ep.progress; track(ep, el.currentTime, el.duration); }}
+        onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
+        onPlay={() => { setStarted(true); useStore.getState().set({ playing: true }); }}
+        onPause={(e) => { useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }} />
+      <div className="video-shield" onClick={() => useStore.getState().player?.toggle()} onDoubleClick={onFullscreen} />
+      <PlayHint ep={ep} show={!started} onClick={() => useStore.getState().player?.toggle()} />
+    </>
+  );
+}
 
 export function Controls({ compact = false }: { compact?: boolean }) {
   const { time, length, playing, player, settings } = useStore();

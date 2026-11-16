@@ -67,6 +67,7 @@ export const api = {
   setApiKey: (provider: string, key: string) => invoke<void>("set_api_key", { provider, key }),
   hasApiKey: (provider: string) => invoke<boolean>("has_api_key", { provider }),
   /** Free Google translation with a persistent cache (no model needed). */
+  youtubeStream: (videoId: string) => invoke<string>("youtube_stream", { videoId }),
   translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
 };
 

@@ -127,7 +127,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   if (!transcript) return <NoTranscript ep={ep} official={official} officialError={officialError} />;
 
   const total = segments.length;
-  const done = translation?.items.filter((x) => x != null).length ?? 0;
+  const done = Math.min(total, translation?.items.slice(0, total).filter((x) => x != null).length ?? 0);
   const running = !!translation?.running;
   const engineName = translation?.engine === "google" ? "谷歌翻译" : `${providerFor(settings, "translate")?.name ?? "模型"}翻译`;
   const error = startError ?? translation?.error;
