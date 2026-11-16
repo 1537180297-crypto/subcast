@@ -44,8 +44,13 @@ interface State {
   load(ep: Episode): void;
   notify(text: string): void;
   openSettings(section?: "model" | "asr" | "tts" | "general" | "about"): void;
+  /** Checks every subscription for new episodes; tells the user when there are some. */
+  checkUpdates(): Promise<void>;
+  lastChecked: number;
   set(patch: Partial<State>): void;
 }
+
+const CHECK_EVERY = 30 * 60_000;
 
 let toastTimer: number | undefined;
 
@@ -67,7 +72,21 @@ export const useStore = create<State>((set, get) => ({
   async init() {
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
     set({ settings, shows, ready: true });
-    if (shows.length) api.refreshAll().then(() => get().reloadShows()).catch(() => {});
+    void get().checkUpdates();
+    // Periodically, and when the window comes back after a while (the app may sit in the background for hours).
+    window.setInterval(() => void get().checkUpdates(), CHECK_EVERY);
+    window.addEventListener("focus", () => { if (Date.now() - get().lastChecked > 10 * 60_000) void get().checkUpdates(); });
+  },
+  lastChecked: 0,
+  async checkUpdates() {
+    if (!get().shows.some((s) => s.kind !== "single")) return;
+    set({ lastChecked: Date.now() });
+    try {
+      const r = await api.refreshAll();
+      if (r.skipped) return;
+      await get().reloadShows();
+      if (r.newEpisodes > 0) get().notify(`订阅有 ${r.newEpisodes} 期新节目`);
+    } catch { /* offline: try again next time */ }
   },
   go(view) {
     set((s) => ({ view, history: [...s.history.slice(-30), s.view] }));
@@ -101,4 +120,8 @@ export const useStore = create<State>((set, get) => ({
   set: (patch) => set(patch),
 }));
 
-export const providerFor = (settings: Settings, use: "chat" | "translate") => settings.providers[use === "chat" ? settings.chatProvider : settings.translateProvider];
+export function providerFor(settings: Settings, use: "chat" | "translate") {
+  if (use === "translate") return settings.providers[settings.translateProvider];
+  const p = settings.providers[settings.chatProvider];
+  return p && settings.chatModel ? { ...p, model: settings.chatModel } : p;
+}

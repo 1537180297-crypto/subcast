@@ -189,20 +189,35 @@ async fn refresh_show(state: State<'_, AppState>, id: String) -> Res<Show> {
     Ok(fresh)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Refreshed { shows: usize, new_episodes: usize, skipped: bool }
+
+static REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Checks every subscription for new episodes. Runs at launch and periodically; overlapping calls are skipped.
 #[tauri::command]
-async fn refresh_all(state: State<'_, AppState>) -> Res<usize> {
-    let shows = db::list_shows(&state.db.lock().unwrap()).map_err(e)?;
-    let mut ok = 0;
-    for chunk in shows.chunks(6) {
-        let results = futures_util::future::join_all(chunk.iter().map(|s| fetch_any(&state, &s.feed_url, &s.kind))).await;
-        for (s, r) in chunk.iter().zip(results) {
-            if let Ok((fresh, eps)) = r {
+async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
+    if REFRESHING.swap(true, Ordering::SeqCst) { return Ok(Refreshed { shows: 0, new_episodes: 0, skipped: true }); }
+    let r = async {
+        let shows: Vec<Show> = db::list_shows(&state.db.lock().unwrap()).map_err(e)?.into_iter().filter(|s| s.kind != "single").collect();
+        let (mut ok, mut fresh_eps) = (0, 0);
+        for chunk in shows.chunks(6) {
+            let results = futures_util::future::join_all(chunk.iter().map(|s| fetch_any(&state, &s.feed_url, &s.kind))).await;
+            for (s, r) in chunk.iter().zip(results) {
+                let Ok((fresh, eps)) = r else { continue };
+                let known = {
+                    let conn = state.db.lock().unwrap();
+                    eps.iter().filter(|x| conn.query_row("SELECT 1 FROM episodes WHERE id=?1", [&x.id], |_| Ok(())).is_ok()).count()
+                };
                 let fresh = Show { id: s.id.clone(), kind: s.kind.clone(), ..fresh };
-                if store(&state, &fresh, &eps).is_ok() { ok += 1; }
+                if store(&state, &fresh, &eps).is_ok() { ok += 1; fresh_eps += eps.len() - known; }
             }
         }
-    }
-    Ok(ok)
+        Ok(Refreshed { shows: ok, new_episodes: fresh_eps, skipped: false })
+    }.await;
+    REFRESHING.store(false, Ordering::SeqCst);
+    r
 }
 
 #[tauri::command]
@@ -553,7 +568,18 @@ pub fn run() {
                 .hidden_title(true)
                 .traffic_light_position(tauri::LogicalPosition::new(18.0, 22.0));
             builder.build()?;
+            // The stock macOS menu has no Settings item, so ⌘, did nothing.
+            let menu = tauri::menu::Menu::default(app.handle())?;
+            if let Some(first) = menu.items()?.first().and_then(|m| m.as_submenu().cloned()) {
+                let item = tauri::menu::MenuItem::with_id(app, "settings", "设置…", true, Some("CmdOrCtrl+,"))?;
+                let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
+                first.insert_items(&[&sep, &item], 1)?;
+            }
+            app.set_menu(menu)?;
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == "settings" { let _ = app.emit("open-settings", ()); }
         })
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
@@ -618,6 +644,44 @@ mod live {
         }
         let r = feeds::search_podcasts("lex fridman", "US").await.unwrap();
         println!("search: {} results, first {}", r.len(), r[0].title);
+    }
+    #[tokio::test]
+    #[ignore]
+    async fn discover_picks() {
+        let inputs = [
+            "https://www.xiaoyuzhoufm.com/podcast/5e4ee557418a84a0466737b7", "https://www.xiaoyuzhoufm.com/podcast/5e2831ed418a84a046231c00",
+            "https://www.xiaoyuzhoufm.com/podcast/5f72b66083c34e85dd14fde9", "https://www.xiaoyuzhoufm.com/podcast/5e4515bd418a84a046e2b11a",
+            "https://www.xiaoyuzhoufm.com/podcast/611719d3cb0b82e1df0ad29e", "https://www.xiaoyuzhoufm.com/podcast/6022a180ef5fdaddc30bb101",
+            "https://www.xiaoyuzhoufm.com/podcast/61dd99a47b29652ff572257b", "https://www.xiaoyuzhoufm.com/podcast/61358d971c5d56efe5bcb5d2",
+            "https://www.xiaoyuzhoufm.com/podcast/5e74b52c418a84a046ecaceb", "https://www.xiaoyuzhoufm.com/podcast/5e280faf418a84a0461fbd39",
+            "https://www.xiaoyuzhoufm.com/podcast/646d6bfa53a5e5ea14e69c7c", "https://www.xiaoyuzhoufm.com/podcast/64379296ff8a107611a67208",
+            "https://www.xiaoyuzhoufm.com/podcast/6627fda4b56459544087d86a", "https://www.xiaoyuzhoufm.com/podcast/68981df29e7bcd326eb91d88",
+            "https://www.xiaoyuzhoufm.com/podcast/5e285856418a84a04627b7be", "https://www.xiaoyuzhoufm.com/podcast/62694abdb221dd5908417d1e",
+            "https://www.youtube.com/@hubermanlab", "https://www.youtube.com/@MachineLearningStreetTalk", "https://www.youtube.com/@Bg2Pod",
+            "https://www.youtube.com/@MyFirstMillionPod", "https://www.youtube.com/@ChrisWillx", "https://www.youtube.com/@timferriss",
+            "https://www.youtube.com/@Alex.kantrowitz", "https://www.youtube.com/@tkppodcast", "https://www.youtube.com/@cheekypint",
+            "https://www.youtube.com/@PeterAttiaMD", "https://www.youtube.com/@peterdiamandis", "https://www.youtube.com/@EveryInc",
+        ];
+        let mut bad = vec![];
+        for input in inputs {
+            let r = match feeds::resolve(input).await {
+                Ok(feeds::Source::Feed(u)) => feeds::fetch_show(&u, "podcast").await,
+                Ok(feeds::Source::Xiaoyuzhou(u)) => feeds::xiaoyuzhou_show(&u).await,
+                Ok(_) => Err(anyhow::anyhow!("unexpected source")),
+                Err(err) => Err(err),
+            };
+            match r {
+                Ok((show, eps)) => {
+                    let newest = eps.iter().filter_map(|x| x.published).max().unwrap_or(0);
+                    let days = (now_ms() - newest) / 86_400_000;
+                    let playable = eps.iter().filter(|x| x.audio_url.is_some() || x.video_id.is_some()).count();
+                    println!("{input}\n  -> {} | eps={} playable={} newest={}d ago | cover={:?}", show.title, eps.len(), playable, days, show.cover);
+                    if eps.is_empty() || playable == 0 { bad.push(input); }
+                }
+                Err(err) => { println!("{input}\n  !! {err}"); bad.push(input); }
+            }
+        }
+        assert!(bad.is_empty(), "failed: {bad:?}");
     }
     #[tokio::test]
     #[ignore]

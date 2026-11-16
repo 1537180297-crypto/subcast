@@ -19,7 +19,33 @@ export interface Settings {
   cloudAsr: Record<string, CloudAsr>;
   ttsVoice: string;
   ttsResource: string;
+  /** The chat model picked in the chat box; "" means the chat provider's own model. */
+  chatModel: string;
+  /** A standing instruction added to every question. */
+  chatPrompt: string;
+  chatPromptOn: boolean;
+  /** null keeps the built-in list, so it can improve with updates until the user edits it. */
+  quickPrompts: QuickPrompt[] | null;
 }
+
+export interface QuickPrompt { id: string; title: string; body: string; enabled: boolean }
+
+export const BUILTIN_PROMPTS: QuickPrompt[] = ([
+  ["brief", "三分钟看懂这期", "用三分钟能读完的篇幅讲清这期节目：主要聊了什么、得出了什么结论、为什么值得关注。最后推荐 3 个最值得听的片段，附时间戳。"],
+  ["insights", "最有价值的观点", "列出这期最有信息量的 5–8 个观点，按重要性排序。每条写：一句加粗的观点、嘉宾给出的理由、原话时间戳。"],
+  ["guest", "嘉宾是谁", "嘉宾是谁？结合节目内容介绍他的身份、经历和代表作，说明他为什么有资格谈这个话题。节目里没提到、属于常识补充的内容请标出来。"],
+  ["debate", "反直觉和有争议的地方", "这期有哪些反直觉或有争议的观点？逐条说明：通常大家怎么看、嘉宾怎么说、他的理由站不站得住、可能漏掉了什么。"],
+  ["numbers", "数据和预测", "把节目里出现的具体数字、时间表和对未来的预测整理成表格，列：内容、谁说的、时间戳、可信度和理由。"],
+  ["resources", "提到的书和资源", "整理节目里提到的书、论文、公司、产品、工具和人物，按类别列出，每项一句话说明，并附时间戳。"],
+  ["action", "我能用上什么", "站在普通从业者的角度，这期有哪些马上能用到工作或生活里的方法和建议？写成具体可做的动作，每条附出处时间戳。"],
+  ["terms", "术语和黑话", "列出节目里出现的专业术语、缩写和圈内说法，给出英文原文、通俗的中文解释和出现的时间戳。"],
+  ["followup", "值得追问的问题", "如果我能采访这位嘉宾，最值得追问的 3 个问题是什么？说明为什么要问，以及节目里哪里没讲透。"],
+  ["share", "写一段分享", "把这期的精华写成一段适合发朋友圈的分享，200 字以内，口语化，突出一个最有冲击力的观点。"],
+] as const).map(([id, title, body]) => ({ id: `builtin-${id}`, title, body, enabled: true }));
+
+export const PROMPT_HINTS = ["先给结论，再展开", "简洁，不说套话", "多用列表和表格", "术语保留英文原文", "讲给外行听，多打比方"];
+
+export const quickPrompts = (s: Settings) => s.quickPrompts ?? BUILTIN_PROMPTS;
 
 // The model catalogue, ported from Capwise. Model names are suggestions; every field stays editable because providers
 // rename models often, and 「获取模型列表」 reads the live list from the provider.
@@ -108,6 +134,10 @@ export const DEFAULTS: Settings = {
   cloudAsr: Object.fromEntries(ASR_SERVICES.map((a) => [a.id, a])),
   ttsVoice: "zh_female_vv_uranus_bigtts",
   ttsResource: "seed-tts-2.0",
+  chatModel: "",
+  chatPrompt: "",
+  chatPromptOn: true,
+  quickPrompts: null,
 };
 
 export async function loadSettings(): Promise<Settings> {

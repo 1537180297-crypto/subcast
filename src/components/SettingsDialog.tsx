@@ -64,7 +64,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
         </label>
       )}
       <div className="row-actions">
-        <button className={`btn sm ${settings.chatProvider === p.id ? "primary" : ""}`} onClick={() => saveSettings({ chatProvider: p.id })}>{settings.chatProvider === p.id ? "✓ 用于问答" : "用于问答"}</button>
+        <button className={`btn sm ${settings.chatProvider === p.id ? "primary" : ""}`} onClick={() => saveSettings({ chatProvider: p.id, chatModel: "" })}>{settings.chatProvider === p.id ? "✓ 用于问答" : "用于问答"}</button>
         <button className={`btn sm ${settings.translateProvider === p.id ? "primary" : ""}`} onClick={() => saveSettings({ translateProvider: p.id })}>{settings.translateProvider === p.id ? "✓ 用于翻译" : "用于翻译"}</button>
         <span className="spacer" />
         {p.keyUrl && <button className="btn ghost sm" onClick={() => openUrl(p.keyUrl!)}><ExternalLink size={13} /> 获取 Key</button>}
@@ -91,7 +91,7 @@ export function SettingsDialog() {
   useEffect(() => { void refresh(); }, []);
   const providers = Object.values(settings.providers);
   const p = settings.providers[editing];
-  const update = (np: Provider) => void saveSettings({ providers: { ...settings.providers, [np.id]: np } });
+  const update = (np: Provider) => void saveSettings({ providers: { ...settings.providers, [np.id]: np }, ...(np.id === settings.chatProvider && np.model !== p?.model ? { chatModel: "" } : {}) });
   const NAV: [Section, string][] = [["overview", "概览"], ["model", "AI 模型"], ["asr", "语音识别"], ["tts", "朗读"], ["general", "网络"], ["about", "关于"]];
 
   return (
@@ -128,7 +128,7 @@ export function SettingsDialog() {
           {section === "model" && (
             <>
               <p className="muted small">问答、导读（以及可选的字幕翻译）使用你自己的模型服务，Key 只保存在本机钥匙串。</p>
-              <p className="usage">问答与导读：<b>{settings.providers[settings.chatProvider]?.name}</b>　·　字幕翻译：<b>{settings.providers[settings.translateProvider]?.name}</b></p>
+              <p className="usage">问答与导读：<b>{settings.providers[settings.chatProvider]?.name}{settings.chatModel ? ` · ${settings.chatModel}` : ""}</b>　·　字幕翻译：<b>{settings.providers[settings.translateProvider]?.name}</b></p>
               <div className="provider-split">
                 <div className="provider-list">
                   {GROUPS.map((g) => (

@@ -104,7 +104,7 @@ export function TopBar() {
             onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
-          {busy || adding ? <Loader2 size={14} className="spin" /> : link && <span className="kbd-hint">回车订阅</span>}
+          {busy || adding ? <Loader2 size={14} className="spin" /> : link ? <span className="kbd-hint">回车订阅</span> : !open && !q && <kbd className="kbd-hint" title="按 ⌘L 搜索">⌘L</kbd>}
         </div>
         {open && results && (
           <div className="search-drop">

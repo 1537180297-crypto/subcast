@@ -41,14 +41,14 @@ export interface SearchResult { title: string; author: string; cover?: string; f
 export interface ModelInfo { id: string; name: string; sizeMb: number; note: string; installed: boolean }
 export interface Provider { id: string; name: string; protocol: "openai" | "anthropic"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[]; group?: "relay" | "provider" | "local" }
 export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
-export interface ChatMessage { role: "user" | "assistant"; content: string }
+export interface ChatMessage { role: "user" | "assistant"; content: string; /** Which model wrote an answer, for display. */ model?: string }
 
 export interface AsrEvent { episodeId: string; stage: "download" | "transcribe" | "segment" | "done" | "error"; progress: number; message?: string; segment?: Segment }
 
 export const api = {
   addSubscription: (input: string) => invoke<{ show?: Show; episode?: Episode }>("add_subscription", { input }),
   refreshShow: (id: string) => invoke<Show>("refresh_show", { id }),
-  refreshAll: () => invoke<number>("refresh_all"),
+  refreshAll: () => invoke<{ shows: number; newEpisodes: number; skipped: boolean }>("refresh_all"),
   listShows: () => invoke<Show[]>("list_shows"),
   listEpisodes: (showId?: string, limit?: number) => invoke<Episode[]>("list_episodes", { showId, limit }),
   recentEpisodes: () => invoke<Episode[]>("recent_episodes"),

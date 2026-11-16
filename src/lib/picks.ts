@@ -1,10 +1,11 @@
 // Shows suggested on first launch and in Discover. Covers and feeds are fixed here so the page needs no lookups.
-export type Topic = "乔木精读" | "AI 前沿" | "AI 工程" | "创业投资" | "产品与增长" | "科技评论" | "中文播客";
-export const TOPICS: Topic[] = ["乔木精读", "AI 前沿", "AI 工程", "创业投资", "产品与增长", "科技评论", "中文播客"];
+export type Topic = "乔木精读" | "AI 前沿" | "AI 工程" | "创业投资" | "产品与增长" | "科技评论" | "中文播客" | "人文社科" | "个人成长";
+export const TOPICS: Topic[] = ["乔木精读", "AI 前沿", "AI 工程", "创业投资", "产品与增长", "科技评论", "中文播客", "人文社科", "个人成长"];
 
-export interface Pick { id: string; title: string; zh: string; by: string; intro: string; input: string; cover: string; topics: Topic[]; video?: boolean; deep?: boolean }
+export interface Pick { id: string; title: string; zh: string; by: string; intro: string; input: string; cover: string; topics: Topic[]; video?: boolean; deep?: boolean; channel?: string }
 
 const it = (path: string) => `https://is1-ssl.mzstatic.com/image/thumb/${path}/600x600bb.jpg`;
+const xyz = (key: string) => `https://image.xyzcdn.net/${key}@middle`;
 
 export const PICKS: Pick[] = [
   { id: "dwarkesh", title: "Dwarkesh Podcast", zh: "Dwarkesh 播客", by: "Dwarkesh Patel", intro: "深度访谈 AI 实验室负责人与顶尖研究者，硬核又好懂", input: "https://www.youtube.com/@DwarkeshPatel", cover: it("Podcasts211/v4/af/6f/48/af6f4828-86a2-d4c3-b998-de2af1fdc8c0/mza_949624848217027907.jpg"), topics: ["AI 前沿"], video: true },
@@ -41,8 +42,37 @@ export const PICKS: Pick[] = [
   { id: "iltb", title: "Invest Like the Best", zh: "像最好的投资人一样", by: "Patrick O'Shaughnessy", intro: "顶级投资人与创业者的方法论", input: "https://rss.qiaomu.ai/sources/podscribe-invest-like-the-best", cover: it("Podcasts211/v4/61/ae/be/61aebe7a-06e8-7390-3ae5-f2fc5889e36c/mza_10827489189939068066.jpg"), topics: ["乔木精读", "创业投资"], deep: true },
   { id: "doac", title: "The Diary Of A CEO", zh: "CEO 日记", by: "Steven Bartlett", intro: "创业者、科学家与名人的人生故事", input: "https://rss.qiaomu.ai/sources/podscribe-the-diary-of-a-ceo-with-steven-bartlett", cover: it("Podcasts221/v4/69/af/0d/69af0ddd-1e0f-7ae3-c84b-88f18e31ad0c/mza_14445920128472365296.png"), topics: ["乔木精读", "产品与增长"], deep: true },
   { id: "builders", title: "The Builders", zh: "造物者", by: "Walter Isaacson", intro: "《乔布斯传》《马斯克传》作者对话 AI 与科技领袖", input: "https://www.omnycontent.com/d/playlist/e73c998e-6e60-432f-8610-ae210140c5b1/8adeeef5-b6c0-4cfa-b6cc-b4c0011490b1/51d9281c-e886-4139-b940-b4c0011494bc/podcast.rss", cover: it("Podcasts221/v4/1a/2e/de/1a2ede66-1775-0875-c938-7f77c0e2ea85/mza_10281795707287482764.jpg"), topics: ["科技评论", "AI 前沿"] },
+  // 小宇宙
+  { id: "huzuohuyou", title: "忽左忽右", zh: "忽左忽右", by: "程衍樑、杨一", intro: "历史与文化的深度漫谈", input: "https://www.xiaoyuzhoufm.com/podcast/5e4ee557418a84a0466737b7", cover: xyz("FrYMqb37Wg_LA8aenDJJ8SFGsjea"), topics: ["中文播客", "人文社科"] },
+  { id: "shengdong", title: "声东击西", zh: "声东击西", by: "徐涛", intro: "看懂世界的变化如何影响我们", input: "https://www.xiaoyuzhoufm.com/podcast/5e2831ed418a84a046231c00", cover: it("Podcasts221/v4/34/fe/fd/34fefd10-2039-380d-7015-dbc28b79f625/mza_7380566725793754773.jpg"), topics: ["中文播客", "人文社科", "科技评论"] },
+  { id: "dongqiang", title: "东腔西调", zh: "东腔西调", by: "大观天下志", intro: "用学科视角解读日常现象", input: "https://www.xiaoyuzhoufm.com/podcast/5f72b66083c34e85dd14fde9", cover: xyz("FpxwyY2MbF9yjuYez8b4RuCWz0cM"), topics: ["中文播客", "人文社科"] },
+  { id: "wenhua", title: "文化有限", zh: "文化有限", by: "文化有限", intro: "聊书、电影和打动人的作品", input: "https://www.xiaoyuzhoufm.com/podcast/5e4515bd418a84a046e2b11a", cover: xyz("FqnQh1PmNEl9cq-94VGw2LESBOkk"), topics: ["中文播客", "人文社科"] },
+  { id: "wurenzhixiao", title: "无人知晓", zh: "无人知晓", by: "孟岩", intro: "关于投资、人生与自我的真诚对话", input: "https://www.xiaoyuzhoufm.com/podcast/611719d3cb0b82e1df0ad29e", cover: xyz("FrJquLUC5yZR0tQrShVB857O8J8g.jpg"), topics: ["中文播客", "个人成长", "创业投资"] },
+  { id: "shangye", title: "商业就是这样", zh: "商业就是这样", by: "第一财经", intro: "用大白话讲清商业现象", input: "https://www.xiaoyuzhoufm.com/podcast/6022a180ef5fdaddc30bb101", cover: xyz("FriYeatZbUiuUJROx6namDoYNauU"), topics: ["中文播客", "创业投资", "产品与增长"] },
+  { id: "qizhulou", title: "起朱楼宴宾客", zh: "起朱楼宴宾客", by: "翁放", intro: "金融从业者记录大时代的投资观察", input: "https://www.xiaoyuzhoufm.com/podcast/61dd99a47b29652ff572257b", cover: xyz("FvRoerA1wYLr6rDzfeSOhtPAkHn5.png"), topics: ["中文播客", "创业投资"] },
+  { id: "luanfanshu", title: "乱翻书", zh: "乱翻书", by: "潘乱", intro: "科技互联网行业的深度闲聊", input: "https://www.xiaoyuzhoufm.com/podcast/61358d971c5d56efe5bcb5d2", cover: xyz("FqqQkG2Api63iYHz38DWlnFdR-1y.jpg"), topics: ["中文播客", "科技评论", "产品与增长"] },
+  { id: "whatsnext", title: "What's Next｜科技早知道", zh: "科技早知道", by: "声动活泼", intro: "多视角解读科技行业大事件", input: "https://www.xiaoyuzhoufm.com/podcast/5e74b52c418a84a046ecaceb", cover: it("Podcasts116/v4/f8/99/2a/f8992af8-b391-a6e9-72a2-dda4c223ace8/mza_3325716517235553759.jpg"), topics: ["中文播客", "科技评论", "AI 前沿"] },
+  { id: "fengtou", title: "疯投圈", zh: "疯投圈", by: "黄海、Rio", intro: "投资人视角拆解消费与商业", input: "https://www.xiaoyuzhoufm.com/podcast/5e280faf418a84a0461fbd39", cover: it("Podcasts115/v4/e8/d8/8e/e8d88ed9-b12c-b8d9-5e5d-25682f72c182/mza_4966428153200416701.png"), topics: ["中文播客", "创业投资"] },
+  { id: "houxue", title: "厚雪长波", zh: "厚雪长波", by: "雪球", intro: "和投资人一起找长期机会", input: "https://www.xiaoyuzhoufm.com/podcast/646d6bfa53a5e5ea14e69c7c", cover: xyz("FokAknFXGctKkcGf_iwIjz0UE2KC.jpeg"), topics: ["中文播客", "创业投资"] },
+  { id: "steve", title: "史蒂夫说", zh: "史蒂夫说", by: "史蒂夫", intro: "拓展认知边界的泛心理播客", input: "https://www.xiaoyuzhoufm.com/podcast/64379296ff8a107611a67208", cover: xyz("Fh9xFfHfI-ezOvKyGW87jwsMA0x2.jpg"), topics: ["中文播客", "个人成长"] },
+  { id: "weishijie", title: "卫诗婕｜漫谈Light the Star", zh: "卫诗婕｜漫谈", by: "卫诗婕", intro: "有生命力的科技商业人物访谈", input: "https://www.xiaoyuzhoufm.com/podcast/6627fda4b56459544087d86a", cover: xyz("FvKqJeWnsK5PSUH0myvmgSVfY2Iq.png"), topics: ["中文播客", "科技评论", "创业投资"] },
+  { id: "luoyonghao", title: "罗永浩的十字路口", zh: "罗永浩的十字路口", by: "罗永浩", intro: "三五个小时的科技人文长谈", input: "https://www.xiaoyuzhoufm.com/podcast/68981df29e7bcd326eb91d88", cover: xyz("FvR7Od3_I3OQq0ac_8xMPc4zqdOt.png"), topics: ["中文播客", "科技评论", "人文社科"] },
+  { id: "beiwang", title: "贝望录", zh: "贝望录", by: "李倩玲", intro: "与商业领军人物聊创业与经营", input: "https://www.xiaoyuzhoufm.com/podcast/5e285856418a84a04627b7be", cover: xyz("FvAqN8lk3N7O8J076cgL08ysvy2o"), topics: ["中文播客", "创业投资"] },
+  { id: "zongheng", title: "纵横四海", zh: "纵横四海", by: "携隐 Melody", intro: "关于人生选择的长谈", input: "https://www.xiaoyuzhoufm.com/podcast/62694abdb221dd5908417d1e", cover: xyz("FmrdkMv8zSwCoSJ6UXI_nJKDDrQB.png"), topics: ["中文播客", "个人成长"] },
+  // YouTube 视频播客。channel 是 YouTube 频道名，订阅后节目名就是它。
+  { id: "huberman", title: "Huberman Lab", zh: "Huberman 实验室", by: "Andrew Huberman", channel: "Andrew Huberman", intro: "斯坦福神经科学家讲健康与表现", input: "https://www.youtube.com/@hubermanlab", cover: it("Podcasts221/v4/9a/d3/19/9ad31912-0b5a-a16e-2d7c-9fd074698b9c/mza_8994222203629500925.jpg"), topics: ["个人成长"], video: true },
+  { id: "mlst", title: "Machine Learning Street Talk", zh: "机器学习街谈", by: "Tim Scarfe", channel: "Machine Learning Street Talk", intro: "和 AI 研究者聊得很深的技术对谈", input: "https://www.youtube.com/@MachineLearningStreetTalk", cover: it("Podcasts211/v4/34/e4/14/34e41455-8b0d-9b6e-3290-e02f6da69696/mza_1821645445708339756.jpg"), topics: ["AI 前沿", "AI 工程"], video: true },
+  { id: "bg2", title: "BG2Pod with Brad Gerstner and Bill Gurley", zh: "BG2 投资对谈", by: "Brad Gerstner & Bill Gurley", channel: "Bg2 Pod", intro: "顶级投资人聊科技、市场与 AI", input: "https://www.youtube.com/@Bg2Pod", cover: it("PodcastSource126/v4/4b/ab/e5/4babe58b-7cda-b2b3-40a5-bcac3f262764/33f9cff7-dc0b-4293-a5bf-d8cc62ab8c98.jpg"), topics: ["创业投资", "AI 前沿", "科技评论"], video: true },
+  { id: "mfm", title: "My First Million", zh: "我的第一个百万", by: "Sam Parr & Shaan Puri", channel: "My First Million", intro: "两位创业者聊商业点子与机会", input: "https://www.youtube.com/@MyFirstMillionPod", cover: it("Podcasts221/v4/2a/5e/4d/2a5e4df0-8f2f-c5c7-1be9-4d220778f967/mza_12868536899493151042.jpeg"), topics: ["创业投资", "产品与增长"], video: true },
+  { id: "modern-wisdom", title: "Modern Wisdom", zh: "现代智慧", by: "Chris Williamson", channel: "Chris Williamson", intro: "关于心理、关系与自我提升的长谈", input: "https://www.youtube.com/@ChrisWillx", cover: it("Podcasts221/v4/7f/73/99/7f739968-f65e-f679-d1fd-c727118c69f0/mza_17156407142775783271.jpg"), topics: ["个人成长"], video: true },
+  { id: "tim-ferriss", title: "The Tim Ferriss Show", zh: "蒂姆·费里斯秀", by: "Tim Ferriss", channel: "Tim Ferriss", intro: "拆解顶尖人物的习惯与方法", input: "https://www.youtube.com/@timferriss", cover: it("Podcasts126/v4/18/39/b4/1839b420-7aff-c501-5d0d-af2842fba013/mza_6255154260686997849.jpeg"), topics: ["个人成长", "创业投资"], video: true },
+  { id: "big-tech", title: "Big Technology Podcast", zh: "大科技播客", by: "Alex Kantrowitz", channel: "Alex Kantrowitz", intro: "冷静评论科技巨头与 AI", input: "https://www.youtube.com/@Alex.kantrowitz", cover: it("Podcasts221/v4/c3/30/67/c330676b-2402-432b-0505-12490dc3ccc1/mza_4262545472677654397.jpeg"), topics: ["科技评论", "AI 前沿"], video: true },
+  { id: "tkp", title: "The Knowledge Project", zh: "知识计划", by: "Shane Parrish", channel: "The Knowledge Project Podcast", intro: "聊决策与成功背后的底层原则", input: "https://www.youtube.com/@tkppodcast", cover: it("Podcasts211/v4/4a/9c/e2/4a9ce2fd-ddf6-0d00-8760-4e7167378ecf/mza_16600443422050351456.jpeg"), topics: ["个人成长", "创业投资"], video: true },
+  { id: "cheeky-pint", title: "Cheeky Pint", zh: "小酌一杯", by: "John Collison", channel: "Cheeky Pint", intro: "Stripe 联合创始人边喝边聊创业", input: "https://www.youtube.com/@cheekypint", cover: it("Podcasts211/v4/39/58/7b/39587b37-a6e1-e96b-593d-621d5ec5292a/mza_6705197557754043928.jpg"), topics: ["创业投资", "AI 前沿"], video: true },
+  { id: "attia", title: "The Peter Attia Drive", zh: "Attia 长寿医学", by: "Peter Attia", channel: "Peter Attia MD", intro: "医生深谈长寿、健康与运动", input: "https://www.youtube.com/@PeterAttiaMD", cover: it("Podcasts211/v4/89/b8/c0/89b8c0bb-f65c-66ef-8b96-fffea8f0cf5f/mza_872007510196734520.png"), topics: ["个人成长"], video: true },
+  { id: "moonshots", title: "Moonshots with Peter Diamandis", zh: "登月计划", by: "Peter Diamandis", channel: "Peter H. Diamandis", intro: "追踪 AI 与前沿科技的未来走向", input: "https://www.youtube.com/@peterdiamandis", cover: it("Podcasts221/v4/db/93/ed/db93ed1e-0cc1-8c0d-0788-b987040bf98d/mza_12828457162931711615.jpg"), topics: ["AI 前沿", "科技评论"], video: true },
+  { id: "every", title: "AI & I", zh: "Every：AI 与我", by: "Dan Shipper", channel: "Every", intro: "一线实践者分享怎么用 AI 干活", input: "https://www.youtube.com/@EveryInc", cover: it("Podcasts221/v4/4c/d0/f9/4cd0f9b7-6070-7ebe-0047-1c5bbbd77890/mza_15228488935838032210.jpg"), topics: ["AI 工程", "产品与增长"], video: true },
 ];
-
 /** The first part of a long show name: "No Priors: Artificial Intelligence | …" → "No Priors". */
 export function shortName(title: string): string {
   const s = title.split(/\s*(?:[:：|｜—–]|\s-\s)\s*/)[0].replace(/^["“]|["”]$/g, "").trim();
@@ -53,7 +83,7 @@ export function shortName(title: string): string {
  *  nouns, so they are never machine-translated (Google turns "Dwarkesh Patel" into a transliteration). */
 export function showName(title: string): string {
   const short = shortName(title);
-  const p = PICKS.find((x) => x.title === title || shortName(x.title) === short || x.by === title);
+  const p = PICKS.find((x) => x.title === title || shortName(x.title) === short || x.by === title || x.channel === title);
   return p?.zh ?? short;
 }
 
@@ -64,7 +94,7 @@ export const sameFeed = (a: string, b: string) => norm(a) === norm(b);
  *  original feed doesn't hide its 精读 channel. */
 export function isSubscribed(p: Pick, shows: { feedUrl: string; title: string }[]): boolean {
   if (p.deep) return shows.some((s) => sameFeed(s.feedUrl, p.input));
-  return shows.some((s) => sameFeed(s.feedUrl, p.input) || s.title === p.title || shortName(s.title) === shortName(p.title));
+  return shows.some((s) => sameFeed(s.feedUrl, p.input) || s.title === p.title || shortName(s.title) === shortName(p.title) || (!!p.channel && s.title === p.channel));
 }
 
 /** The 精读 channel for a show the user follows through its original feed (e.g. No Priors on Megaphone). */

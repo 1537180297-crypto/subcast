@@ -57,7 +57,7 @@ export function transcriptForModel(segments: Segment[], translation?: (string | 
   return text;
 }
 
-const QA_SYSTEM = (title: string, show: string, transcript: string) => `你是 SubCast 的节目助手，帮助中文用户理解一期海外播客/视频。
+const QA_SYSTEM = (title: string, show: string, transcript: string, instruction?: string) => `你是 SubCast 的节目助手，帮助中文用户理解一期海外播客/视频。
 节目：${show}
 本期：${title}
 
@@ -70,24 +70,34 @@ ${transcript}
 - 用简体中文回答，先给结论，再给依据；适度使用小标题和列表。
 - 只根据文字稿回答；文字稿没有涉及的，明确说「节目里没有提到」，可以补充常识但要标明。
 - 引用原话或观点时附上时间戳，格式严格为 [mm:ss] 或 [h:mm:ss]，例如 [12:34]，方便用户点击跳转。
-- 涉及人名、公司、术语时，第一次出现给出中文并保留英文原文。`;
+- 涉及人名、公司、术语时，第一次出现给出中文并保留英文原文。${instruction?.trim() ? `
 
-export function askEpisode(opts: { provider: Provider; title: string; show: string; transcript: string; history: ChatMessage[]; onDelta: (t: string) => void; signal?: AbortSignal }) {
-  return llmChat({ provider: opts.provider, system: QA_SYSTEM(opts.title, opts.show, opts.transcript), messages: opts.history, maxTokens: 8000, onDelta: opts.onDelta, signal: opts.signal });
+用户的长期偏好（在不违背以上规则的前提下照做）：
+<user_preferences>
+${instruction.trim()}
+</user_preferences>` : ""}`;
+
+export function askEpisode(opts: { provider: Provider; title: string; show: string; transcript: string; history: ChatMessage[]; instruction?: string; onDelta: (t: string) => void; signal?: AbortSignal }) {
+  const messages = opts.history.map(({ role, content }) => ({ role, content }));
+  return llmChat({ provider: opts.provider, system: QA_SYSTEM(opts.title, opts.show, opts.transcript, opts.instruction), messages, maxTokens: 8000, onDelta: opts.onDelta, signal: opts.signal });
 }
 
-export const SUMMARY_PROMPT = `请为这期节目写一份中文导读，用 Markdown，结构如下：
+export const SUMMARY_PROMPT = `请根据带时间戳的文字稿，为这期节目写一份中文导读。用 Markdown，严格按下面的结构，不要加开场白：
 
 ## 一句话总结
-（一句话说清这期最重要的内容）
+（一句话说清这期最重要的内容和结论）
+
+## 时间线
+（按时间顺序覆盖整期，划分 6–14 个话题段落。每段一行，格式严格为：
+- [mm:ss] **段落标题**：一两句说清这段讲了什么
+时间戳取这段话题开始的那一句；第一段从节目开头开始；超过一小时用 [h:mm:ss]）
 
 ## 核心观点
-（5–8 条，每条一句加粗的观点 + 一两句解释，并附时间戳 [mm:ss]）
-
-## 章节
-（按话题划分 5–12 个章节，每行格式：[mm:ss] 章节标题 —— 一句话概要）
+（5–8 条，按重要性排序。每条格式：
+- **一句话观点**：一两句解释嘉宾的理由 [mm:ss]）
 
 ## 值得记住的原话
-（3–5 句，英文原句 + 中文翻译 + 时间戳）`;
+（3–5 句，每句一行，格式：
+> 原句（非中文时给中文翻译）[mm:ss]）
 
-export const QUICK_QUESTIONS = ["这期节目最重要的三个观点是什么？", "嘉宾是谁？他有什么背景？", "有哪些反直觉或有争议的观点？", "提到了哪些书、公司、产品或论文？"];
+时间戳必须来自文字稿里真实存在的时间，格式只用 [mm:ss] 或 [h:mm:ss]，不要写成区间或其他括号。`;

@@ -2,6 +2,7 @@ import { Splitter } from "./components/Splitter";
 import { SelectionTools } from "./components/SelectionTools";
 import { SIDEBAR, useLayout } from "./lib/layout";
 import { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
@@ -20,6 +21,12 @@ export default function App() {
     void init();
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); useStore.getState().openSettings(); return; }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "l") {
+        const box = document.querySelector<HTMLInputElement>(".top-search input");
+        if (box) { e.preventDefault(); box.focus(); box.select(); }
+        return;
+      }
       if (t.closest("input, textarea, select, [contenteditable], [role=separator]")) return;
       if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "\\")) {
         e.preventDefault();
@@ -43,7 +50,17 @@ export default function App() {
       else if (e.code === "KeyS") cycleRate();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const scrollTimers = new WeakMap<Element, number>();
+    const onScroll = (e: Event) => {
+      const el = e.target;
+      if (!(el instanceof HTMLElement)) return;
+      el.classList.add("is-scrolling");
+      window.clearTimeout(scrollTimers.get(el));
+      scrollTimers.set(el, window.setTimeout(() => el.classList.remove("is-scrolling"), 900));
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    const offMenu = listen("open-settings", () => useStore.getState().openSettings());
+    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("scroll", onScroll, { capture: true }); void offMenu.then((f) => f()); };
   }, []);
 
   const { sidebar, sideOpen, put: putLayout } = useLayout();

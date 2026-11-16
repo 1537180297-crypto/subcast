@@ -24,20 +24,48 @@ export function Markdown({ text, onSeek }: { text: string; onSeek: (t: number) =
   const blocks: ReactNode[] = [];
   let list: ReactNode[] = [];
   let ordered = false;
+  // A list whose every item starts with a timestamp is a timeline (chapters), drawn as one.
+  let timeline = true;
+  let rows: string[][] = [];
+  const flushTable = () => {
+    if (!rows.length) return;
+    const [head, ...body] = rows;
+    const k = `t${blocks.length}`;
+    blocks.push(
+      <div key={k} className="md-table"><table>
+        <thead><tr>{head.map((c, j) => <th key={j}>{inline(c, onSeek, `${k}h${j}`)}</th>)}</tr></thead>
+        <tbody>{body.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{inline(c, onSeek, `${k}${i}-${j}`)}</td>)}</tr>)}</tbody>
+      </table></div>,
+    );
+    rows = [];
+  };
   const flush = () => {
-    if (list.length) blocks.push(ordered ? <ol key={`l${blocks.length}`}>{list}</ol> : <ul key={`l${blocks.length}`}>{list}</ul>);
+    flushTable();
+    const cls = timeline ? "timeline" : undefined;
+    if (list.length) blocks.push(ordered ? <ol key={`l${blocks.length}`} className={cls}>{list}</ol> : <ul key={`l${blocks.length}`} className={cls}>{list}</ul>);
     list = [];
+    timeline = true;
   };
   text.split("\n").forEach((raw, i) => {
     const line = raw.trimEnd();
+    const cells = line.trim().match(/^\|(.*)\|$/);
+    if (cells) {
+      if (list.length) flush();
+      if (!/^[\s|:-]+$/.test(cells[1])) rows.push(cells[1].split("|").map((c) => c.trim()));
+      return;
+    }
+    flushTable();
     const bullet = line.match(/^\s*(?:[-*•]|(\d+)[.)、])\s+(.*)$/);
     if (bullet) {
       const isOrdered = Boolean(bullet[1]);
       if (list.length && isOrdered !== ordered) flush();
       ordered = isOrdered;
-      list.push(<li key={i}>{inline(bullet[2], onSeek, `b${i}`)}</li>);
+      const stamped = /^\[\d{1,2}:\d{2}/.test(bullet[2]);
+      timeline &&= stamped;
+      list.push(<li key={i} className={stamped ? "ts-item" : undefined}>{inline(bullet[2], onSeek, `b${i}`)}</li>);
       return;
     }
+    if (line.trim().startsWith(">")) { flush(); blocks.push(<blockquote key={i}>{inline(line.trim().replace(/^>\s*/, ""), onSeek, `q${i}`)}</blockquote>); return; }
     flush();
     const heading = line.match(/^(#{1,4})\s+(.*)$/);
     if (heading) blocks.push(heading[1].length <= 2 ? <h3 key={i}>{inline(heading[2], onSeek, `h${i}`)}</h3> : <h4 key={i}>{inline(heading[2], onSeek, `h${i}`)}</h4>);

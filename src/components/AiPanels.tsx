@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Loader2, RefreshCw, Sparkles, Square, Trash2 } from "lucide-react";
+import { ArrowUp, Loader2, RefreshCw, Settings2, Sparkles, Square, Trash2 } from "lucide-react";
 import { api, errorText, type ChatMessage, type Episode } from "../lib/api";
-import { askEpisode, QUICK_QUESTIONS, SUMMARY_PROMPT, transcriptForModel } from "../lib/ai";
+import { askEpisode, SUMMARY_PROMPT, transcriptForModel } from "../lib/ai";
+import { quickPrompts } from "../lib/settings";
+import { ChatPrefsDialog, ModelPicker, PromptMenu, promptIcon, shortModel } from "./ChatTools";
 import { llmReady, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 import { Markdown } from "./Markdown";
@@ -56,13 +58,17 @@ function useSeek(ep: Episode) {
 export function ChatPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
   const connected = useConnected();
+  const settings = useStore((s) => s.settings);
   const seek = useSeek(ep);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState<string | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [prefsOpen, setPrefsOpen] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const prompts = quickPrompts(settings).filter((p) => p.enabled);
 
   useEffect(() => {
     setMessages([]);
@@ -76,43 +82,59 @@ export function ChatPanel({ ep }: { ep: Episode }) {
     try { await check(); } catch (e) { setSetupError(errorText(e)); return; }
     setSetupError(null);
     const history: ChatMessage[] = [...messages, { role: "user", content: q }];
+    const model = `${provider!.name} · ${shortModel(provider!.model)}`;
     setMessages(history);
     setInput("");
     setStreaming("");
     abort.current = new AbortController();
     try {
-      const answer = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history, onDelta: setStreaming, signal: abort.current.signal });
-      const next = [...history, { role: "assistant" as const, content: answer }];
+      const answer = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history, instruction: settings.chatPromptOn ? settings.chatPrompt : "", onDelta: setStreaming, signal: abort.current.signal });
+      const next = [...history, { role: "assistant" as const, content: answer, model }];
       setMessages(next);
       void api.setBlob(ep.id, "chat", JSON.stringify(next));
     } catch (e) {
       const partial = abort.current?.signal.aborted ? "（已停止）" : `出错了：${errorText(e)}`;
-      setMessages([...history, { role: "assistant", content: partial }]);
+      setMessages([...history, { role: "assistant", content: partial, model }]);
     } finally {
       setStreaming(null);
     }
   };
 
   const clear = () => { setMessages([]); void api.setBlob(ep.id, "chat", "[]"); };
+  const blocked = !transcript || connected === false;
+  const empty = !messages.length && streaming == null;
 
   return (
     <div className="chat">
       <div className="chat-scroll">
-        {!messages.length && streaming == null && connected === false && <ConnectCard what="问答" />}
-        {!messages.length && streaming == null && connected !== false && (
+        {empty && connected === false && <ConnectCard what="问答" />}
+        {empty && connected !== false && (
           <div className="chat-intro">
-            <Sparkles size={22} className="accent" />
-            <p className="lead">问问这期节目</p>
-            <p className="muted">回答基于整期文字稿，点时间戳就能跳过去听。</p>
-            <div className="chips">
-              {QUICK_QUESTIONS.map((q) => <button key={q} className="chip" onClick={() => send(q)} disabled={!transcript}>{q}</button>)}
+            <div className="intro-head">
+              <span className="intro-icon"><Sparkles size={18} /></span>
+              <div>
+                <p className="lead">问问这期节目</p>
+                <p className="muted small">回答依据整期文字稿，引用处带时间戳，点一下就跳过去听。</p>
+              </div>
             </div>
-            {!transcript && <p className="muted small">字幕准备好后就可以提问。</p>}
+            {!transcript && <p className="setup-note"><span>字幕准备好后就可以提问。</span></p>}
+            <div className="prompt-list">
+              {prompts.map((p) => {
+                const Icon = promptIcon(p.id);
+                return (
+                  <button key={p.id} type="button" className="prompt-row" title={p.body} disabled={blocked} onClick={() => send(p.body)}>
+                    <Icon size={15} className="pr-icon" />
+                    <span className="pr-text"><span className="pr-title">{p.title}</span><span className="pr-sub">{p.body}</span></span>
+                  </button>
+                );
+              })}
+            </div>
+            <button type="button" className="link-btn" onClick={() => setPrefsOpen(true)}><Settings2 size={13} /> 自定义提示词和回答偏好</button>
           </div>
         )}
         {messages.map((m, i) => (
           <div key={i} className={`msg ${m.role}`}>
-            {m.role === "user" ? <p>{m.content}</p> : <Markdown text={m.content} onSeek={seek} />}
+            {m.role === "user" ? <p>{m.content}</p> : <><Markdown text={m.content} onSeek={seek} />{m.model && <p className="msg-model">{m.model}</p>}</>}
           </div>
         ))}
         {streaming != null && (
@@ -125,25 +147,31 @@ export function ChatPanel({ ep }: { ep: Episode }) {
         )}
         <div ref={end} />
       </div>
-      <form className="composer" onSubmit={(e) => { e.preventDefault(); void send(input); }}>
-        {messages.length > 0 && streaming == null && <button type="button" className="icon-btn" title="清空对话" onClick={clear}><Trash2 size={16} /></button>}
+      <form className="composer" onSubmit={(e) => { e.preventDefault(); void send(input); }} onClick={(e) => { if (e.target === e.currentTarget) box.current?.focus(); }}>
         <textarea
+          ref={box}
           value={input}
           rows={1}
-          placeholder={connected === false ? "连接模型后可以提问" : transcript ? "问点什么，比如：他们怎么看 AGI 的时间线？" : "字幕准备好后可以提问"}
-          disabled={!transcript || connected === false}
+          placeholder={connected === false ? "连接模型后可以提问" : transcript ? "问点什么，Enter 发送，Shift+Enter 换行" : "字幕准备好后可以提问"}
+          disabled={blocked}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(input); } }}
         />
-        {streaming != null
-          ? <button type="button" className="send" title="停止" onClick={() => abort.current?.abort()}><Square size={14} fill="currentColor" /></button>
-          : <button type="submit" className="send" title="发送" disabled={!input.trim()}><ArrowUp size={16} /></button>}
+        <div className="composer-bar">
+          <ModelPicker disabled={connected === false} />
+          <PromptMenu onPick={(b) => void send(b)} onManage={() => setPrefsOpen(true)} disabled={blocked || streaming != null} />
+          <span className="spacer" />
+          {messages.length > 0 && streaming == null && <button type="button" className="icon-btn sm" title="清空对话" onClick={clear}><Trash2 size={15} /></button>}
+          {streaming != null
+            ? <button type="button" className="send" title="停止" onClick={() => abort.current?.abort()}><Square size={13} fill="currentColor" /></button>
+            : <button type="submit" className="send" title="发送" disabled={!input.trim() || blocked}><ArrowUp size={16} /></button>}
+        </div>
       </form>
-      {connected && <p className="model-note">{provider ? `${provider.name} · ${provider.model}` : ""}</p>}
+      <p className="model-note">回答由 AI 生成，可能有误，重要信息请回到原文核对</p>
+      {prefsOpen && <ChatPrefsDialog onClose={() => setPrefsOpen(false)} />}
     </div>
   );
 }
-
 export function SummaryPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
   const connected = useConnected();
