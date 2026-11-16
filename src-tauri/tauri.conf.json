@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "subcast",
+  "productName": "SubCast",
   "version": "0.1.0",
   "identifier": "ai.qiaomu.subcast",
   "build": {
@@ -10,13 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "subcast",
-        "width": 800,
-        "height": 600
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
@@ -30,6 +24,8 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "shortDescription": "海外播客与 YouTube 双语字幕、AI 问答",
+    "category": "Education"
   }
 }
