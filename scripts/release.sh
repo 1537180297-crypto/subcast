@@ -38,7 +38,12 @@ export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 
 notarize() { # file
-  xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait | tee /dev/stderr | grep -q "status: Accepted"
+  # Capture first, then match: piping into `grep -q` lets grep exit early, tee dies of SIGPIPE (141)
+  # and pipefail + set -e abort the release even though Apple accepted the submission.
+  local out
+  out=$(xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || true
+  printf '%s\n' "$out" >&2
+  grep -q "status: Accepted" <<<"$out"
 }
 
 if [ "$SKIP_MAC" = 0 ]; then
@@ -60,7 +65,8 @@ if [ "$SKIP_MAC" = 0 ]; then
     TGZ="$OUT/SubCast_${VERSION}_${ARCH}.app.tar.gz"
     COPYFILE_DISABLE=1 tar -czf "$TGZ" -C "$(dirname "$APP")" SubCast.app
     rm -f "$TGZ.sig"
-    npx tauri signer sign -f "$KEY" -p "" "$TGZ" >/dev/null
+    # The build exports TAURI_SIGNING_PRIVATE_KEY; the signer refuses it together with -f.
+    env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD npx tauri signer sign -f "$KEY" -p "" "$TGZ" >/dev/null
 
     echo "==> disk image ($ARCH)"
     DMG="$OUT/SubCast_${VERSION}_${ARCH}.dmg"
