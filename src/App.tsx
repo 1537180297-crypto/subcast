@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { Splitter } from "./components/Splitter";
 import { SelectionTools } from "./components/SelectionTools";
 import { SIDEBAR, useLayout } from "./lib/layout";
@@ -8,6 +9,7 @@ import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
 import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelView } from "./components/Lists";
 import { startOffline } from "./lib/offline";
+import { loadFavorites } from "./lib/library";
 import { startUpdateChecks } from "./lib/updater";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { EpisodeView } from "./components/EpisodeView";
@@ -19,11 +21,12 @@ import { t, useLang } from "./lib/i18n";
 import { EqBars } from "./components/Illustrations";
 
 export default function App() {
-  const { ready, view, settingsOpen, addOpen, init } = useStore();
+  const { ready, view, settingsOpen, addOpen, init } = useStore(useShallow((s) => ({ ready: s.ready, view: s.view, settingsOpen: s.settingsOpen, addOpen: s.addOpen, init: s.init })));
 
   useEffect(() => {
     startJobListeners();
     void startOffline();
+    void loadFavorites();
     startUpdateChecks();
     void init();
     const onKey = (e: KeyboardEvent) => {

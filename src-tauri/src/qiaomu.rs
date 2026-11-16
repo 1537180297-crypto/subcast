@@ -257,22 +257,33 @@ pub(crate) async fn borrowable(id: &str, show_name: &str) -> Vec<Borrowable> {
 }
 
 pub async fn rss_channel(id: &str) -> Result<Channel> {
-    let sources: serde_json::Value = net::client().get(format!("{RSS}/api/sources")).send().await?.json().await?;
-    let meta = sources["sources"].as_array().and_then(|a| a.iter().find(|s| s["id"].as_str() == Some(id)).cloned())
-        .ok_or_else(|| anyhow!("rss.qiaomu.ai 上没有这个频道"))?;
-    let name = meta["name"].as_str().unwrap_or(id).replace(" · 文稿", "");
-    let mut entries: Vec<serde_json::Value> = vec![];
-    let mut cursor = String::new();
-    for _ in 0..4 {
-        let url = format!("{RSS}/api/sources/{id}/entries?limit=100{}", if cursor.is_empty() { String::new() } else { format!("&cursor={}", urlencoding::encode(&cursor)) });
-        let page: serde_json::Value = net::client().get(url).send().await?.json().await?;
-        entries.extend(page["entries"].as_array().cloned().unwrap_or_default());
-        match page["nextCursor"].as_str() { Some(c) if page["hasMore"].as_bool() == Some(true) && !c.is_empty() => cursor = c.to_string(), _ => break }
-    }
-    if entries.is_empty() { return Err(anyhow!("这个频道还没有节目")); }
     let podscribe = id.starts_with("podscribe-");
-    let borrowed = if podscribe { borrowable(id, &name).await } else { vec![] };
-    let yt = match youtube_channel(id) { Some(ch) => youtube_videos(ch).await, None => vec![] };
+    // Everything independent runs at once: the channel list, the entry pages, the original feed (podscribe audio)
+    // and the YouTube uploads. Sequentially this took 5–10 s on the larger channels.
+    let meta_f = async {
+        let sources = net::get_json(&format!("{RSS}/api/sources")).await?;
+        sources["sources"].as_array().and_then(|a| a.iter().find(|s| s["id"].as_str() == Some(id)).cloned())
+            .ok_or_else(|| anyhow!("rss.qiaomu.ai 上没有这个频道"))
+    };
+    let pages_f = async {
+        let mut entries: Vec<serde_json::Value> = vec![];
+        let mut cursor = String::new();
+        for _ in 0..3 {
+            let url = format!("{RSS}/api/sources/{id}/entries?limit=100{}", if cursor.is_empty() { String::new() } else { format!("&cursor={}", urlencoding::encode(&cursor)) });
+            let page = net::get_json(&url).await?;
+            entries.extend(page["entries"].as_array().cloned().unwrap_or_default());
+            if entries.len() >= crate::feeds::MAX_EPISODES { break; }
+            match page["nextCursor"].as_str() { Some(c) if page["hasMore"].as_bool() == Some(true) && !c.is_empty() => cursor = c.to_string(), _ => break }
+        }
+        Ok::<_, anyhow::Error>(entries)
+    };
+    let borrow_f = async { if podscribe && original_feed(id).is_some() { borrowable(id, "").await } else { vec![] } };
+    let yt_f = async { match youtube_channel(id) { Some(ch) => youtube_videos(ch).await, None => vec![] } };
+    let (meta, entries, mut borrowed, yt) = tokio::join!(meta_f, pages_f, borrow_f, yt_f);
+    let (meta, entries) = (meta?, entries?);
+    let name = meta["name"].as_str().unwrap_or(id).replace(" · 文稿", "");
+    if entries.is_empty() { return Err(anyhow!("这个频道还没有节目")); }
+    if podscribe && original_feed(id).is_none() { borrowed = borrowable(id, &name).await; }
     let feed = rss_feed_url(id);
     let show_id = short_hash(&feed, 16);
     let mut zh_titles = vec![];
@@ -323,7 +334,7 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
 
 /// The 乔木改写 for an rss.qiaomu.ai entry, as HTML.
 pub async fn rss_rewrite(entry_id: &str) -> Result<Option<String>> {
-    let v: serde_json::Value = net::client().get(format!("{RSS}/api/entry/{entry_id}/rewrite")).send().await?.json().await?;
+    let v: serde_json::Value = net::get_json(&format!("{RSS}/api/entry/{entry_id}/rewrite")).await?;
     if v["status"].as_str() != Some("ready") { return Ok(None); }
     let html = v["rewrite"]["bodyHtml"].as_str().filter(|h| !h.is_empty()).map(String::from)
         .or_else(|| v["rewrite"]["body"].as_str().map(markdown_html));
@@ -366,7 +377,7 @@ pub fn markdown_html(md: &str) -> String {
 
 /// A Podscribe transcript with real timestamps.
 pub async fn podscribe_transcript(url: &str) -> Result<Vec<Segment>> {
-    let v: serde_json::Value = net::client().get(url).send().await?.json().await?;
+    let v: serde_json::Value = net::get_json(&url).await?;
     let segs = v["data"]["transcript"]["segments"].as_array().cloned().unwrap_or_default();
     let mut out: Vec<Segment> = segs.iter().filter_map(|s| {
         let text = s["text"].as_str()?.trim().to_string();
@@ -379,6 +390,17 @@ pub async fn podscribe_transcript(url: &str) -> Result<Vec<Segment>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Network: how long the big 精读 channels take to load.
+    #[tokio::test]
+    #[ignore]
+    async fn rss_channel_timing() {
+        for id in ["podscribe-acquired", "latentspace", "nexttoken"] {
+            let t = std::time::Instant::now();
+            let ch = rss_channel(id).await.unwrap();
+            println!("{id}: {} episodes in {:?}", ch.episodes.len(), t.elapsed());
+        }
+    }
     const D: i64 = 24 * 3600 * 1000;
     fn b(title: &str, day: i64) -> Borrowable { Borrowable { title: title.into(), published: Some(day * D), audio: format!("a:{title}"), duration: None } }
 

@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, Compass, Download, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
@@ -15,7 +16,7 @@ import { showIcon } from "./Lists";
 import { EqBars, SearchArt, useKonami, useTaps } from "./Illustrations";
 
 export function Sidebar() {
-  const { shows, view, go, set } = useStore();
+  const { shows, view, go, set } = useStore(useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })));
   useLang((s) => s.lang);
   // Eggs: five quick clicks on the logo make it dance; the Konami code switches the seek bar to tape.
   const [dance, setDance] = useState(false);
@@ -28,8 +29,10 @@ export function Sidebar() {
   const updateWaiting = useUpdate(hasUpdate);
   const rail = !sideOpen;
   const hasDownloads = useOffline((s) => Object.keys(s.saved).length + Object.keys(s.active).length > 0);
-  const Nav = ({ v, icon, label }: { v: View; icon: React.ReactNode; label: string }) => (
-    <button className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)} title={rail ? label : undefined} aria-label={label}>{icon}<span className="label">{label}</span></button>
+  // A render function, not a component: defined inside Sidebar, a component would remount its button on
+  // every render and swallow clicks that land mid-render.
+  const nav = (v: View, icon: React.ReactNode, label: string) => (
+    <button key={v.kind} className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)} title={rail ? label : undefined} aria-label={label}>{icon}<span className="label">{label}</span></button>
   );
   return (
     <aside className={`sidebar ${rail ? "rail" : ""}`}>
@@ -40,10 +43,10 @@ export function Sidebar() {
         {dance && <EqBars className="brand-eq" />}
       </div>
       <nav>
-        <Nav v={{ kind: "latest" }} icon={<Inbox size={16} />} label={t("首页")} />
-        <Nav v={{ kind: "recent" }} icon={<History size={16} />} label={t("继续收听")} />
-        <Nav v={{ kind: "discover" }} icon={<Compass size={16} />} label={t("发现")} />
-        {(hasDownloads || view.kind === "downloads") && <Nav v={{ kind: "downloads" }} icon={<Download size={16} />} label={t("已下载")} />}
+        {nav({ kind: "latest" }, <Inbox size={16} />, t("首页"))}
+        {nav({ kind: "recent" }, <History size={16} />, t("继续收听"))}
+        {nav({ kind: "discover" }, <Compass size={16} />, t("发现"))}
+        {(hasDownloads || view.kind === "downloads") && nav({ kind: "downloads" }, <Download size={16} />, t("已下载"))}
       </nav>
       <div className="side-sep" />
       <div className="side-head"><span className="label">{tx("sidebar", "订阅")}</span><button className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true })}><Plus size={14} /></button></div>
@@ -81,7 +84,7 @@ const looksLikeLink = (t: string) => /^(https?:\/\/|@)|youtube\.com|youtu\.be|xi
 
 /** The bar above every page: back, one search box that subscribes to pasted links or searches by name, settings. */
 export function TopBar() {
-  const { history, back, reloadShows, go, openEpisode, notify, shows } = useStore();
+  const { history, back, reloadShows, go, openEpisode, notify, shows } = useStore(useShallow((s) => ({ history: s.history, back: s.back, reloadShows: s.reloadShows, go: s.go, openEpisode: s.openEpisode, notify: s.notify, shows: s.shows })));
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -164,10 +167,13 @@ function TaskChip() {
 }
 
 export function MiniPlayer() {
-  const { current, view, playing, player, time, length, openEpisode } = useStore();
+  const { current, view, playing, player, time, length, openEpisode } = useStore(useShallow((s) => ({ current: s.current, view: s.view, playing: s.playing, player: s.player, time: s.time, length: s.length, openEpisode: s.openEpisode })));
+  const { panel, panelOpen } = useLayout();
   if (!current || current.videoId || (view.kind === "episode" && view.id === current.id)) return null;
+  // Left-aligned with the page content; on an episode page it stays within the middle column.
+  const right = view.kind === "episode" && panelOpen ? panel + 24 : 24;
   return (
-    <div className="mini">
+    <div className="mini" style={{ "--mini-right": `${right}px` } as React.CSSProperties}>
       <button className="play-btn sm" onClick={() => player?.toggle()} disabled={!player}>{playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>
       {current.cover && <img className="mini-cover" src={current.cover} alt="" />}
       <div className="mini-meta" role="button" tabIndex={0} onClick={() => openEpisode(current)}>
@@ -179,7 +185,7 @@ export function MiniPlayer() {
   );
 }
 
-export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, wide, head }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; head?: React.ReactNode }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", k);
@@ -188,7 +194,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
   return (
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
-        <div className="modal-head"><h3>{title}</h3><button className="icon-btn" onClick={onClose} aria-label={t("关闭")}><X size={18} /></button></div>
+        <div className="modal-head">{head ?? <h3>{title}</h3>}<button className="icon-btn" onClick={onClose} aria-label={t("关闭")}><X size={18} /></button></div>
         <div className="modal-body">{children}</div>
       </div>
     </div>
@@ -196,42 +202,90 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
 }
 
 export function AddDialog() {
-  const { set, reloadShows, go, openEpisode, notify } = useStore();
+  const { set, reloadShows, go, openEpisode, notify, shows } = useStore(useShallow((s) => ({ set: s.set, reloadShows: s.reloadShows, go: s.go, openEpisode: s.openEpisode, notify: s.notify, shows: s.shows })));
+  const [tab, setTab] = useState<"search" | "link">("search");
+  const [q, setQ] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [adding, setAdding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const timer = useRef<number | undefined>(undefined);
   const close = () => set({ addOpen: false });
   // Split around the placeholder so "RSS" can stay bold wherever the translation puts it.
   const rss = t("任意播客 {rss} 地址", { rss: "\u0000" }).split("\u0000");
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-    setBusy(true); setError(null);
+  const add = async (value: string) => {
+    setError(null); setAdding(value); setBusy(true);
     try {
-      const r = await api.addSubscription(input);
+      const r = await api.addSubscription(value);
       close();
       if (r.show) { await reloadShows(); notify(t("已订阅「{name}」", { name: r.show.title })); go({ kind: "show", id: r.show.id }); }
       else if (r.episode) openEpisode(r.episode);
-    } catch (err) { setError(errorText(err)); } finally { setBusy(false); }
+    } catch (err) { setError(errorText(err)); } finally { setBusy(false); setAdding(null); }
   };
+  // A link pasted into the search box is simply added.
+  const pastedLink = looksLikeLink(q);
+  useEffect(() => {
+    window.clearTimeout(timer.current);
+    if (!q.trim() || pastedLink) { setResults(null); return; }
+    timer.current = window.setTimeout(async () => {
+      setSearching(true);
+      try { setResults((await api.searchPodcasts(q.trim(), /[\u4e00-\u9fff]/.test(q) ? "CN" : "US")).slice(0, 12)); } catch { setResults([]); } finally { setSearching(false); }
+    }, 300);
+  }, [q]);
+  const head = (
+    <div className="add-tabs" role="tablist">
+      <button role="tab" aria-selected={tab === "search"} className={tab === "search" ? "on" : ""} onClick={() => { setTab("search"); setError(null); }}><Search size={15} /> {t("搜索节目")}</button>
+      <button role="tab" aria-selected={tab === "link"} className={tab === "link" ? "on" : ""} onClick={() => { setTab("link"); setError(null); }}><Link2 size={15} /> {t("链接或 RSS")}</button>
+    </div>
+  );
   return (
-    <Modal title={t("添加节目")} onClose={close}>
-      <form onSubmit={submit} className="add-form">
-        <input autoFocus autoCapitalize="off" autoCorrect="off" spellCheck={false} value={input} onChange={(e) => setInput(e.target.value)} placeholder={t("粘贴 YouTube / Apple Podcasts / 小宇宙 / RSS 链接")} />
-        {error && <p className="error-text">{error}</p>}
-        <ul className="hints muted small">
-          <li><b>YouTube</b> {t("频道（@名字 / 频道链接 / 播放列表），或单个视频链接")}</li>
-          <li><b>Apple Podcasts</b> {t("节目链接")}</li>
-          <li><b>{t("小宇宙")}</b> {t("节目或单集链接")}</li>
-          <li>{rss[0]}<b>RSS</b>{rss[1]}</li>
-        </ul>
-        <div className="modal-foot">
-          <button type="button" className="btn ghost" onClick={() => { close(); useStore.getState().go({ kind: "discover" }); }}>{t("按名称搜索节目")}</button>
-          <div className="spacer" />
-          <button type="button" className="btn ghost" onClick={close}>{t("取消")}</button>
-          <button type="submit" className="btn primary" disabled={busy || !input.trim()}>{busy ? <><Loader2 size={14} className="spin" /> {t("正在读取…")}</> : t("添加")}</button>
-        </div>
-      </form>
+    <Modal title={t("添加节目")} onClose={close} head={head}>
+      {tab === "search" ? (
+        <form className="add-form" onSubmit={(e) => { e.preventDefault(); if (pastedLink) void add(q.trim()); else if (results?.[0] && !shows.some((s) => s.feedUrl === results[0].feedUrl)) void add(results[0].feedUrl); }}>
+          <div className="add-search">
+            {pastedLink ? <Link2 size={16} /> : <Search size={16} />}
+            <input autoFocus autoCapitalize="off" autoCorrect="off" spellCheck={false} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("输入节目名，比如 Lex Fridman、张小珺")} />
+            {(searching || busy) && <Loader2 size={14} className="spin muted" />}
+          </div>
+          {error && <p className="error-text">{error}</p>}
+          <div className="add-results">
+            {pastedLink ? (
+              <div className="add-empty"><p className="muted small">{t("这是一个链接，回车直接添加")}</p><button type="submit" className="btn primary sm" disabled={busy}>{t("添加")}</button></div>
+            ) : !q.trim() ? (
+              <div className="add-empty"><p className="muted small">{t("搜索 Apple Podcasts 上的节目，中英文名都可以。YouTube 频道或小宇宙请用「链接或 RSS」。")}</p></div>
+            ) : results && !results.length ? (
+              <div className="add-empty"><SearchArt /><p className="muted small">{t("没有找到，换个关键词，或者用「链接或 RSS」添加")}</p></div>
+            ) : results?.map((r) => {
+              const done = shows.some((s) => s.feedUrl === r.feedUrl);
+              return (
+                <div key={r.feedUrl} className="drop-row">
+                  {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
+                  <div className="drop-meta"><BiTitle text={r.title} className="ep-name" subClassName="clamp1" /><p className="meta-line clamp1">{r.author}</p></div>
+                  {done ? <span className="sub-done">{t("已订阅")}</span> : <button type="button" className="btn sm" onClick={() => void add(r.feedUrl)} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}</button>}
+                </div>
+              );
+            })}
+          </div>
+        </form>
+      ) : (
+        <form onSubmit={(e) => { e.preventDefault(); if (input.trim()) void add(input.trim()); }} className="add-form">
+          <input autoFocus autoCapitalize="off" autoCorrect="off" spellCheck={false} value={input} onChange={(e) => setInput(e.target.value)} placeholder={t("粘贴 YouTube / Apple Podcasts / 小宇宙 / RSS 链接")} />
+          {error && <p className="error-text">{error}</p>}
+          <ul className="hints muted small">
+            <li><b>YouTube</b> {t("频道（@名字 / 频道链接 / 播放列表），或单个视频链接")}</li>
+            <li><b>Apple Podcasts</b> {t("节目链接")}</li>
+            <li><b>{t("小宇宙")}</b> {t("节目或单集链接")}</li>
+            <li>{rss[0]}<b>RSS</b>{rss[1]}</li>
+          </ul>
+          <div className="modal-foot">
+            <div className="spacer" />
+            <button type="button" className="btn ghost" onClick={close}>{t("取消")}</button>
+            <button type="submit" className="btn primary" disabled={busy || !input.trim()}>{busy ? <><Loader2 size={14} className="spin" /> {t("正在读取…")}</> : t("添加")}</button>
+          </div>
+        </form>
+      )}
     </Modal>
   );
 }

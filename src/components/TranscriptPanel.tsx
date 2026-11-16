@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -83,7 +84,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const official = useJobs((s) => s.officialChecked[ep.id]);
   const officialError = useJobs((s) => s.officialError[ep.id]);
   const translation = useJobs((s) => s.translations[ep.id]);
-  const { time, player, settings, saveSettings, current, openSettings } = useStore();
+  const { time, player, settings, saveSettings, current, openSettings } = useStore(useShallow((s) => ({ time: s.time, player: s.player, settings: s.settings, saveSettings: s.saveSettings, current: s.current, openSettings: s.openSettings })));
   const isCurrent = current?.id === ep.id;
   const list = useRef<HTMLDivElement>(null);
   const userScrolled = useRef(0);
@@ -193,7 +194,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
 
 function NoTranscript({ ep, official, officialError }: { ep: Episode; official?: string; officialError?: string }) {
   const asr = useJobs((s) => s.asr[ep.id]);
-  const { settings, saveSettings, player, current } = useStore();
+  const { settings, saveSettings, player, current } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, player: s.player, current: s.current })));
   const { models, refresh } = useModels();
   const { downloading, start, cancel } = useModelDownload(refresh);
   const [options, setOptions] = useState(false);

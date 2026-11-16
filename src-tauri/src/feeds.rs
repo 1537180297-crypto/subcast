@@ -324,7 +324,7 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<SearchResu
         country,
         urlencoding::encode(term)
     );
-    let v: serde_json::Value = net::client().get(url).send().await?.json().await?;
+    let v: serde_json::Value = net::get_json(&url).await?;
     Ok(v["results"]
         .as_array()
         .into_iter()

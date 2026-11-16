@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { TopBar } from "./Chrome";
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import { isChineseUi, lang, t, tk } from "../lib/i18n";
@@ -12,7 +13,7 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { ArrowDownToLine, BookOpen, Captions, ChevronDown, ScrollText, ExternalLink, Loader2, MessageCircle, PanelRightClose, PanelRightOpen, Play, WandSparkles, FolderOpen, Trash2, Youtube } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Captions, ChevronDown, ScrollText, ExternalLink, Loader2, MessageCircle, PanelRightClose, PanelRightOpen, Play, WandSparkles, FolderOpen, Trash2, Youtube, Bookmark, Pause } from "lucide-react";
 import { BookArt, DoneCheck, EmptyState } from "./Illustrations";
 import { Splitter } from "./Splitter";
 import { DeepRead } from "./DeepRead";
@@ -29,6 +30,7 @@ import { ChatPanel, SummaryPanel } from "./AiPanels";
 import { Controls, YouTubePlayer } from "./Players";
 import { bytes, cancelDownload, downloadEpisode, isSaved, removeDownload, useOffline } from "../lib/offline";
 import { showLinks } from "../lib/showLinks";
+import { toggleFavorite, useLibrary } from "../lib/library";
 import { YtVideoStrip } from "./YtPromo";
 import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 
@@ -79,7 +81,7 @@ function SubtitleOverlay({ ep }: { ep: Episode }) {
 }
 
 export function EpisodeView({ id }: { id: string }) {
-  const { load } = useStore();
+  const { load } = useStore(useShallow((s) => ({ load: s.load })));
   const [ep, setEp] = useState<Episode | null>(null);
   const [tab, setTab] = useState<Tab>("transcript");
   const [startAudio, setStartAudio] = useState(false);
@@ -242,9 +244,15 @@ function DownloadButton({ ep }: { ep: Episode }) {
 }
 
 function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; setTab: (t: Tab) => void; startAudio: boolean }) {
-  const { current, load } = useStore();
+  const { current, load } = useStore(useShallow((s) => ({ current: s.current, load: s.load })));
   const titleZh = useZh(ep.title);
   const isCurrent = current?.id === ep.id;
+  const playing = useStore((s) => s.playing);
+  const fav = useLibrary((s) => s.favorites.some((f) => f.id === ep.id));
+  const coverToggle = () => {
+    if (isCurrent) { useStore.getState().player?.toggle(); return; }
+    load(ep); window.setTimeout(() => useStore.getState().player?.play(), 400);
+  };
   // When the player controls scroll out of view, a copy docks at the bottom of the column.
   const leftRef = useRef<HTMLElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
@@ -294,6 +302,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
               {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
             </div>
             {!panelOpen && <button className="round-btn" title={t("显示字幕栏（⌘\\）")} onClick={() => put({ panelOpen: true })}><PanelRightOpen size={15} /></button>}
+            <button className={`round-btn fav-btn ${fav ? "on" : ""}`} aria-pressed={fav} title={fav ? t("取消收藏") : t("收藏这一集")} onClick={() => toggleFavorite(ep)}><Bookmark size={15} fill={fav ? "currentColor" : "none"} /></button>
             <DownloadButton ep={ep} />
             {ep.videoId
               ? <button className="round-btn yt-open" title={t("在 YouTube 打开（从当前位置继续）")} onClick={() => { const s = Math.floor(isCurrent ? useStore.getState().time : ep.progress ?? 0); void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`); }}><Youtube size={16} /></button>
@@ -309,7 +318,10 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             <YouTubePlayer ep={ep} overlay={<SubtitleOverlay ep={ep} />} onUnplayable={ep.audioUrl || saved ? () => switchTo(true, t("这个视频无法在应用内播放，已切换为音频")) : undefined} />
           ) : (
             <div className="audio-stage">
-              {ep.cover ? <img src={ep.cover} alt="" /> : <div className="cover-fallback" />}
+              <button type="button" className="cover-play" onClick={coverToggle} title={isCurrent && playing ? t("暂停（空格）") : t("播放（空格）")} aria-label={isCurrent && playing ? t("暂停") : t("播放")}>
+                {ep.cover ? <img src={ep.cover} alt="" /> : <span className="cover-fallback" />}
+                <span className={`cover-play-btn ${isCurrent && playing ? "playing" : ""}`}>{isCurrent && playing ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}</span>
+              </button>
               <div className="audio-sub"><SubtitleOverlay ep={ep} /></div>
             </div>
           )}

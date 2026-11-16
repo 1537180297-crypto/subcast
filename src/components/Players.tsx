@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, RotateCw } from "lucide-react";
 import { api, type Episode } from "../lib/api";
@@ -6,6 +7,7 @@ import { loadYouTube } from "../lib/youtube";
 import { useStore } from "../store";
 import { t, tr } from "../lib/i18n";
 import { audioSrc, useOffline } from "../lib/offline";
+import { playNext } from "../lib/library";
 
 const SAVE_EVERY = 10;
 let lastSaved = 0;
@@ -66,6 +68,7 @@ export function AudioEngine() {
         void api.setProgress(audio.id, e.currentTarget.currentTime);
         if (saved && src !== audioSrc(audio)) setSrc(audioSrc(audio));
       }}
+      onEnded={(e) => { void api.setProgress(audio.id, e.currentTarget.duration || e.currentTarget.currentTime); playNext(); }}
       onError={() => useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效"))}
     />
   );
@@ -156,6 +159,7 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             useStore.getState().set({ playing: e.data === 1 });
             if (e.data === 1) hideYouTubeCaptions(player);
             if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
+            if (e.data === 0) { void api.setProgress(ep.id, player.getDuration?.() ?? player.getCurrentTime()); playNext(); }
           },
           onError: (e: any) => {
             if ([100, 101, 150, 152, 153].includes(e.data)) onBlocked(e.data === 100 ? t("视频不存在或已设为私享") : t("视频作者不允许在其他应用中嵌入播放"));
@@ -216,7 +220,8 @@ function NativeVideo({ ep, src, onFullscreen }: { ep: Episode; src: string; onFu
         onLoadedMetadata={(e) => { const el = e.currentTarget; el.playbackRate = rate; if (ep.progress > 5 && ep.progress < el.duration - 10) el.currentTime = ep.progress; track(ep, el.currentTime, el.duration); }}
         onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
         onPlay={() => { setStarted(true); useStore.getState().set({ playing: true }); }}
-        onPause={(e) => { useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }} />
+        onPause={(e) => { useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }}
+        onEnded={(e) => { void api.setProgress(ep.id, e.currentTarget.duration); playNext(); }} />
       <div className="video-shield" onClick={() => useStore.getState().player?.toggle()} onDoubleClick={onFullscreen} />
       <PlayHint ep={ep} show={!started} onClick={() => useStore.getState().player?.toggle()} />
     </>
@@ -224,7 +229,7 @@ function NativeVideo({ ep, src, onFullscreen }: { ep: Episode; src: string; onFu
 }
 
 export function Controls({ compact = false }: { compact?: boolean }) {
-  const { time, length, playing, player, settings } = useStore();
+  const { time, length, playing, player, settings } = useStore(useShallow((s) => ({ time: s.time, length: s.length, playing: s.playing, player: s.player, settings: s.settings })));
   const [drag, setDrag] = useState<number | null>(null);
   const shown = drag ?? time;
   const nextRate = cycleRate;

@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
 import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, Play, RefreshCw, Square, Trash2 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
@@ -20,7 +21,7 @@ import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } fr
 const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
 
 function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) => void }) {
-  const { settings, saveSettings } = useStore();
+  const { settings, saveSettings } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })));
   const [key, setKey] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
@@ -101,7 +102,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
 }
 
 export function SettingsDialog() {
-  const { settings, saveSettings, set, notify, settingsSection } = useStore();
+  const { settings, saveSettings, set, notify, settingsSection } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection })));
   type Section = "overview" | "model" | "asr" | "tts" | "general" | "storage" | "about";
   const [section, setSection] = useState<Section>((settingsSection as Section) ?? "overview");
   const [chatOk, setChatOk] = useState<boolean | null>(null);
@@ -286,7 +287,7 @@ function CloudAsrEditor({ a, onChange }: { a: CloudAsr; onChange: (a: CloudAsr) 
 }
 
 function TtsSettings() {
-  const { settings, saveSettings, speaking } = useStore();
+  const { settings, saveSettings, speaking } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, speaking: s.speaking })));
   const [error, setError] = useState<string | null>(null);
   const known = VOICES.some(([id]) => id === settings.ttsVoice);
   const sample = settings.ttsVoice.startsWith("en_") ? "Hi, this is SubCast. Your podcasts, now with subtitles and AI notes." : "你好，这里是 SubCast。海外好播客，配上中文字幕和精读，也可以听。"; // i18n-ignore
@@ -330,7 +331,7 @@ function UpdateButton() {
 
 function UpdateStatus() {
   const { phase, version, progress, error } = useUpdate();
-  const { settings, saveSettings } = useStore();
+  const { settings, saveSettings } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })));
   const line = phase === "latest" ? <p className="ok-text small">{t("已经是最新版本")}</p>
     : phase === "available" ? <p className="small">{t("SubCast {version} 可以更新了", { version: version ?? "" })}</p>
     : phase === "ready" ? <p className="small">{t("SubCast {version} 已下载好，重启即可完成更新", { version: version ?? "" })}</p>
@@ -347,7 +348,7 @@ function UpdateStatus() {
 
 const REPO = "https://github.com/joeseesun/subcast";
 function Storage({ onAsr }: { onAsr: () => void }) {
-  const { set, go } = useStore();
+  const { set, go } = useStore(useShallow((s) => ({ set: s.set, go: s.go })));
   const saved = useOffline((s) => s.saved);
   const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number } | null>(null);
   const load = () => void api.storageInfo().then(setInfo).catch(() => {});

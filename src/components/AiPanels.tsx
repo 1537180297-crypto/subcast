@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Loader2, RefreshCw, Settings2, Square, SquarePen } from "lucide-react";
 import { api, errorText, rawErrorText, type ChatMessage, type Episode } from "../lib/api";
@@ -53,7 +54,7 @@ function useReady(ep: Episode) {
 }
 
 function useSeek(ep: Episode) {
-  const { current, player, load } = useStore();
+  const { current, player, load } = useStore(useShallow((s) => ({ current: s.current, player: s.player, load: s.load })));
   return (t: number) => {
     if (current?.id === ep.id) player?.seek(t);
     else { load({ ...ep, progress: t }); setTimeout(() => useStore.getState().player?.seek(t), 600); }
