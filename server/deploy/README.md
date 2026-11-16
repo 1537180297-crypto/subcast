@@ -25,7 +25,7 @@ ssh myvps 'cd /opt/qiaomu-apps/subcast-api && [ -f .env ] || (umask 077; printf 
 ssh myvps 'cd /opt/qiaomu-apps/subcast-api && docker compose up -d && docker compose ps'
 ```
 
-代码只读挂载，更新代码后 `docker compose restart` 即可。日志：`ssh myvps 'docker logs -f qiaomu-subcast-api'`（每请求一行，无 IP）。数据库在宿主机 `data/`，备份：`npm run backup` 等价于在容器里执行 `node scripts/backup.js`。
+代码只读挂载，更新代码后 `docker compose restart` 即可。日志：`ssh myvps 'docker logs -f qiaomu-subcast-api'`（每请求一行，无 IP）。数据库在宿主机 `data/`，备份：`ssh myvps 'docker exec qiaomu-subcast-api node --disable-warning=ExperimentalWarning src/backup.js'`。
 
 （`deploy/subcast-api.service` 是早期的 systemd 方案，保留作参考，线上不用。）
 
