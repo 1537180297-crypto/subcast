@@ -11,7 +11,9 @@ const showFatal = (msg: string) => {
   document.body.appendChild(el);
 };
 window.addEventListener("error", (e) => showFatal(`${e.message}\n${String(e.error?.stack ?? "").split("\n").slice(0, 4).join("\n")}`));
-window.addEventListener("unhandledrejection", (e) => showFatal(String((e.reason as Error)?.stack ?? e.reason)));
+// An interrupted media play() or a cancelled request is expected, not a failure.
+const benign = (r: unknown) => /AbortError|aborted|interrupted by a (new load|call to pause)/i.test(String((r as Error)?.name ?? "") + String((r as Error)?.message ?? r));
+window.addEventListener("unhandledrejection", (e) => { if (!benign(e.reason)) showFatal(String((e.reason as Error)?.stack ?? e.reason)); });
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

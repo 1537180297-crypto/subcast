@@ -147,6 +147,10 @@ fn transcript_rank(kind: &str) -> i32 {
 }
 
 pub fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
+    parse_feed_limit(xml, feed_url, MAX_EPISODES)
+}
+
+pub fn parse_feed_limit(xml: &str, feed_url: &str, limit: usize) -> Result<(Show, Vec<Episode>)> {
     let opts = ParsingOptions { allow_dtd: true, ..Default::default() };
     let doc = Document::parse_with_options(xml, opts).map_err(|e| anyhow!("订阅源格式错误：{e}"))?;
     let root = doc.root_element();
@@ -160,7 +164,7 @@ pub fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
         // A channel's uploads playlist is titled "Videos"; the channel is what the user subscribed to.
         let title = if youtube && feed_url.contains("playlist_id=UU") { author.clone().unwrap_or(title) } else { title };
         let link = root.children().find(|c| c.tag_name().name() == "link" && c.attribute("rel") == Some("alternate")).and_then(|l| l.attribute("href")).map(String::from);
-        for e in root.children().filter(|c| c.tag_name().name() == "entry").take(MAX_EPISODES) {
+        for e in root.children().filter(|c| c.tag_name().name() == "entry").take(limit) {
             let video_id = text_of(child_ns(e, "youtube", "videoId"));
             let guid = video_id.clone().or_else(|| text_of(child(e, "id"))).unwrap_or_default();
             let group = child_ns(e, "search.yahoo.com/mrss", "group");
@@ -191,7 +195,7 @@ pub fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
         .and_then(|i| i.attribute("href"))
         .map(String::from)
         .or_else(|| plain_child(channel, "image").and_then(|i| text_of(child(i, "url"))));
-    for item in channel.children().filter(|c| c.tag_name().name() == "item").take(MAX_EPISODES) {
+    for item in channel.children().filter(|c| c.tag_name().name() == "item").take(limit) {
         let enclosure = child(item, "enclosure");
         let audio = enclosure.and_then(|e| e.attribute("url")).map(|u| u.trim().to_string());
         let link = text_of(plain_child(item, "link"));
@@ -320,7 +324,7 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<SearchResu
         country,
         urlencoding::encode(term)
     );
-    let v: serde_json::Value = net::client().get(url).send().await?.json().await?;
+    let v: serde_json::Value = net::get_json(&url).await?;
     Ok(v["results"]
         .as_array()
         .into_iter()
@@ -357,5 +361,15 @@ mod tests {
     fn video_ids() {
         assert_eq!(youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1").as_deref(), Some("dQw4w9WgXcQ"));
         assert_eq!(youtube_video_id("https://youtu.be/dQw4w9WgXcQ").as_deref(), Some("dQw4w9WgXcQ"));
+    }
+
+    /// Network: the 小宇宙 page carries the full shownotes that rss.qiaomu.ai cuts to ~300 characters.
+    #[tokio::test]
+    #[ignore]
+    async fn xiaoyuzhou_full_shownotes() {
+        let ep = xiaoyuzhou_episode("https://www.xiaoyuzhoufm.com/episode/6af9e512fe62f8f52c4ba6fb").await.unwrap();
+        let n = ep.notes.unwrap_or_default();
+        println!("shownotes chars: {}", n.chars().count());
+        assert!(n.chars().count() > 600);
     }
 }

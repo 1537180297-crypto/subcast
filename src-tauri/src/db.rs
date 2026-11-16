@@ -19,8 +19,13 @@ pub fn open(path: &Path) -> Result<Connection> {
             episode_id TEXT PRIMARY KEY, source TEXT NOT NULL, language TEXT NOT NULL, segments TEXT NOT NULL, created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS blobs(
             episode_id TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(episode_id, kind));
-        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS tr_cache(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
+    let has_deep: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('episodes') WHERE name='deep'", [], |r| r.get::<_, i64>(0))? > 0;
+    if !has_deep {
+        conn.execute_batch("ALTER TABLE episodes ADD COLUMN deep INTEGER NOT NULL DEFAULT 0; UPDATE episodes SET deep=1 WHERE transcript_type='qiaomu';")?;
+    }
     Ok(conn)
 }
 
@@ -38,16 +43,16 @@ pub fn upsert_episodes(conn: &mut Connection, eps: &[Episode]) -> Result<()> {
     let tx = conn.transaction()?;
     {
         let mut st = tx.prepare(
-            "INSERT INTO episodes(id,show_id,guid,title,published,duration,audio_url,video_id,link,cover,notes,transcript_url,transcript_type)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+            "INSERT INTO episodes(id,show_id,guid,title,published,duration,audio_url,video_id,link,cover,notes,transcript_url,transcript_type,deep)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
              ON CONFLICT(id) DO UPDATE SET title=excluded.title, published=excluded.published, duration=COALESCE(excluded.duration, episodes.duration),
              audio_url=COALESCE(excluded.audio_url, episodes.audio_url), link=excluded.link, cover=COALESCE(excluded.cover, episodes.cover),
-             notes=COALESCE(excluded.notes, episodes.notes), transcript_url=excluded.transcript_url, transcript_type=excluded.transcript_type",
+             notes=COALESCE(excluded.notes, episodes.notes), transcript_url=excluded.transcript_url, transcript_type=excluded.transcript_type, deep=excluded.deep",
         )?;
         for e in eps {
             st.execute(params![
                 e.id, e.show_id, e.guid, e.title, e.published, e.duration, e.audio_url, e.video_id, e.link, e.cover, e.notes,
-                e.transcript_url, e.transcript_type
+                e.transcript_url, e.transcript_type, e.deep
             ])?;
         }
     }
@@ -84,13 +89,14 @@ pub fn delete_show(conn: &Connection, id: &str) -> Result<()> {
 }
 
 const EPISODE_COLS: &str = "e.id,e.show_id,e.guid,e.title,e.published,e.duration,e.audio_url,e.video_id,e.link,e.cover,e.notes,e.transcript_url,e.transcript_type,e.progress,
-    EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id), s.title";
+    EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id), s.title, e.deep";
 
 fn episode_from(r: &rusqlite::Row) -> rusqlite::Result<Episode> {
     Ok(Episode {
         id: r.get(0)?, show_id: r.get(1)?, guid: r.get(2)?, title: r.get(3)?, published: r.get(4)?, duration: r.get(5)?,
         audio_url: r.get(6)?, video_id: r.get(7)?, link: r.get(8)?, cover: r.get(9)?, notes: r.get(10)?,
         transcript_url: r.get(11)?, transcript_type: r.get(12)?, progress: r.get(13)?, has_transcript: r.get(14)?, show_title: r.get(15)?,
+        deep: r.get(16)?,
     })
 }
 
@@ -125,6 +131,11 @@ pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>> {
     Ok(conn.query_row(&sql, [id], episode_from).optional()?)
 }
 
+pub fn set_audio_url(conn: &Connection, id: &str, url: &str) -> Result<()> {
+    conn.execute("UPDATE episodes SET audio_url=?2 WHERE id=?1", params![id, url])?;
+    Ok(())
+}
+
 pub fn set_progress(conn: &Connection, id: &str, seconds: f64) -> Result<()> {
     conn.execute("UPDATE episodes SET progress=?2 WHERE id=?1", params![id, seconds.max(0.01)])?;
     Ok(())
@@ -136,7 +147,7 @@ pub fn save_transcript(conn: &Connection, t: &Transcript) -> Result<()> {
         params![t.episode_id, t.source, t.language, serde_json::to_string(&t.segments)?, now_ms()],
     )?;
     // A new transcript invalidates translations and summaries made from the old one.
-    conn.execute("DELETE FROM blobs WHERE episode_id=?1 AND kind != 'chat'", [&t.episode_id])?;
+    conn.execute("DELETE FROM blobs WHERE episode_id=?1 AND kind NOT IN ('chat', 'chat-archive', 'notes-full')", [&t.episode_id])?;
     Ok(())
 }
 
@@ -166,4 +177,49 @@ pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?1,?2)", params![key, value])?;
     Ok(())
+}
+
+pub fn tr_get(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn.query_row("SELECT value FROM tr_cache WHERE key=?1", [key], |r| r.get(0)).optional()?)
+}
+
+pub fn tr_put(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute("INSERT OR REPLACE INTO tr_cache(key,value) VALUES(?1,?2)", params![key, value])?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deep_column_migrates_and_round_trips() {
+        let path = std::env::temp_dir().join(format!("subcast-db-test-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            // A database from before the deep column existed.
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(
+                "CREATE TABLE episodes(id TEXT PRIMARY KEY, show_id TEXT NOT NULL, guid TEXT NOT NULL, title TEXT NOT NULL,
+                 published INTEGER, duration REAL, audio_url TEXT, video_id TEXT, link TEXT, cover TEXT, notes TEXT,
+                 transcript_url TEXT, transcript_type TEXT, progress REAL NOT NULL DEFAULT 0);
+                 INSERT INTO episodes(id,show_id,guid,title,transcript_type) VALUES('a','s','g','A','qiaomu'),('b','s','h','B',NULL);",
+            ).unwrap();
+        }
+        let mut conn = open(&path).unwrap();
+        assert!(get_episode(&conn, "a").unwrap().unwrap().deep);
+        assert!(!get_episode(&conn, "b").unwrap().unwrap().deep);
+        // Reopening must not try to add the column again.
+        drop(conn);
+        conn = open(&path).unwrap();
+        let mut ep = get_episode(&conn, "b").unwrap().unwrap();
+        ep.deep = true;
+        upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
+        assert!(get_episode(&conn, "b").unwrap().unwrap().deep);
+        ep.deep = false;
+        upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
+        assert!(!get_episode(&conn, "b").unwrap().unwrap().deep);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
 }

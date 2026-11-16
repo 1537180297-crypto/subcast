@@ -1,10 +1,15 @@
 mod asr;
+mod cloud;
 mod db;
 mod feeds;
 mod llm;
 mod model;
 mod net;
+mod offline;
+mod qiaomu;
+mod shared;
 mod transcript;
+mod translate;
 mod youtube;
 
 use model::*;
@@ -53,6 +58,21 @@ fn store(state: &AppState, show: &Show, eps: &[Episode]) -> Res<()> {
     Ok(())
 }
 
+/// Fetches any subscription's latest state. 乔木精读 channels also bring curated Chinese titles, which go straight
+/// into the translation cache so the UI shows them instead of machine translations.
+async fn fetch_any(state: &AppState, feed_url: &str, kind: &str) -> anyhow::Result<(Show, Vec<Episode>)> {
+    if kind == "qiaomu" {
+        let ch = if let Some(id) = qiaomu::rss_source_id(feed_url) { qiaomu::rss_channel(&id).await? } else {
+            let id = qiaomu::site_id(feed_url).ok_or_else(|| anyhow::anyhow!("不是精读频道"))?;
+            qiaomu::channel(&id).await?
+        };
+        let conn = state.db.lock().unwrap();
+        for (orig, zh) in &ch.zh_titles { let _ = db::tr_put(&conn, &short_hash(&format!("zh-CN|{orig}"), 24), zh); }
+        return Ok((ch.show, ch.episodes));
+    }
+    feeds::fetch_show(feed_url, kind).await
+}
+
 async fn single_youtube(state: &AppState, video_id: &str) -> Res<Episode> {
     let info = youtube::video_info(video_id).await.map_err(e)?;
     let ep = Episode {
@@ -73,17 +93,28 @@ async fn single_youtube(state: &AppState, video_id: &str) -> Res<Episode> {
     Ok(db::get_episode(&conn, &ep.id).map_err(e)?.unwrap_or(ep))
 }
 
-#[tauri::command]
-async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Added> {
-    let (show, eps) = match feeds::resolve(&input).await.map_err(e)? {
-        feeds::Source::YouTubeVideo(id) => return Ok(Added { show: None, episode: Some(single_youtube(&state, &id).await?) }),
+enum Fetched { Show(Show, Vec<Episode>), Single(Episode) }
+
+/// Reads whatever the user pasted (or a curated channel) without subscribing.
+async fn fetch_input(state: &AppState, input: &str) -> Res<Fetched> {
+    let normalized = if input.trim().starts_with("http") { input.trim().to_string() } else { format!("https://{}", input.trim()) };
+    if let Some(id) = qiaomu::rss_source_id(&normalized) {
+        let (show, eps) = fetch_any(state, &qiaomu::rss_feed_url(&id), "qiaomu").await.map_err(e)?;
+        return Ok(Fetched::Show(show, eps));
+    }
+    if let Some(id) = qiaomu::site_id(&normalized) {
+        let (show, eps) = fetch_any(state, &qiaomu::feed_url(&id), "qiaomu").await.map_err(e)?;
+        return Ok(Fetched::Show(show, eps));
+    }
+    let (show, eps) = match feeds::resolve(input).await.map_err(e)? {
+        feeds::Source::YouTubeVideo(id) => return Ok(Fetched::Single(single_youtube(state, &id).await?)),
         feeds::Source::XiaoyuzhouEpisode(url) => {
             let mut ep = feeds::xiaoyuzhou_episode(&url).await.map_err(e)?;
             ep.id = short_hash(&format!("single:{}", ep.guid), 20);
             let mut conn = state.db.lock().unwrap();
             db::upsert_episodes(&mut conn, std::slice::from_ref(&ep)).map_err(e)?;
             let ep = db::get_episode(&conn, &ep.id).map_err(e)?.unwrap_or(ep);
-            return Ok(Added { show: None, episode: Some(ep) });
+            return Ok(Fetched::Single(ep));
         }
         feeds::Source::Xiaoyuzhou(url) => feeds::xiaoyuzhou_show(&url).await.map_err(e)?,
         feeds::Source::Feed(url) => match feeds::fetch_show(&url, "podcast").await {
@@ -97,33 +128,98 @@ async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Adde
         },
     };
     if eps.is_empty() { return Err("这个订阅源里没有可播放的节目".into()); }
-    store(&state, &show, &eps)?;
-    Ok(Added { show: Some(show), episode: None })
+    Ok(Fetched::Show(show, eps))
+}
+
+#[tauri::command]
+async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Added> {
+    match fetch_input(&state, &input).await? {
+        Fetched::Single(ep) => Ok(Added { show: None, episode: Some(ep) }),
+        Fetched::Show(show, eps) => { store(&state, &show, &eps)?; Ok(Added { show: Some(show), episode: None }) }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Preview { show: Show, episodes: Vec<Episode>, fetched_at: i64 }
+
+/// The id a channel input will have, when that can be known without the network (curated 精读 sites, direct feeds).
+fn known_show_id(input: &str) -> Option<String> {
+    let normalized = if input.trim().starts_with("http") { input.trim().to_string() } else { format!("https://{}", input.trim()) };
+    if let Some(id) = qiaomu::rss_source_id(&normalized) { return Some(short_hash(&qiaomu::rss_feed_url(&id), 16)); }
+    if let Some(id) = qiaomu::site_id(&normalized) { return Some(short_hash(&qiaomu::feed_url(&id), 16)); }
+    Some(short_hash(input.trim(), 16))
+}
+
+/// A channel page from what was saved last time, so it opens instantly; the page then refreshes it in the background.
+#[tauri::command]
+fn cached_show(state: State<'_, AppState>, input: String) -> Res<Option<Preview>> {
+    let Some(id) = known_show_id(&input) else { return Ok(None) };
+    let conn = state.db.lock().unwrap();
+    let Some(json) = db::get_blob(&conn, &id, "show-json").map_err(e)? else { return Ok(None) };
+    let Ok(show) = serde_json::from_str::<Show>(&json) else { return Ok(None) };
+    let fetched_at = db::get_blob(&conn, &id, "fetched-at").map_err(e)?.and_then(|t| t.parse().ok()).unwrap_or(0);
+    let episodes = db::list_episodes(&conn, Some(&id), 300).map_err(e)?;
+    if episodes.is_empty() { return Ok(None); }
+    Ok(Some(Preview { show, episodes, fetched_at }))
+}
+
+/// A channel page before subscribing: its episodes are saved (so they can be opened and played) but the show is
+/// not, so it stays out of the sidebar and the home feed until the user subscribes.
+#[tauri::command]
+async fn preview_show(state: State<'_, AppState>, input: String) -> Res<Preview> {
+    match fetch_input(&state, &input).await? {
+        Fetched::Single(_) => Err("这是单集链接，不是频道".into()),
+        Fetched::Show(show, eps) => {
+            let mut conn = state.db.lock().unwrap();
+            db::upsert_episodes(&mut conn, &eps).map_err(e)?;
+            let now = now_ms();
+            if let Ok(json) = serde_json::to_string(&show) { let _ = db::set_blob(&conn, &show.id, "show-json", &json); }
+            let _ = db::set_blob(&conn, &show.id, "fetched-at", &now.to_string());
+            let episodes = db::list_episodes(&conn, Some(&show.id), 300).map_err(e)?;
+            Ok(Preview { show, episodes, fetched_at: now })
+        }
+    }
 }
 
 #[tauri::command]
 async fn refresh_show(state: State<'_, AppState>, id: String) -> Res<Show> {
     let show = db::get_show(&state.db.lock().unwrap(), &id).map_err(e)?.ok_or("节目不存在")?;
-    let (fresh, eps) = feeds::fetch_show(&show.feed_url, &show.kind).await.map_err(e)?;
+    let (fresh, eps) = fetch_any(&state, &show.feed_url, &show.kind).await.map_err(e)?;
     let fresh = Show { id: show.id.clone(), kind: show.kind.clone(), ..fresh };
     store(&state, &fresh, &eps)?;
     Ok(fresh)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Refreshed { shows: usize, new_episodes: usize, skipped: bool }
+
+static REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Checks every subscription for new episodes. Runs at launch and periodically; overlapping calls are skipped.
 #[tauri::command]
-async fn refresh_all(state: State<'_, AppState>) -> Res<usize> {
-    let shows = db::list_shows(&state.db.lock().unwrap()).map_err(e)?;
-    let mut ok = 0;
-    for chunk in shows.chunks(6) {
-        let results = futures_util::future::join_all(chunk.iter().map(|s| feeds::fetch_show(&s.feed_url, &s.kind))).await;
-        for (s, r) in chunk.iter().zip(results) {
-            if let Ok((fresh, eps)) = r {
+async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
+    if REFRESHING.swap(true, Ordering::SeqCst) { return Ok(Refreshed { shows: 0, new_episodes: 0, skipped: true }); }
+    let r = async {
+        let shows: Vec<Show> = db::list_shows(&state.db.lock().unwrap()).map_err(e)?.into_iter().filter(|s| s.kind != "single").collect();
+        let (mut ok, mut fresh_eps) = (0, 0);
+        for chunk in shows.chunks(6) {
+            let results = futures_util::future::join_all(chunk.iter().map(|s| fetch_any(&state, &s.feed_url, &s.kind))).await;
+            for (s, r) in chunk.iter().zip(results) {
+                let Ok((fresh, eps)) = r else { continue };
+                let known = {
+                    let conn = state.db.lock().unwrap();
+                    eps.iter().filter(|x| conn.query_row("SELECT 1 FROM episodes WHERE id=?1", [&x.id], |_| Ok(())).is_ok()).count()
+                };
                 let fresh = Show { id: s.id.clone(), kind: s.kind.clone(), ..fresh };
-                if store(&state, &fresh, &eps).is_ok() { ok += 1; }
+                if store(&state, &fresh, &eps).is_ok() { ok += 1; fresh_eps += eps.len() - known; }
             }
         }
-    }
-    Ok(ok)
+        Ok(Refreshed { shows: ok, new_episodes: fresh_eps, skipped: false })
+    }.await;
+    REFRESHING.store(false, Ordering::SeqCst);
+    r
 }
 
 #[tauri::command]
@@ -172,7 +268,7 @@ async fn fetch_official_transcript(state: State<'_, AppState>, episode_id: Strin
             }
             None => None,
         }
-    } else if let Some(url) = &ep.transcript_url {
+    } else if let Some(url) = ep.transcript_url.as_ref().filter(|_| ep.transcript_type.as_deref() != Some("podscribe")) {
         let body = net::get_text(url).await.map_err(e)?;
         let kind = ep.transcript_type.clone().unwrap_or_default();
         let segs = if kind.contains("json") { transcript::parse_podcast_json(&body) } else { transcript::parse_cues(&body) };
@@ -180,6 +276,22 @@ async fn fetch_official_transcript(state: State<'_, AppState>, episode_id: Strin
         (!segs.is_empty()).then(|| Transcript { episode_id: ep.id.clone(), source: "rss".into(), language: "auto".into(), segments: segs })
     } else {
         None
+    };
+    // 乔木精读 episodes carry the original transcript on their page (untimed; spread across the episode).
+    let t = match t {
+        Some(t) => Some(t),
+        None if ep.transcript_type.as_deref() == Some("podscribe") && ep.transcript_url.is_some() => {
+            let segs = qiaomu::podscribe_transcript(ep.transcript_url.as_ref().unwrap()).await.map_err(e)?;
+            (!segs.is_empty()).then(|| Transcript { episode_id: ep.id.clone(), source: "podscribe".into(), language: "en".into(), segments: transcript::resegment(segs) })
+        }
+        None if ep.transcript_type.as_deref() == Some("qiaomu") => match &ep.link {
+            Some(link) => {
+                let d = qiaomu::detail(link).await.map_err(e)?;
+                d.transcript.map(|text| Transcript { episode_id: ep.id.clone(), source: "qiaomu".into(), language: "auto".into(), segments: qiaomu::transcript_segments(&text, ep.duration.unwrap_or(3600.0)) })
+            }
+            None => None,
+        },
+        None => None,
     };
     if let Some(t) = &t {
         if t.segments.is_empty() { return Ok(None); }
@@ -196,30 +308,182 @@ fn asr_emit(app: &AppHandle, id: &str, stage: &str, progress: f64, message: Opti
     let _ = app.emit("asr", AsrEvent { episode_id: id.into(), stage: stage.into(), progress, message, segment });
 }
 
+/// A 乔木精读 episode's page: fills in its audio address and keeps the Chinese deep-read.
 #[tauri::command]
-async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String) -> Res<Transcript> {
+async fn qiaomu_detail(state: State<'_, AppState>, episode_id: String) -> Res<qiaomu::Detail> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let d = if matches!(ep.transcript_type.as_deref(), Some("qiaomu-rss") | Some("podscribe")) {
+        qiaomu::Detail { audio: None, deep_read: qiaomu::rss_rewrite(&ep.guid).await.map_err(e)?, transcript: None }
+    } else {
+        let link = ep.link.clone().ok_or("这集没有网页")?;
+        qiaomu::detail(&link).await.map_err(e)?
+    };
+    let conn = state.db.lock().unwrap();
+    if let (Some(a), None) = (&d.audio, &ep.audio_url) { let _ = db::set_audio_url(&conn, &ep.id, a); }
+    if let Some(h) = &d.deep_read { let _ = db::set_blob(&conn, &ep.id, "deep-read", h); }
+    Ok(qiaomu::Detail { transcript: None, ..d })
+}
+
+/// Saves a generated image (a quote poster) to Downloads and returns its path.
+#[tauri::command]
+fn save_image(name: String, base64: String) -> Res<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(base64.trim_start_matches("data:image/png;base64,")).map_err(e)?;
+    let dir = dirs::download_dir().or_else(dirs::desktop_dir).ok_or("找不到下载文件夹")?;
+    let safe: String = name.chars().filter(|c| !"/\\:*?\"<>|".contains(*c)).take(60).collect();
+    let mut path = dir.join(format!("{safe}.png"));
+    let mut i = 2;
+    while path.exists() { path = dir.join(format!("{safe} {i}.png")); i += 1; }
+    std::fs::write(&path, bytes).map_err(e)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn list_models(provider: llm::Provider) -> Res<Vec<String>> { cloud::list_models(&provider).await.map_err(e) }
+
+/// Doubao TTS: a base64 WAV for up to 1,000 characters.
+#[tauri::command]
+async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res<String> {
+    use base64::Engine;
+    let wav = cloud::tts(&voice, resource.as_deref().unwrap_or(""), &text).await.map_err(e)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(wav))
+}
+
+#[tauri::command]
+async fn youtube_stream(state: State<'_, AppState>, video_id: String) -> Res<String> {
+    asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v).await } }).await.map_err(e)
+}
+
+// ---- offline -------------------------------------------------------------------------------------------
+
+#[tauri::command]
+async fn download_episode(app: AppHandle, state: State<'_, AppState>, episode_id: String) -> Res<offline::Saved> {
+    if let Some(s) = offline::find(&state.data, &episode_id) { return Ok(s); }
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let job = format!("dl:{episode_id}");
+    let cancel = state.job(&job);
+    let id = episode_id.clone();
+    let result = offline::download(&state.data, &ep, cancel, |p| { let _ = app.emit("offline", json!({ "episodeId": id, "progress": p })); }).await.map_err(e);
+    state.done(&job);
+    result
+}
+
+#[tauri::command]
+fn list_downloads(state: State<'_, AppState>) -> Vec<offline::Saved> { offline::list(&state.data) }
+
+#[tauri::command]
+fn delete_download(state: State<'_, AppState>, episode_id: String) -> Res<()> { offline::remove(&state.data, &episode_id).map_err(e) }
+
+#[tauri::command]
+fn clear_downloads(state: State<'_, AppState>) -> Res<()> { offline::clear(&state.data).map_err(e) }
+
+fn dir_bytes(p: &std::path::Path) -> u64 {
+    std::fs::read_dir(p).map(|rd| rd.flatten().map(|f| match f.metadata() {
+        Ok(m) if m.is_dir() => dir_bytes(&f.path()),
+        Ok(m) => m.len(),
+        Err(_) => 0,
+    }).sum()).unwrap_or(0)
+}
+
+/// The full show notes when the feed only carried a short summary (rss.qiaomu.ai channels cut it at
+/// ~300 characters): the YouTube description when the episode has a video (chapters and links), else
+/// the 小宇宙 shownotes. Kept in the "notes-full" blob, so each episode is fetched once.
+#[tauri::command]
+async fn full_notes(state: State<'_, AppState>, episode_id: String) -> Res<Option<String>> {
+    if let Some(cached) = db::get_blob(&state.db.lock().unwrap(), &episode_id, "notes-full").map_err(e)? { return Ok(Some(cached).filter(|s| !s.is_empty())); }
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let have = ep.notes.as_deref().map(|n| n.chars().count()).unwrap_or(0);
+    let mut best: Option<String> = None;
+    let mut reached = false;
+    if let Some(v) = &ep.video_id {
+        if let Ok(info) = youtube::video_info(v).await { reached = true; if !info.description.trim().is_empty() { best = Some(info.description); } }
+    }
+    if let Some(link) = ep.link.as_deref().filter(|l| l.contains("xiaoyuzhoufm.com/episode/")) {
+        if let Ok(x) = feeds::xiaoyuzhou_episode(link).await {
+            reached = true;
+            if let Some(n) = x.notes { if best.as_ref().map_or(true, |b| n.chars().count() > b.chars().count()) { best = Some(n); } }
+        }
+    }
+    // Only keep it when it really is longer; "" marks "checked, nothing better" so we don't ask again.
+    let out = best.filter(|b| b.chars().count() > have + 40);
+    if out.is_none() && !reached { return Ok(None); } // offline or blocked: try again next time
+    db::set_blob(&state.db.lock().unwrap(), &episode_id, "notes-full", out.as_deref().unwrap_or("")).map_err(e)?;
+    Ok(out)
+}
+
+/// What SubCast keeps on disk, for the storage section of Settings.
+#[tauri::command]
+fn storage_info(state: State<'_, AppState>) -> serde_json::Value {
+    let d = &state.data;
+    let library: u64 = ["subcast.db", "subcast.db-wal", "subcast.db-shm"].iter().map(|f| std::fs::metadata(d.join(f)).map(|m| m.len()).unwrap_or(0)).sum();
+    json!({
+        "downloads": dir_bytes(&offline::dir(d)),
+        "models": dir_bytes(&asr::models_dir(d)),
+        "library": library,
+        "temp": dir_bytes(&d.join("work")),
+    })
+}
+
+/// Opens one of SubCast's folders in Finder / Explorer ("downloads" or "models"), creating it first.
+#[tauri::command]
+fn open_data_folder(app: AppHandle, state: State<'_, AppState>, kind: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = match kind.as_str() { "downloads" => offline::dir(&state.data), "models" => asr::models_dir(&state.data), _ => state.data.clone() };
+    std::fs::create_dir_all(&dir).map_err(e)?;
+    app.opener().open_path(dir.to_string_lossy(), None::<&str>).map_err(e)
+}
+
+/// Shows one downloaded episode's file selected in Finder / Explorer.
+#[tauri::command]
+fn reveal_download(app: AppHandle, state: State<'_, AppState>, episode_id: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let saved = offline::find(&state.data, &episode_id).ok_or("没有找到下载的文件")?;
+    app.opener().reveal_item_in_dir(&saved.path).map_err(e)
+}
+
+/// Removes leftovers of interrupted transcriptions.
+#[tauri::command]
+fn clear_temp(state: State<'_, AppState>) -> Res<()> {
+    let dir = state.data.join("work");
+    if dir.exists() { std::fs::remove_dir_all(&dir).map_err(e)?; }
+    Ok(())
+}
+
+#[tauri::command]
+async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String, cloud: Option<cloud::CloudAsr>) -> Res<Transcript> {
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    // Someone else may have shared this episode's subtitles; a hit skips the download + ASR pass
+    // entirely (and works even without a local model).
+    let share_keys = shared::keys(&ep);
+    if let Some(mut hit) = shared::lookup(&share_keys).await {
+        let translation = hit.translation.take();
+        let t = shared::into_transcript(&ep.id, hit);
+        if let Some(tr) = &translation {
+            let conn = state.db.lock().unwrap();
+            for (seg, item) in t.segments.iter().zip(tr.items.iter()) {
+                if let Some(v) = item { let _ = db::tr_put(&conn, &short_hash(&format!("{}|{}", tr.lang, seg.text), 24), v); }
+            }
+        }
+        db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
+        asr_emit(&app, &episode_id, "done", 1.0, None, None);
+        return Ok(t);
+    }
     let spec = asr::spec(&model).ok_or("未知模型")?;
     let model_path = asr::models_dir(&state.data).join(spec.file);
-    if !model_path.is_file() { return Err("请先下载识别模型".into()); }
+    if cloud.is_none() && !model_path.is_file() { return Err("请先下载识别模型".into()); }
     let cancel = state.job(&episode_id);
     let work = state.data.join("work").join(&episode_id);
     let result = async {
         let _ = tokio::fs::create_dir_all(&work).await;
         asr_emit(&app, &episode_id, "download", 0.0, None, None);
-        let audio = if let Some(vid) = &ep.video_id {
-            let ytdlp = match asr::find_ytdlp(&state.data) {
-                Some(p) => p,
-                None => {
-                    asr_emit(&app, &episode_id, "download", 0.0, Some("正在准备 YouTube 下载工具".into()), None);
-                    asr::install_ytdlp(&state.data, &cancel, |_, _| {}).await.map_err(e)?
-                }
-            };
-            asr::youtube_audio(&ytdlp, vid, &work, cancel.clone()).await.map_err(e)?
+        let audio = if let Some(saved) = offline::find(&state.data, &episode_id) {
+            PathBuf::from(saved.path)
+        } else if let Some(vid) = &ep.video_id {
+            if asr::find_ytdlp(&state.data).is_none() { asr_emit(&app, &episode_id, "download", 0.0, Some("正在准备 YouTube 下载工具".into()), None); }
+            asr::with_ytdlp(&state.data, |bin| { let (v, w, c) = (vid.clone(), work.clone(), cancel.clone()); async move { asr::youtube_audio(&bin, &v, &w, c).await } }).await.map_err(e)?
         } else {
             let url = ep.audio_url.clone().ok_or("这集没有音频地址")?;
-            let ext = url.split('?').next().and_then(|u| u.rsplit('.').next()).filter(|x| x.len() <= 4).unwrap_or("mp3").to_lowercase();
-            let dest = work.join(format!("audio.{ext}"));
+            let dest = work.join(format!("audio.{}", offline::audio_ext(&url)));
             let app2 = app.clone();
             let id2 = episode_id.clone();
             asr::download(&url, &dest, &cancel, move |got, total| {
@@ -232,7 +496,15 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         let prompt = format!("{} — {}", ep.show_title.clone().unwrap_or_default(), ep.title).chars().take(200).collect::<String>();
         let app2 = app.clone();
         let id2 = episode_id.clone();
-        let out = if spec.engine == "qwen3" {
+        let out = if let Some(cfg) = &cloud {
+            asr_emit(&app, &episode_id, "transcribe", 0.01, Some("正在解码音频".into()), None);
+            let src = audio.clone();
+            let samples = tokio::task::spawn_blocking(move || asr::decode_16k_mono(&src)).await.map_err(e)?.map_err(e)?;
+            let segments = cloud::transcribe(cfg, samples, &language, &prompt, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, Some("云端识别中".into()), None)).await.map_err(e)?;
+            let sample: String = segments.iter().take(5).map(|s| s.text.as_str()).collect();
+            let lang = if language != "auto" { language.clone() } else if sample.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) { "zh".into() } else { "auto".into() };
+            asr::WorkerResult { language: lang, segments }
+        } else if spec.engine == "qwen3" {
             let bin = match asr::find_crispasr(&state.data) {
                 Some(p) => p,
                 None => {
@@ -259,17 +531,59 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         };
         let segments = transcript::resegment(transcript::clean(out.segments));
         if segments.is_empty() { return Err("没有识别出文字（可能是纯音乐或静音）".to_string()); }
-        let t = Transcript { episode_id: ep.id.clone(), source: "whisper".into(), language: out.language, segments };
+        let t = Transcript { episode_id: ep.id.clone(), source: if cloud.is_some() { "cloud" } else { "whisper" }.into(), language: out.language, segments };
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
         Ok(t)
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
     state.done(&episode_id);
+    // Share what we just made, so the next person listening to this episode skips transcribing.
+    if let (Ok(t), false) = (&result, share_keys.is_empty()) {
+        let (share_on, install) = {
+            let conn = state.db.lock().unwrap();
+            let on = db::get_setting(&conn, "app").ok().flatten()
+                .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                .and_then(|s| s["shareTranscripts"].as_bool()).unwrap_or(true);
+            (on, install_id(&conn))
+        };
+        if share_on {
+            let last_end = t.segments.last().map(|s| s.end).unwrap_or(0.0);
+            let translation = {
+                let conn = state.db.lock().unwrap();
+                let items: Vec<Option<String>> = t.segments.iter().map(|s| db::tr_get(&conn, &short_hash(&format!("zh-CN|{}", s.text), 24)).ok().flatten()).collect();
+                let filled = items.iter().filter(|i| i.is_some()).count();
+                (filled * 5 >= items.len() * 3).then(|| ("zh-CN".to_string(), items))
+            };
+            let meta = shared::UploadMeta {
+                title: ep.title.clone(),
+                show: ep.show_title.clone().unwrap_or_default(),
+                duration: ep.duration.unwrap_or(0.0).max(last_end).max(1.0),
+                source: if cloud.is_some() { "cloud".into() } else if spec.engine == "qwen3" { "qwen3".into() } else { "whisper".into() },
+                model: cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.to_string()),
+                language: t.language.clone(),
+                install,
+                translation,
+            };
+            let segs = t.segments.clone();
+            let app2 = app.clone();
+            tokio::spawn(async move {
+                if let Ok(action) = shared::upload(&share_keys, meta, &segs).await { let _ = app2.emit("shared-upload", action); }
+            });
+        }
+    }
     match &result {
         Ok(_) => asr_emit(&app, &episode_id, "done", 1.0, None, None),
         Err(m) => asr_emit(&app, &episode_id, "error", 0.0, Some(m.clone()), None),
     }
     result
+}
+
+/// A random id for this install; the server stores only a salted hash of it, for vote/report dedupe.
+fn install_id(conn: &Connection) -> String {
+    if let Ok(Some(id)) = db::get_setting(conn, "install") { return id; }
+    let id = uuid::Uuid::new_v4().to_string();
+    let _ = db::set_setting(conn, "install", &id);
+    id
 }
 
 #[tauri::command]
@@ -341,6 +655,41 @@ async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String
     r.map_err(e)
 }
 
+/// Machine translation (Google, free) with a persistent cache; used for titles, show notes, and subtitles
+/// when no model of the user's own is set up.
+#[tauri::command]
+async fn translate_texts(state: State<'_, AppState>, texts: Vec<String>, target: Option<String>) -> Res<Vec<String>> {
+    let tl = target.unwrap_or_else(|| "zh-CN".into());
+    let keys: Vec<String> = texts.iter().map(|t| short_hash(&format!("{tl}|{t}"), 24)).collect();
+    let mut out: Vec<Option<String>> = {
+        let conn = state.db.lock().unwrap();
+        keys.iter().map(|k| db::tr_get(&conn, k).ok().flatten()).collect()
+    };
+    let missing: Vec<usize> = (0..texts.len()).filter(|&i| out[i].is_none() && !texts[i].trim().is_empty()).collect();
+    if !missing.is_empty() {
+        let lines: Vec<String> = missing.iter().map(|&i| texts[i].clone()).collect();
+        let done = translate::translate_lines(&lines, &tl).await.map_err(e)?;
+        let conn = state.db.lock().unwrap();
+        for (j, &i) in missing.iter().enumerate() {
+            if let Some(t) = done.get(j) { let _ = db::tr_put(&conn, &keys[i], t); out[i] = Some(t.clone()); }
+        }
+    }
+    Ok(out.into_iter().map(Option::unwrap_or_default).collect())
+}
+
+/// The native menu's own items, in the interface language: [settings].
+#[tauri::command]
+fn set_menu_labels(app: AppHandle, labels: Vec<String>) -> Res<()> {
+    let Some(menu) = app.menu() else { return Ok(()) };
+    for sub in menu.items().map_err(e)? {
+        let Some(sub) = sub.as_submenu() else { continue };
+        if let Some(item) = sub.get("settings").and_then(|i| i.as_menuitem().cloned()) {
+            if let Some(l) = labels.first() { item.set_text(l).map_err(e)?; }
+        }
+    }
+    Ok(())
+}
+
 // ---- app ------------------------------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -354,7 +703,10 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_localhost::Builder::new(LOCAL_PORT).build());
     builder
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data)?;
             let conn = db::open(&data.join("subcast.db"))?;
@@ -367,17 +719,35 @@ pub fn run() {
             let url = tauri::WebviewUrl::App("index.html".into());
             #[cfg(not(debug_assertions))]
             let url = tauri::WebviewUrl::External(format!("http://localhost:{LOCAL_PORT}").parse().unwrap());
-            tauri::WebviewWindowBuilder::new(app, "main", url)
-                .title("SubCast · 声渡")
+            let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
+                .title("SubCast")
                 .inner_size(1360.0, 880.0)
-                .min_inner_size(980.0, 640.0)
-                .build()?;
+                .min_inner_size(980.0, 640.0);
+            // macOS: no title bar; the traffic lights sit inside the sidebar and the page draws its own drag areas.
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true)
+                .traffic_light_position(tauri::LogicalPosition::new(18.0, 22.0));
+            builder.build()?;
+            // The stock macOS menu has no Settings item, so ⌘, did nothing.
+            let menu = tauri::menu::Menu::default(app.handle())?;
+            if let Some(first) = menu.items()?.first().and_then(|m| m.as_submenu().cloned()) {
+                let item = tauri::menu::MenuItem::with_id(app, "settings", "设置…", true, Some("CmdOrCtrl+,"))?;
+                let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
+                first.insert_items(&[&sep, &item], 1)?;
+            }
+            app.set_menu(menu)?;
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == "settings" { let _ = app.emit("open-settings", ()); }
         })
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -387,6 +757,43 @@ pub fn run() {
 mod live {
     //! Network tests against real services: `cargo test -- --ignored --nocapture`.
     use super::*;
+    #[tokio::test]
+    #[ignore]
+    async fn qiaomu_rss_sources() {
+        let ids = ["nexttoken", "bannatie", "latentspace", "podscribe-acquired", "podscribe-pivot", "podscribe-freakonomics-radio", "podscribe-invest-like-the-best", "podscribe-the-diary-of-a-ceo-with-steven-bartlett"];
+        for id in ids {
+            let ch = crate::qiaomu::rss_channel(id).await.unwrap();
+            let playable = |x: &Episode| x.audio_url.is_some() || x.video_id.is_some();
+            println!("{id}: {} eps={} playable={} video={} deep={} cover={}", ch.show.title, ch.episodes.len(), ch.episodes.iter().filter(|x| playable(x)).count(), ch.episodes.iter().filter(|x| x.video_id.is_some()).count(), ch.episodes.iter().filter(|x| x.deep).count(), ch.show.cover.is_some());
+            if id == "nexttoken" { assert!(ch.episodes.iter().filter(|x| x.video_id.is_some()).count() * 2 >= ch.episodes.len(), "nexttoken episodes should mostly have the YouTube video"); }
+            assert!(!id.starts_with("podscribe-") || ch.episodes.iter().all(|x| x.transcript_url.is_some()), "{id}: podscribe episodes need a transcript");
+            assert!(id.starts_with("podscribe-") || ch.episodes.iter().all(playable), "{id}: unplayable entries should be skipped");
+            if id.starts_with("podscribe-") {
+                let pool = crate::qiaomu::borrowable(id, &ch.show.title).await;
+                for x in ch.episodes.iter().take(6) {
+                    let m = crate::qiaomu::find_audio(&pool, &x.title, x.published).map(|b| b.title.chars().take(60).collect::<String>());
+                    println!("  {:<62} -> {:?}", x.title.chars().take(60).collect::<String>(), m);
+                }
+            }
+            let Some(e) = ch.episodes.iter().find(|x| x.deep) else { continue };
+            let rw = crate::qiaomu::rss_rewrite(&e.guid).await.unwrap();
+            assert!(rw.is_some(), "{id}: rewriteReady entry has no rewrite");
+            println!("  rewrite={}", rw.as_ref().map(|h| h.chars().take(120).collect::<String>()).unwrap_or_default());
+            if let Some(u) = &e.transcript_url { let s = crate::qiaomu::podscribe_transcript(u).await.unwrap(); println!("  segs={} {:?}", s.len(), s.get(1).map(|x| (x.start, x.text.chars().take(40).collect::<String>()))); }
+        }
+    }
+    #[tokio::test]
+    #[ignore]
+    async fn qiaomu_channels() {
+        for id in ["lex", "nopriors", "zhangxiaojun"] {
+            let ch = crate::qiaomu::channel(id).await.unwrap();
+            let ep = &ch.episodes[0];
+            println!("{id}: {} | cover={:?} | eps={} | zh={} | first={} video={:?}", ch.show.title, ch.show.cover, ch.episodes.len(), ch.zh_titles.len(), ep.title, ep.video_id);
+            let d = crate::qiaomu::detail(ep.link.as_ref().unwrap()).await.unwrap();
+            println!("  audio={:?} deep={} transcript={}", d.audio, d.deep_read.as_ref().map(|h| h.len()).unwrap_or(0), d.transcript.as_ref().map(|t| t.len()).unwrap_or(0));
+            if let Some(t) = &d.transcript { let segs = crate::qiaomu::transcript_segments(t, ep.duration.unwrap_or(3600.0)); println!("  segs={} first={:?}", segs.len(), segs.first().map(|s| s.text.chars().take(80).collect::<String>())); }
+        }
+    }
     #[tokio::test]
     #[ignore]
     async fn sources() {
@@ -401,6 +808,59 @@ mod live {
         }
         let r = feeds::search_podcasts("lex fridman", "US").await.unwrap();
         println!("search: {} results, first {}", r.len(), r[0].title);
+    }
+    #[tokio::test]
+    #[ignore]
+    async fn discover_picks() {
+        let inputs = [
+            "https://www.xiaoyuzhoufm.com/podcast/5e4ee557418a84a0466737b7", "https://www.xiaoyuzhoufm.com/podcast/5e2831ed418a84a046231c00",
+            "https://www.xiaoyuzhoufm.com/podcast/5f72b66083c34e85dd14fde9", "https://www.xiaoyuzhoufm.com/podcast/5e4515bd418a84a046e2b11a",
+            "https://www.xiaoyuzhoufm.com/podcast/611719d3cb0b82e1df0ad29e", "https://www.xiaoyuzhoufm.com/podcast/6022a180ef5fdaddc30bb101",
+            "https://www.xiaoyuzhoufm.com/podcast/61dd99a47b29652ff572257b", "https://www.xiaoyuzhoufm.com/podcast/61358d971c5d56efe5bcb5d2",
+            "https://www.xiaoyuzhoufm.com/podcast/5e74b52c418a84a046ecaceb", "https://www.xiaoyuzhoufm.com/podcast/5e280faf418a84a0461fbd39",
+            "https://www.xiaoyuzhoufm.com/podcast/646d6bfa53a5e5ea14e69c7c", "https://www.xiaoyuzhoufm.com/podcast/64379296ff8a107611a67208",
+            "https://www.xiaoyuzhoufm.com/podcast/6627fda4b56459544087d86a", "https://www.xiaoyuzhoufm.com/podcast/68981df29e7bcd326eb91d88",
+            "https://www.xiaoyuzhoufm.com/podcast/5e285856418a84a04627b7be", "https://www.xiaoyuzhoufm.com/podcast/62694abdb221dd5908417d1e",
+            "https://www.youtube.com/@hubermanlab", "https://www.youtube.com/@MachineLearningStreetTalk", "https://www.youtube.com/@Bg2Pod",
+            "https://www.youtube.com/@MyFirstMillionPod", "https://www.youtube.com/@ChrisWillx", "https://www.youtube.com/@timferriss",
+            "https://www.youtube.com/@Alex.kantrowitz", "https://www.youtube.com/@tkppodcast", "https://www.youtube.com/@cheekypint",
+            "https://www.youtube.com/@PeterAttiaMD", "https://www.youtube.com/@peterdiamandis", "https://www.youtube.com/@EveryInc",
+        ];
+        let mut bad = vec![];
+        for input in inputs {
+            let r = match feeds::resolve(input).await {
+                Ok(feeds::Source::Feed(u)) => feeds::fetch_show(&u, "podcast").await,
+                Ok(feeds::Source::Xiaoyuzhou(u)) => feeds::xiaoyuzhou_show(&u).await,
+                Ok(_) => Err(anyhow::anyhow!("unexpected source")),
+                Err(err) => Err(err),
+            };
+            match r {
+                Ok((show, eps)) => {
+                    let newest = eps.iter().filter_map(|x| x.published).max().unwrap_or(0);
+                    let days = (now_ms() - newest) / 86_400_000;
+                    let playable = eps.iter().filter(|x| x.audio_url.is_some() || x.video_id.is_some()).count();
+                    println!("{input}\n  -> {} | eps={} playable={} newest={}d ago | cover={:?}", show.title, eps.len(), playable, days, show.cover);
+                    if eps.is_empty() || playable == 0 { bad.push(input); }
+                }
+                Err(err) => { println!("{input}\n  !! {err}"); bad.push(input); }
+            }
+        }
+        assert!(bad.is_empty(), "failed: {bad:?}");
+    }
+    #[tokio::test]
+    #[ignore]
+    async fn ytdlp_stays_current() {
+        let data = std::env::temp_dir().join(format!("subcast-ytdlp-{}", uuid::Uuid::new_v4()));
+        let bin = asr::ytdlp(&data).await.unwrap();
+        assert!(bin.starts_with(&data), "uses its own copy");
+        std::fs::remove_file(data.join("bin/yt-dlp.checked")).ok();
+        // Freshly installed from the latest release: the check finds nothing newer.
+        assert!(!asr::update_ytdlp(&data, false).await.unwrap());
+        // Checked just now: no second network call within the day.
+        assert!(!asr::update_ytdlp(&data, false).await.unwrap());
+        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ").await }).await.unwrap();
+        println!("stream: {}", &url[..url.len().min(80)]);
+        let _ = std::fs::remove_dir_all(&data);
     }
     #[tokio::test]
     #[ignore]

@@ -1,4 +1,6 @@
 // Loads YouTube's IFrame Player API once.
+import { t } from "./i18n";
+
 declare global {
   interface Window { YT?: any; onYouTubeIframeAPIReady?: () => void }
 }
@@ -13,7 +15,7 @@ export function loadYouTube(): Promise<any> {
     window.onYouTubeIframeAPIReady = () => { previous?.(); resolve(window.YT); };
     const script = document.createElement("script");
     script.src = "https://www.youtube.com/iframe_api";
-    script.onerror = () => { loading = null; reject(new Error("无法加载 YouTube 播放器，请检查网络或代理")); };
+    script.onerror = () => { loading = null; reject(new Error(t("无法加载 YouTube 播放器，请检查网络或代理"))); };
     document.head.appendChild(script);
   });
   return loading;

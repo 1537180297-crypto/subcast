@@ -1,12 +1,15 @@
 import { create } from "zustand";
 import { api, type Episode, type Show } from "./lib/api";
 import { DEFAULTS, loadSettings, type Settings } from "./lib/settings";
+import { setLang, t } from "./lib/i18n";
 
 export type View =
   | { kind: "latest" }
   | { kind: "recent" }
   | { kind: "discover" }
+  | { kind: "downloads" }
   | { kind: "show"; id: string }
+  | { kind: "channel"; input: string }
   | { kind: "episode"; id: string };
 
 export interface PlayerHandle {
@@ -17,6 +20,7 @@ export interface PlayerHandle {
 }
 
 interface State {
+  speaking: boolean;
   ready: boolean;
   settings: Settings;
   shows: Show[];
@@ -30,7 +34,7 @@ interface State {
   player: PlayerHandle | null;
   toast: string | null;
   settingsOpen: boolean;
-  settingsSection?: "model" | "asr" | "general";
+  settingsSection?: "model" | "asr" | "tts" | "general" | "storage" | "about";
   addOpen: boolean;
   init(): Promise<void>;
   go(view: View): void;
@@ -41,14 +45,20 @@ interface State {
   /** Loads an episode into the player without navigating. */
   load(ep: Episode): void;
   notify(text: string): void;
-  openSettings(section?: "model" | "asr" | "general"): void;
+  openSettings(section?: "model" | "asr" | "tts" | "general" | "storage" | "about"): void;
+  /** Checks every subscription for new episodes; tells the user when there are some. */
+  checkUpdates(): Promise<void>;
+  lastChecked: number;
   set(patch: Partial<State>): void;
 }
+
+const CHECK_EVERY = 30 * 60_000;
 
 let toastTimer: number | undefined;
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
+  speaking: false,
   settings: DEFAULTS,
   shows: [],
   view: { kind: "latest" },
@@ -63,8 +73,24 @@ export const useStore = create<State>((set, get) => ({
   addOpen: false,
   async init() {
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
+    setLang(settings.uiLang);
+    void api.setMenuLabels([t("设置…")]).catch(() => {});
     set({ settings, shows, ready: true });
-    if (shows.length) api.refreshAll().then(() => get().reloadShows()).catch(() => {});
+    void get().checkUpdates();
+    // Periodically, and when the window comes back after a while (the app may sit in the background for hours).
+    window.setInterval(() => void get().checkUpdates(), CHECK_EVERY);
+    window.addEventListener("focus", () => { if (Date.now() - get().lastChecked > 10 * 60_000) void get().checkUpdates(); });
+  },
+  lastChecked: 0,
+  async checkUpdates() {
+    if (!get().shows.some((s) => s.kind !== "single")) return;
+    set({ lastChecked: Date.now() });
+    try {
+      const r = await api.refreshAll();
+      if (r.skipped) return;
+      await get().reloadShows();
+      if (r.newEpisodes > 0) get().notify(t("订阅有 {n} 期新节目", { n: r.newEpisodes }));
+    } catch { /* offline: try again next time */ }
   },
   go(view) {
     set((s) => ({ view, history: [...s.history.slice(-30), s.view] }));
@@ -79,6 +105,7 @@ export const useStore = create<State>((set, get) => ({
   },
   async saveSettings(patch) {
     const settings = { ...get().settings, ...patch };
+    if (patch.uiLang) { setLang(patch.uiLang); void api.setMenuLabels([t("设置…")]).catch(() => {}); }
     set({ settings });
     await api.setSettings(settings);
   },
@@ -98,4 +125,8 @@ export const useStore = create<State>((set, get) => ({
   set: (patch) => set(patch),
 }));
 
-export const providerFor = (settings: Settings, use: "chat" | "translate") => settings.providers[use === "chat" ? settings.chatProvider : settings.translateProvider];
+export function providerFor(settings: Settings, use: "chat" | "translate") {
+  if (use === "translate") return settings.providers[settings.translateProvider];
+  const p = settings.providers[settings.chatProvider];
+  return p && settings.chatModel ? { ...p, model: settings.chatModel } : p;
+}

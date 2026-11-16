@@ -122,6 +122,65 @@ pub async fn install_ytdlp(data: &Path, cancel: &AtomicBool, progress: impl FnMu
     Ok(dest)
 }
 
+/// YouTube changes often and old yt-dlp builds stop working, so the app keeps its own copy (in `bin/`) and
+/// refreshes it at most once a day; a failed YouTube job also forces a check and retries once.
+pub async fn ytdlp(data: &Path) -> Result<PathBuf> {
+    let own = data.join("bin").join(exe("yt-dlp"));
+    if !own.is_file() {
+        match install_ytdlp(data, &AtomicBool::new(false), |_, _| {}).await {
+            Ok(p) => return Ok(p),
+            // GitHub unreachable: a system-wide copy (Homebrew, pip) is better than nothing.
+            Err(e) => return find_ytdlp(data).ok_or(e),
+        }
+    }
+    let d = data.to_path_buf();
+    tokio::spawn(async move { let _ = update_ytdlp(&d, false).await; });
+    Ok(own)
+}
+
+async fn ytdlp_version(bin: &Path) -> Option<String> {
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--version").kill_on_drop(true);
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+    let out = tokio::time::timeout(std::time::Duration::from_secs(20), cmd.output()).await.ok()?.ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Installs the newest release when ours is older. Returns whether it changed anything.
+pub async fn update_ytdlp(data: &Path, force: bool) -> Result<bool> {
+    let own = data.join("bin").join(exe("yt-dlp"));
+    let stamp = data.join("bin").join("yt-dlp.checked");
+    let fresh = std::fs::metadata(&stamp).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() < 86_400);
+    if !force && fresh { return Ok(false); }
+    if force && std::fs::metadata(&stamp).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() < 600) {
+        return Ok(false); // a forced check already ran a few minutes ago
+    }
+    if let Some(dir) = stamp.parent() { std::fs::create_dir_all(dir)?; }
+    std::fs::write(&stamp, b"")?;
+    let res = net::client().get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
+        .header("User-Agent", "SubCast").header("Accept", "application/vnd.github+json").send().await?;
+    if !res.status().is_success() { return Err(anyhow!("GitHub {}", res.status().as_u16())); }
+    let latest = res.json::<serde_json::Value>().await?["tag_name"].as_str().unwrap_or_default().to_string();
+    if latest.is_empty() { return Ok(false); }
+    if own.is_file() && ytdlp_version(&own).await.as_deref() == Some(latest.as_str()) { return Ok(false); }
+    install_ytdlp(data, &AtomicBool::new(false), |_, _| {}).await?;
+    Ok(true)
+}
+
+/// Runs a yt-dlp job; when it fails, updates yt-dlp (if a newer one exists) and tries once more.
+pub async fn with_ytdlp<T, F, Fut>(data: &Path, job: F) -> Result<T>
+where F: Fn(PathBuf) -> Fut, Fut: std::future::Future<Output = Result<T>> {
+    let bin = ytdlp(data).await?;
+    match job(bin.clone()).await {
+        Ok(v) => Ok(v),
+        Err(e) if e.to_string().contains("已取消") => Err(e),
+        Err(e) => match update_ytdlp(data, true).await {
+            Ok(true) => job(data.join("bin").join(exe("yt-dlp"))).await,
+            _ => Err(e),
+        },
+    }
+}
 pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>) -> Result<PathBuf> {
     tokio::fs::create_dir_all(dir).await?;
     let template = dir.join(format!("{video_id}.%(ext)s"));
@@ -156,6 +215,30 @@ pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc
         if e.file_name().to_string_lossy().starts_with(video_id) { return Ok(e.path()); }
     }
     Err(anyhow!("没有找到下载的音频"))
+}
+
+/// A playable address for videos whose owners block the embedded player: YouTube's HLS master playlist
+/// (adaptive quality, plays natively in WebKit) or, failing that, a single file with both audio and video.
+pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str) -> Result<String> {
+    let mut cmd = tokio::process::Command::new(ytdlp);
+    cmd.args(["-j", "--no-playlist", "--no-warnings"]);
+    let proxy = net::proxy();
+    if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).kill_on_drop(true);
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+    let out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await.map_err(|_| anyhow!("获取视频地址超时"))?.context("无法启动 yt-dlp")?;
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
+        anyhow!("无法获取视频地址：{}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("").chars().take(200).collect::<String>())
+    })?;
+    let formats = info["formats"].as_array().cloned().unwrap_or_default();
+    if let Some(u) = formats.iter().filter(|f| f["protocol"].as_str().is_some_and(|p| p.starts_with("m3u8"))).find_map(|f| f["manifest_url"].as_str()) {
+        return Ok(u.to_string());
+    }
+    formats.iter().rev()
+        .filter(|f| f["vcodec"].as_str().is_some_and(|v| v != "none") && f["acodec"].as_str().is_some_and(|a| a != "none") && f["protocol"].as_str() == Some("https"))
+        .find_map(|f| f["url"].as_str().map(str::to_string))
+        .ok_or_else(|| anyhow!("这个视频没有可直接播放的格式"))
 }
 
 // ---- CrispASR (runs Qwen3-ASR) ----------------------------------------------------------------------

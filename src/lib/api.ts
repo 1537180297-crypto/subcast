@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { tr } from "./i18n";
 
 export interface Show {
   id: string;
-  kind: "youtube" | "podcast" | "xiaoyuzhou" | "single";
+  kind: "youtube" | "podcast" | "xiaoyuzhou" | "single" | "qiaomu";
   title: string;
   author?: string;
   cover?: string;
@@ -31,21 +32,28 @@ export interface Episode {
   progress: number;
   hasTranscript: boolean;
   showTitle?: string;
+  /** Has a 乔木精读 article. */
+  deep?: boolean;
 }
 
 export interface Segment { start: number; end: number; text: string }
 export interface Transcript { episodeId: string; source: string; language: string; segments: Segment[] }
 export interface SearchResult { title: string; author: string; cover?: string; feedUrl: string; genre?: string; episodes?: number }
 export interface ModelInfo { id: string; name: string; sizeMb: number; note: string; installed: boolean }
-export interface Provider { id: string; name: string; protocol: "openai" | "anthropic"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[] }
-export interface ChatMessage { role: "user" | "assistant"; content: string }
+export interface Provider { id: string; name: string; protocol: "openai" | "anthropic"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[]; group?: "relay" | "provider" | "local" }
+export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
+export interface ChatMessage { role: "user" | "assistant"; content: string; /** Which model wrote an answer, for display. */ model?: string }
+
+/** An episode saved for offline listening. */
+export interface Saved { episodeId: string; path: string; bytes: number; savedAt: number }
 
 export interface AsrEvent { episodeId: string; stage: "download" | "transcribe" | "segment" | "done" | "error"; progress: number; message?: string; segment?: Segment }
 
 export const api = {
   addSubscription: (input: string) => invoke<{ show?: Show; episode?: Episode }>("add_subscription", { input }),
   refreshShow: (id: string) => invoke<Show>("refresh_show", { id }),
-  refreshAll: () => invoke<number>("refresh_all"),
+  setMenuLabels: (labels: string[]) => invoke<void>("set_menu_labels", { labels }),
+  refreshAll: () => invoke<{ shows: number; newEpisodes: number; skipped: boolean }>("refresh_all"),
   listShows: () => invoke<Show[]>("list_shows"),
   listEpisodes: (showId?: string, limit?: number) => invoke<Episode[]>("list_episodes", { showId, limit }),
   recentEpisodes: () => invoke<Episode[]>("recent_episodes"),
@@ -55,7 +63,7 @@ export const api = {
   searchPodcasts: (term: string, country?: string) => invoke<SearchResult[]>("search_podcasts", { term, country }),
   loadTranscript: (episodeId: string) => invoke<Transcript | null>("load_transcript", { episodeId }),
   fetchOfficialTranscript: (episodeId: string) => invoke<Transcript | null>("fetch_official_transcript", { episodeId }),
-  transcribe: (episodeId: string, model: string, language: string) => invoke<Transcript>("transcribe", { episodeId, model, language }),
+  transcribe: (episodeId: string, model: string, language: string, cloud?: CloudAsr) => invoke<Transcript>("transcribe", { episodeId, model, language, cloud: cloud ?? null }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   asrModels: () => invoke<ModelInfo[]>("asr_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),
@@ -66,6 +74,24 @@ export const api = {
   setSettings: (settings: unknown) => invoke<void>("set_settings", { settings }),
   setApiKey: (provider: string, key: string) => invoke<void>("set_api_key", { provider, key }),
   hasApiKey: (provider: string) => invoke<boolean>("has_api_key", { provider }),
+  /** Free Google translation with a persistent cache (no model needed). */
+  previewShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number }>("preview_show", { input }),
+  saveImage: (name: string, base64: string) => invoke<string>("save_image", { name, base64 }),
+  cachedShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number } | null>("cached_show", { input }),
+  qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
+  listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),
+  ttsSpeak: (text: string, voice: string, resource?: string) => invoke<string>("tts_speak", { text, voice, resource }),
+  youtubeStream: (videoId: string) => invoke<string>("youtube_stream", { videoId }),
+  translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
+  downloadEpisode: (episodeId: string) => invoke<Saved>("download_episode", { episodeId }),
+  listDownloads: () => invoke<Saved[]>("list_downloads"),
+  deleteDownload: (episodeId: string) => invoke<void>("delete_download", { episodeId }),
+  clearDownloads: () => invoke<void>("clear_downloads"),
+  storageInfo: () => invoke<{ downloads: number; models: number; library: number; temp: number }>("storage_info"),
+  openDataFolder: (kind: "downloads" | "models" | "data") => invoke<void>("open_data_folder", { kind }),
+  revealDownload: (episodeId: string) => invoke<void>("reveal_download", { episodeId }),
+  clearTemp: () => invoke<void>("clear_temp"),
+  fullNotes: (episodeId: string) => invoke<string | null>("full_notes", { episodeId }),
 };
 
 let llmCounter = 0;
@@ -108,4 +134,6 @@ export async function llmChat(opts: {
   }
 }
 
-export const errorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+/** The error as it came, for matching on its wording; show it with errorText (or tr). */
+export const rawErrorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+export const errorText = (e: unknown) => tr(rawErrorText(e));

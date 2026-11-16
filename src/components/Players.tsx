@@ -1,9 +1,13 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, RotateCw } from "lucide-react";
 import { api, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
 import { useStore } from "../store";
+import { t, tr } from "../lib/i18n";
+import { audioSrc, useOffline } from "../lib/offline";
+import { playNext } from "../lib/library";
 
 const SAVE_EVERY = 10;
 let lastSaved = 0;
@@ -20,14 +24,21 @@ export function AudioEngine() {
   const rate = useStore((s) => s.settings.playbackRate);
   const ref = useRef<HTMLAudioElement>(null);
   const audio = current && !current.videoId ? current : null;
+  const saved = useOffline((s) => (audio ? s.saved[audio.id]?.path : undefined));
+  // The address is fixed per episode so a download finishing mid-episode does not cut in; it takes over at the next pause.
+  const [chosen, setChosen] = useState<{ id: string; src?: string } | null>(null);
+  const src = audio ? (chosen?.id === audio.id ? chosen.src : audioSrc(audio)) : undefined;
+  const setSrc = (s?: string) => audio && setChosen({ id: audio.id, src: s });
+  useEffect(() => { if (audio && chosen?.id !== audio.id) setSrc(src); }, [audio?.id]);
+  useEffect(() => { if (audio && saved && ref.current?.paused !== false) setSrc(audioSrc(audio)); }, [saved]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el || !audio) return;
     const handle = {
-      seek: (t: number) => { el.currentTime = t; void el.play(); },
-      toggle: () => (el.paused ? void el.play() : el.pause()),
-      play: () => void el.play(),
+      seek: (t: number) => { el.currentTime = t; el.play().catch(() => {}); },
+      toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
+      play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
     };
     useStore.getState().set({ player: handle });
@@ -36,31 +47,81 @@ export function AudioEngine() {
 
   useEffect(() => { if (ref.current) ref.current.playbackRate = rate; }, [rate, audio?.id]);
 
-  if (!audio?.audioUrl) return null;
+  if (!audio || !src) return null;
   return (
     <audio
       ref={ref}
-      src={audio.audioUrl}
+      src={src}
       preload="metadata"
       onLoadedMetadata={(e) => {
         const el = e.currentTarget;
         el.playbackRate = rate;
-        if (audio.progress > 5 && audio.progress < el.duration - 10) el.currentTime = audio.progress;
+        const s = useStore.getState();
+        const start = s.current?.id === audio.id ? s.time : audio.progress;
+        if (start > 5 && start < el.duration - 10) el.currentTime = start;
         track(audio, el.currentTime, el.duration);
       }}
       onTimeUpdate={(e) => track(audio, e.currentTarget.currentTime)}
       onPlay={() => useStore.getState().set({ playing: true })}
-      onPause={(e) => { useStore.getState().set({ playing: false }); void api.setProgress(audio.id, e.currentTarget.currentTime); }}
-      onError={() => useStore.getState().notify("音频加载失败，可能是网络问题或地址已失效")}
+      onPause={(e) => {
+        useStore.getState().set({ playing: false });
+        void api.setProgress(audio.id, e.currentTarget.currentTime);
+        if (saved && src !== audioSrc(audio)) setSrc(audioSrc(audio));
+      }}
+      onEnded={(e) => { void api.setProgress(audio.id, e.currentTarget.duration || e.currentTarget.currentTime); playNext(); }}
+      onError={() => useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效"))}
     />
   );
 }
 
-export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.ReactNode }) {
-  const host = useRef<HTMLDivElement>(null);
+/** Our subtitles replace YouTube's: turning the caption module off alone is not enough when the viewer has captions on. */
+function hideYouTubeCaptions(player: any) {
+  try { player.setOption?.("captions", "track", {}); } catch { /* module not loaded yet */ }
+  try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ }
+}
+
+export const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
+
+/** YouTube without YouTube's chrome: the embed runs with its controls off, cropped so the title bar and logo fall
+ *  outside the frame, under a shield that keeps hover UI from appearing. Our own controls and subtitles drive it.
+ *  Videos whose owners forbid embedding fall back to the HLS stream yt-dlp finds, played in a plain <video>. */
+export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; overlay?: React.ReactNode; onUnplayable?: () => void }) {
+  const [native, setNative] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fallingBack, setFallingBack] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const fallback = async (why: string) => {
+    setFallingBack(true);
+    try { setNative(await api.youtubeStream(ep.videoId!)); setError(null); }
+    catch (e) { if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(String((e as any)?.message ?? e)) })); }
+    finally { setFallingBack(false); }
+  };
+  useEffect(() => { setNative(null); setError(null); }, [ep.id]);
+  const fullscreen = () => { const el = box.current; if (!el) return; document.fullscreenElement ? void document.exitFullscreen() : void el.requestFullscreen?.().catch(() => {}); };
+  return (
+    <div className="video" ref={box}>
+      {native ? <NativeVideo ep={ep} src={native} onFullscreen={fullscreen} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
+      {fallingBack && <div className="video-note"><span className="spin-dot" /> {t("作者限制了嵌入播放，正在切换到直连播放…")}</div>}
+      {error && <div className="video-error">{error}</div>}
+      {overlay}
+    </div>
+  );
+}
+
+function PlayHint({ ep, show, onClick }: { ep: Episode; show: boolean; onClick: () => void }) {
+  return (
+    <div className={`video-poster ${show ? "on" : ""}`} onClick={onClick}>
+      <img src={`https://i.ytimg.com/vi/${ep.videoId}/maxresdefault.jpg`} onError={(e) => { const i = e.currentTarget; if (!i.dataset.f) { i.dataset.f = "1"; i.src = `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg`; } }} alt="" />
+      <span className="big-play"><Play size={28} fill="currentColor" /></span>
+    </div>
+  );
+}
+
+function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onFullscreen: () => void; onBlocked: (why: string) => void; onError: (m: string) => void }) {
+  const host = useRef<HTMLDivElement>(null);
   const rate = useStore((s) => s.settings.playbackRate);
   const playerRef = useRef<any>(null);
+  const [state, setState] = useState(-1);
 
   useEffect(() => {
     let player: any, timer: number | undefined, disposed = false;
@@ -73,12 +134,11 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
         width: "100%",
         height: "100%",
         host: "https://www.youtube.com",
-        playerVars: { playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, iv_load_policy: 3, start: Math.floor(ep.progress > 5 ? ep.progress : 0), origin: window.location.origin },
+        playerVars: { controls: 0, disablekb: 1, fs: 0, playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, iv_load_policy: 3, start: Math.floor(ep.progress > 5 ? ep.progress : 0), origin: window.location.origin },
         events: {
           onReady: () => {
             playerRef.current = player;
-            // Our own subtitles replace YouTube's.
-            try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ }
+            hideYouTubeCaptions(player);
             player.setPlaybackRate?.(useStore.getState().settings.playbackRate);
             useStore.getState().set({
               length: player.getDuration?.() || ep.duration || 0,
@@ -95,14 +155,19 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
             }, 250);
           },
           onStateChange: (e: any) => {
+            setState(e.data);
             useStore.getState().set({ playing: e.data === 1 });
-            if (e.data === 1) { try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ } }
+            if (e.data === 1) hideYouTubeCaptions(player);
             if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
+            if (e.data === 0) { void api.setProgress(ep.id, player.getDuration?.() ?? player.getCurrentTime()); playNext(); }
           },
-          onError: (e: any) => setError(e.data === 150 || e.data === 101 ? "视频作者不允许在其他应用中播放，可点「在 YouTube 打开」" : `视频无法播放（错误 ${e.data}）`),
+          onError: (e: any) => {
+            if ([100, 101, 150, 152, 153].includes(e.data)) onBlocked(e.data === 100 ? t("视频不存在或已设为私享") : t("视频作者不允许在其他应用中嵌入播放"));
+            else onError(t("视频无法播放（错误 {code}）", { code: e.data }));
+          },
         },
       });
-    }).catch((e) => setError(String(e.message ?? e)));
+    }).catch((e) => onError(tr(String(e.message ?? e))));
     return () => {
       disposed = true;
       window.clearInterval(timer);
@@ -113,35 +178,68 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
   }, [ep.id]);
 
   useEffect(() => { playerRef.current?.setPlaybackRate?.(rate); }, [rate]);
-
+  const toggle = () => useStore.getState().player?.toggle();
   return (
-    <div className="video">
-      <div className="video-host" ref={host} />
-      {error && <div className="video-error">{error}</div>}
-      {overlay}
-    </div>
+    <>
+      <div className="video-host crop" ref={host} />
+      <div className="video-shield" onClick={toggle} onDoubleClick={onFullscreen} />
+      <PlayHint ep={ep} show={state === -1 || state === 5 || state === 0} onClick={toggle} />
+      {state === 2 && <span className="paused-mark" onClick={toggle}><Play size={22} fill="currentColor" /></span>}
+    </>
   );
 }
 
-const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
+function NativeVideo({ ep, src, onFullscreen }: { ep: Episode; src: string; onFullscreen: () => void }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const rate = useStore((s) => s.settings.playbackRate);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let hls: any;
+    if (!src.includes(".m3u8") && !src.includes("/hls_") || el.canPlayType("application/vnd.apple.mpegurl")) el.src = src;
+    else void import("hls.js").then(({ default: Hls }) => { hls = new Hls(); hls.loadSource(src); hls.attachMedia(el); });
+    const handle = {
+      seek: (t: number) => { el.currentTime = t; void el.play().catch(() => {}); },
+      toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
+      play: () => void el.play().catch(() => {}),
+      setRate: (r: number) => { el.playbackRate = r; },
+    };
+    useStore.getState().set({ player: handle });
+    return () => {
+      hls?.destroy?.();
+      void api.setProgress(ep.id, el.currentTime);
+      const s = useStore.getState();
+      if (s.player === handle) s.set({ player: null, playing: false });
+    };
+  }, [src, ep.id]);
+  useEffect(() => { if (ref.current) ref.current.playbackRate = rate; }, [rate]);
+  return (
+    <>
+      <video ref={ref} className="video-native" playsInline preload="auto"
+        onLoadedMetadata={(e) => { const el = e.currentTarget; el.playbackRate = rate; if (ep.progress > 5 && ep.progress < el.duration - 10) el.currentTime = ep.progress; track(ep, el.currentTime, el.duration); }}
+        onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
+        onPlay={() => { setStarted(true); useStore.getState().set({ playing: true }); }}
+        onPause={(e) => { useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }}
+        onEnded={(e) => { void api.setProgress(ep.id, e.currentTarget.duration); playNext(); }} />
+      <div className="video-shield" onClick={() => useStore.getState().player?.toggle()} onDoubleClick={onFullscreen} />
+      <PlayHint ep={ep} show={!started} onClick={() => useStore.getState().player?.toggle()} />
+    </>
+  );
+}
 
 export function Controls({ compact = false }: { compact?: boolean }) {
-  const { time, length, playing, player, settings, saveSettings } = useStore();
+  const { time, length, playing, player, settings } = useStore(useShallow((s) => ({ time: s.time, length: s.length, playing: s.playing, player: s.player, settings: s.settings })));
   const [drag, setDrag] = useState<number | null>(null);
   const shown = drag ?? time;
-  const nextRate = () => {
-    const i = RATES.indexOf(settings.playbackRate);
-    const r = RATES[(i + 1) % RATES.length];
-    player?.setRate(r);
-    void saveSettings({ playbackRate: r });
-  };
+  const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
-      <button className="icon-btn" title="后退 15 秒" onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
-      <button className="play-btn" title={playing ? "暂停（空格）" : "播放（空格）"} onClick={() => player?.toggle()} disabled={!player}>
+      <button className="icon-btn" title={t("后退 15 秒（←）")} onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
+      <button className="play-btn" title={playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player}>
         {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
-      <button className="icon-btn" title="前进 30 秒" onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
+      <button className="icon-btn" title={t("前进 30 秒（→）")} onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
       <span className="time">{clock(shown)}</span>
       <input
         className="seek"
@@ -154,10 +252,24 @@ export function Controls({ compact = false }: { compact?: boolean }) {
         onPointerUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
         onKeyUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
         style={{ "--fill": `${length ? (shown / length) * 100 : 0}%` } as React.CSSProperties}
-        aria-label="播放进度"
+        aria-label={t("播放进度")}
       />
       <span className="time">{length ? clock(length) : "--:--"}</span>
-      <button className="rate-btn" onClick={nextRate} title="播放速度">{settings.playbackRate}×</button>
+      <button className={`rate-btn${settings.playbackRate >= 2 ? " fast" : ""}`} onClick={nextRate} title={t("播放速度（S）")}>{settings.playbackRate >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{settings.playbackRate}×</button>
+      <button className="rate-btn" onClick={() => cycleMode()} title={t("字幕：双语 / 中文 / 原文（C）")}>{settings.subtitleMode === "bilingual" ? t("双语") : settings.subtitleMode === "translation" ? t("中文") : t("原文")}</button>
     </div>
   );
+}
+
+export function cycleMode() {
+  const { settings, saveSettings } = useStore.getState();
+  const order = ["bilingual", "translation", "original"] as const;
+  void saveSettings({ subtitleMode: order[(order.indexOf(settings.subtitleMode) + 1) % 3] });
+}
+
+export function cycleRate() {
+  const { settings, saveSettings, player } = useStore.getState();
+  const r = RATES[(RATES.indexOf(settings.playbackRate) + 1) % RATES.length];
+  player?.setRate(r);
+  void saveSettings({ playbackRate: r });
 }
