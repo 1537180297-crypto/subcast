@@ -132,7 +132,28 @@ async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Adde
 }
 
 #[derive(Serialize)]
-struct Preview { show: Show, episodes: Vec<Episode> }
+#[serde(rename_all = "camelCase")]
+struct Preview { show: Show, episodes: Vec<Episode>, fetched_at: i64 }
+
+/// The id a channel input will have, when that can be known without the network (curated 精读 sites, direct feeds).
+fn known_show_id(input: &str) -> Option<String> {
+    let normalized = if input.trim().starts_with("http") { input.trim().to_string() } else { format!("https://{}", input.trim()) };
+    if let Some(id) = qiaomu::site_id(&normalized) { return Some(short_hash(&qiaomu::feed_url(&id), 16)); }
+    Some(short_hash(input.trim(), 16))
+}
+
+/// A channel page from what was saved last time, so it opens instantly; the page then refreshes it in the background.
+#[tauri::command]
+fn cached_show(state: State<'_, AppState>, input: String) -> Res<Option<Preview>> {
+    let Some(id) = known_show_id(&input) else { return Ok(None) };
+    let conn = state.db.lock().unwrap();
+    let Some(json) = db::get_blob(&conn, &id, "show-json").map_err(e)? else { return Ok(None) };
+    let Ok(show) = serde_json::from_str::<Show>(&json) else { return Ok(None) };
+    let fetched_at = db::get_blob(&conn, &id, "fetched-at").map_err(e)?.and_then(|t| t.parse().ok()).unwrap_or(0);
+    let episodes = db::list_episodes(&conn, Some(&id), 300).map_err(e)?;
+    if episodes.is_empty() { return Ok(None); }
+    Ok(Some(Preview { show, episodes, fetched_at }))
+}
 
 /// A channel page before subscribing: its episodes are saved (so they can be opened and played) but the show is
 /// not, so it stays out of the sidebar and the home feed until the user subscribes.
@@ -143,8 +164,11 @@ async fn preview_show(state: State<'_, AppState>, input: String) -> Res<Preview>
         Fetched::Show(show, eps) => {
             let mut conn = state.db.lock().unwrap();
             db::upsert_episodes(&mut conn, &eps).map_err(e)?;
+            let now = now_ms();
+            if let Ok(json) = serde_json::to_string(&show) { let _ = db::set_blob(&conn, &show.id, "show-json", &json); }
+            let _ = db::set_blob(&conn, &show.id, "fetched-at", &now.to_string());
             let episodes = db::list_episodes(&conn, Some(&show.id), 300).map_err(e)?;
-            Ok(Preview { show, episodes })
+            Ok(Preview { show, episodes, fetched_at: now })
         }
     }
 }
@@ -505,7 +529,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak, cached_show
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

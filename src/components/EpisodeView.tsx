@@ -14,6 +14,7 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
 import { BookOpen, Captions, ChevronDown, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, ScrollText } from "lucide-react";
 import { Splitter } from "./Splitter";
 import { DeepRead } from "./DeepRead";
+import { SkeletonEpisode } from "./Skeleton";
 import { PANEL, useLayout } from "../lib/layout";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
@@ -27,6 +28,7 @@ import { Controls, YouTubePlayer } from "./Players";
 import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 
 type Tab = "transcript" | "deep" | "chat" | "summary";
+const TAB_NAMES: Record<Tab, string> = { transcript: "字幕", deep: "乔木精读", chat: "AI 问答", summary: "导读 · 节目简介与 AI 总结" };
 
 /** Splits a long subtitle block into screen-sized pieces at word / punctuation boundaries. */
 export function pieces(text: string, cjk: boolean): string[] {
@@ -92,7 +94,7 @@ export function EpisodeView({ id }: { id: string }) {
     });
   }, [id]);
 
-  if (!ep) return <div className="page" />;
+  if (!ep) return <SkeletonEpisode />;
   return <EpisodeBody ep={ep} tab={tab} setTab={setTab} />;
 }
 
@@ -124,6 +126,17 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
   const isCurrent = current?.id === ep.id;
   const notes = notesText(ep.notes);
   const { panel, panelOpen, put } = useLayout();
+  // Video first; the audio file is the fallback (and a choice, for listening without the picture).
+  const [audioMode, setAudioMode] = useState(false);
+  const both = !!ep.videoId && !!ep.audioUrl;
+  const showVideo = !!ep.videoId && !audioMode;
+  const switchTo = (audio: boolean, why?: string) => {
+    const s = useStore.getState();
+    const t = s.current?.id === ep.id ? s.time : ep.progress;
+    setAudioMode(audio);
+    s.set({ current: audio ? { ...ep, videoId: undefined, progress: t } : { ...ep, progress: t }, time: t, player: null, playing: false });
+    if (why) s.notify(why);
+  };
 
   return (
     <div className="episode">
@@ -140,8 +153,14 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
             {!panelOpen && <button className="round-btn" title="显示字幕栏（⌘\\）" onClick={() => put({ panelOpen: true })}><PanelRightOpen size={15} /></button>}
             {ep.link && <button className="round-btn" title={ep.videoId ? "在 YouTube 打开" : "节目网页"} onClick={() => openUrl(ep.link!)}><ExternalLink size={15} /></button>}
           </div>
-          {ep.videoId ? (
-            <YouTubePlayer ep={ep} overlay={<SubtitleOverlay ep={ep} />} />
+          {both && (
+            <div className="media-switch seg-control" role="radiogroup" aria-label="播放方式">
+              <button role="radio" aria-checked={!audioMode} className={!audioMode ? "on" : ""} onClick={() => audioMode && switchTo(false)}>视频</button>
+              <button role="radio" aria-checked={audioMode} className={audioMode ? "on" : ""} onClick={() => !audioMode && switchTo(true)}>仅音频</button>
+            </div>
+          )}
+          {showVideo ? (
+            <YouTubePlayer ep={ep} overlay={<SubtitleOverlay ep={ep} />} onUnplayable={ep.audioUrl ? () => switchTo(true, "这个视频无法在应用内播放，已切换为音频") : undefined} />
           ) : (
             <div className="audio-stage">
               {ep.cover ? <img src={ep.cover} alt="" /> : <div className="cover-fallback" />}
@@ -156,10 +175,10 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
         {panelOpen && <Splitter value={panel} min={PANEL.min} max={PANEL.max} def={PANEL.def} snap={PANEL.snap} edge="left" label="字幕栏宽度" onChange={(w) => put({ panel: w })} onCollapse={() => put({ panelOpen: false })} />}
         {panelOpen && <section className="ep-right">
           <div className="tabs" role="tablist" data-tauri-drag-region>
-            <button role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /> 字幕</button>
-            {ep.transcriptType === "qiaomu" && <button role="tab" aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /> 精读</button>}
-            <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /> 问答</button>
-            <button role="tab" aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /> 导读</button>
+            <button role="tab" title={TAB_NAMES.transcript} aria-label={TAB_NAMES.transcript} aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /><span className="tab-label">字幕</span></button>
+            {ep.transcriptType === "qiaomu" && <button role="tab" title={TAB_NAMES.deep} aria-label={TAB_NAMES.deep} aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /><span className="tab-label">精读</span></button>}
+            <button role="tab" title={TAB_NAMES.chat} aria-label={TAB_NAMES.chat} aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /><span className="tab-label">问答</span></button>
+            <button role="tab" title={TAB_NAMES.summary} aria-label={TAB_NAMES.summary} aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /><span className="tab-label">导读</span></button>
             <span className="spacer" data-tauri-drag-region />
             <button className="icon-btn tabs-close" title="收起字幕栏（⌘\\）" onClick={() => put({ panelOpen: false })}><PanelRightClose size={16} /></button>
           </div>

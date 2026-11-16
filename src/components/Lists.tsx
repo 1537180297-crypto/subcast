@@ -5,6 +5,8 @@ import { date, duration } from "../lib/format";
 import { PICKS, TOPICS, isSubscribed, sameFeed, type Pick, type Topic } from "../lib/picks";
 import { useShowName, useZh } from "../lib/zh";
 import { useStore } from "../store";
+import { SkeletonFeed } from "./Skeleton";
+import { MonthFilter, useMonthFilter } from "./MonthFilter";
 
 // ---- episode rows -------------------------------------------------------------------------------
 
@@ -24,7 +26,15 @@ function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
   const deep = ep.transcriptType === "qiaomu";
   return (
     <div className={`ep-item ${current?.id === ep.id ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
-      {showShow && <div className="ep-thumb">{ep.cover ? <img src={ep.cover} alt="" loading="lazy" /> : <div className="cover-fallback" />}</div>}
+      <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>
+        {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
+        {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" onError={(e) => {
+          const i = e.currentTarget;
+          if (ep.videoId && !i.dataset.f) { i.dataset.f = "1"; i.src = `https://i.ytimg.com/vi/${ep.videoId}/mqdefault.jpg`; } else i.style.visibility = "hidden";
+        }} /> : <div className="cover-fallback" />}
+        {ep.videoId && ep.duration ? <span className="thumb-dur">{clockShort(ep.duration)}</span> : null}
+        {pct > 0 && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
+      </div>
       <div className="ep-body-col">
         <p className="ep-kicker">
           {showShow && ep.showId !== "single" && <ShowName title={ep.showTitle} />}
@@ -55,13 +65,16 @@ function groupLabel(ms?: number | null): string {
   if (diff <= 0) return "今天";
   if (diff === 1) return "昨天";
   if (diff < 7) return "本周";
-  if (diff < 30) return "本月";
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) return "本月";
   return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1} 月` : `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`;
 }
 
-function EpisodeList({ episodes, showShow }: { episodes: Episode[] | null; showShow: boolean }) {
-  if (episodes == null) return <div className="panel-empty"><Loader2 className="spin" /></div>;
+const clockShort = (s: number) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.floor(s % 60); return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`; };
+
+function EpisodeList({ episodes, showShow, grouped = true }: { episodes: Episode[] | null; showShow: boolean; grouped?: boolean }) {
+  if (episodes == null) return <SkeletonFeed />;
   if (!episodes.length) return <div className="panel-empty"><p className="muted">这里还没有内容</p></div>;
+  if (!grouped) return <div className="ep-feed">{episodes.map((e) => <EpisodeRow key={e.id} ep={e} showShow={showShow} />)}</div>;
   const groups: { label: string; items: Episode[] }[] = [];
   for (const e of episodes) {
     const label = groupLabel(e.published);
@@ -152,7 +165,7 @@ export function RecentView() {
   return (
     <div className="page">
       <div className="page-head"><h1 className="page-title">继续收听</h1></div>
-      <EpisodeList episodes={eps} showShow />
+      <EpisodeList episodes={eps} showShow grouped={false} />
     </div>
   );
 }
@@ -174,7 +187,8 @@ export function ShowView({ id }: { id: string }) {
   const desc = (show?.description ?? "").replace(/<[^>]+>/g, "").trim().slice(0, 1500);
   const descZh = useZh(desc);
   useEffect(() => { setEps(null); api.listEpisodes(id).then(setEps); }, [id]);
-  const shown = useMemo(() => eps?.filter((e) => filter === "all" || (filter === "unplayed" ? e.progress < 5 : e.hasTranscript || e.transcriptUrl)) ?? null, [eps, filter]);
+  const byFilter = useMemo(() => eps?.filter((e) => filter === "all" || (filter === "unplayed" ? e.progress < 5 : e.hasTranscript || e.transcriptUrl)) ?? null, [eps, filter]);
+  const { month, setMonth, filtered: shown } = useMonthFilter(byFilter);
   if (!show) return <div className="page" />;
   const refresh = async () => {
     setBusy(true);
@@ -220,6 +234,7 @@ export function ShowView({ id }: { id: string }) {
           ))}
         </div>
       </div>
+      <MonthFilter episodes={byFilter} month={month} onChange={setMonth} />
       <EpisodeList episodes={shown} showShow={false} />
     </div>
   );
@@ -329,9 +344,20 @@ export function ChannelView({ input }: { input: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const names = useShowName(data?.show.title ?? pick?.title ?? "");
+  const { month, setMonth, filtered: shownCh } = useMonthFilter(data?.episodes ?? null);
+  const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
+    let live = true;
     setData(null); setError(null);
-    api.previewShow(input).then(setData).catch((e) => setError(errorText(e)));
+    // Stale-while-revalidate: show the saved copy at once, refresh from the network if it is older than 30 minutes.
+    api.cachedShow(input).then((cached) => {
+      if (!live) return;
+      if (cached) setData(cached);
+      if (cached && Date.now() - cached.fetchedAt < 30 * 60_000) return;
+      setRefreshing(true);
+      api.previewShow(input).then((d) => live && setData(d)).catch((e) => live && !cached && setError(errorText(e))).finally(() => live && setRefreshing(false));
+    });
+    return () => { live = false; };
   }, [input]);
   const subscribe = async () => {
     setBusy(true);
@@ -356,11 +382,14 @@ export function ChannelView({ input }: { input: string }) {
             {sub
               ? <button className="btn sm" onClick={() => go({ kind: "show", id: sub.id })}><Check size={13} /> 已订阅 · 查看</button>
               : <button className="btn primary" onClick={subscribe} disabled={busy}>{busy ? <Loader2 size={14} className="spin" /> : <Plus size={15} />} 订阅</button>}
-            {data && <span className="muted small">{data.episodes.length} 期节目 · 不订阅也可以直接收听</span>}
+            {data && <span className="muted small">{data.episodes.length} 期节目 · 不订阅也可以直接收听{refreshing ? " · 正在更新…" : ""}</span>}
           </div>
         </div>
       </div>
-      {error ? <div className="panel-empty"><p className="error-text">{error}</p></div> : <EpisodeList episodes={data?.episodes ?? null} showShow={false} />}
+      {error ? <div className="panel-empty"><p className="error-text">{error}</p></div> : <>
+        <MonthFilter episodes={data?.episodes ?? null} month={month} onChange={setMonth} />
+        <EpisodeList episodes={shownCh} showShow={false} />
+      </>}
     </div>
   );
 }

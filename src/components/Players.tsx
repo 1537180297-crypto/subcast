@@ -67,7 +67,7 @@ export const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
 /** YouTube without YouTube's chrome: the embed runs with its controls off, cropped so the title bar and logo fall
  *  outside the frame, under a shield that keeps hover UI from appearing. Our own controls and subtitles drive it.
  *  Videos whose owners forbid embedding fall back to the HLS stream yt-dlp finds, played in a plain <video>. */
-export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.ReactNode }) {
+export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; overlay?: React.ReactNode; onUnplayable?: () => void }) {
   const [native, setNative] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fallingBack, setFallingBack] = useState(false);
@@ -75,7 +75,7 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
   const fallback = async (why: string) => {
     setFallingBack(true);
     try { setNative(await api.youtubeStream(ep.videoId!)); setError(null); }
-    catch (e) { setError(`${why}。${String((e as any)?.message ?? e)}`); }
+    catch (e) { if (onUnplayable) onUnplayable(); else setError(`${why}。${String((e as any)?.message ?? e)}`); }
     finally { setFallingBack(false); }
   };
   useEffect(() => { setNative(null); setError(null); }, [ep.id]);

@@ -48,9 +48,9 @@ export default function App() {
   const { sidebar, sideOpen, put: putLayout } = useLayout();
   if (!ready) return <div className="boot" />;
   return (
-    <div className={`app ${sideOpen ? "" : "side-collapsed"}`} style={{ "--sidebar-w": `${sideOpen ? sidebar : 0}px` } as React.CSSProperties}>
+    <div className={`app ${sideOpen ? "" : "side-collapsed"}`} style={{ "--sidebar-w": `${sideOpen ? sidebar : 72}px` } as React.CSSProperties}>
       <Sidebar />
-      {sideOpen && <Splitter value={sidebar} min={SIDEBAR.min} max={SIDEBAR.max} def={SIDEBAR.def} snap={SIDEBAR.snap} edge="right" label="侧栏宽度" onChange={(w) => putLayout({ sidebar: w })} onCollapse={() => putLayout({ sideOpen: false })} />}
+      <Splitter value={sideOpen ? sidebar : 72} min={SIDEBAR.min} max={SIDEBAR.max} def={SIDEBAR.def} snap={SIDEBAR.snap} edge="right" label="侧栏宽度" onChange={(w) => putLayout({ sidebar: w, sideOpen: true })} onCollapse={() => putLayout({ sideOpen: false })} />
       <main className="main">
         {view.kind !== "episode" && <TopBar />}
         {view.kind === "latest" && <LatestView />}

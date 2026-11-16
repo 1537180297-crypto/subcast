@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, ExternalLink, Loader2, Square, Volume2 } from "lucide-react";
+import { BookOpen, ExternalLink, Square, Volume2 } from "lucide-react";
+import { SkeletonArticle } from "./Skeleton";
 import { speak, stopSpeaking } from "../lib/tts";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
@@ -49,7 +50,7 @@ export function DeepRead({ ep, children }: { ep: Episode; children?: React.React
     const text = Array.from(doc.body.querySelectorAll("p, h2, h3, h4, li, blockquote")).map((n) => n.textContent?.trim()).filter(Boolean).join("\n");
     void speak(text, (m) => useStore.getState().notify(m.includes("Key") ? `${m}（设置 › 朗读）` : m));
   };
-  if (html === undefined) return <div className="panel-empty"><Loader2 className="spin" size={20} /><p className="muted small">正在载入精读…</p></div>;
+  if (html === undefined) return <SkeletonArticle />;
   if (!html) return <>{children}</>;
   return (
     <div className="deep-read">

@@ -39,6 +39,7 @@
     "allow-preview-show",
     "allow-list-models",
     "allow-tts-speak",
+    "allow-cached-show",
     "core:window:allow-start-dragging"
   ],
   "remote": {

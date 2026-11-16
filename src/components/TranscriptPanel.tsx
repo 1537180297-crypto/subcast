@@ -1,3 +1,4 @@
+import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2, Search, X } from "lucide-react";
@@ -195,7 +196,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   const retry = () => useJobs.setState((s) => { const a = { ...s.asr }; delete a[ep.id]; return { asr: a }; });
 
   if (official === "searching" || official === undefined) {
-    return <div className="transcript"><StatusLine text="正在查找字幕…" spin /><div className="panel-empty" /></div>;
+    return <div className="transcript"><StatusLine text="正在查找字幕…" spin /><SkeletonLines /></div>;
   }
   if (downloading) {
     const pct = downloading.total ? downloading.received / downloading.total : 0;

@@ -68,7 +68,8 @@ export const api = {
   setApiKey: (provider: string, key: string) => invoke<void>("set_api_key", { provider, key }),
   hasApiKey: (provider: string) => invoke<boolean>("has_api_key", { provider }),
   /** Free Google translation with a persistent cache (no model needed). */
-  previewShow: (input: string) => invoke<{ show: Show; episodes: Episode[] }>("preview_show", { input }),
+  previewShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number }>("preview_show", { input }),
+  cachedShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number } | null>("cached_show", { input }),
   qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
   listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),
   ttsSpeak: (text: string, voice: string, resource?: string) => invoke<string>("tts_speak", { text, voice, resource }),

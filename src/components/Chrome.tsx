@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Compass, History, Inbox, Link2, Loader2, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X } from "lucide-react";
+import { ChevronLeft, Compass, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { useStore, type View } from "../store";
 import { PICKS, isSubscribed, showName } from "../lib/picks";
@@ -14,11 +14,13 @@ export function Sidebar() {
   const { shows, view, go, set } = useStore();
   const is = (v: View) => view.kind === v.kind && (v.kind !== "show" || (view.kind === "show" && view.id === v.id)) && (v.kind !== "channel" || (view.kind === "channel" && view.input === v.input));
   const curated = PICKS.filter((p) => p.deep && !isSubscribed(p, shows));
+  const { sideOpen, put: putLayout } = useLayout();
+  const rail = !sideOpen;
   const Nav = ({ v, icon, label }: { v: View; icon: React.ReactNode; label: string }) => (
-    <button className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)}>{icon}<span>{label}</span></button>
+    <button className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)} title={rail ? label : undefined} aria-label={label}>{icon}<span className="label">{label}</span></button>
   );
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${rail ? "rail" : ""}`}>
       <div className="traffic-space" data-tauri-drag-region />
       <div className="brand" data-tauri-drag-region>
         <img className="logo-img" src={logoUrl} alt="" />
@@ -30,18 +32,18 @@ export function Sidebar() {
         <Nav v={{ kind: "discover" }} icon={<Compass size={16} />} label="发现" />
       </nav>
       <div className="side-sep" />
-      <div className="side-head"><span>订阅</span><button className="icon-btn sm" title="添加节目" onClick={() => set({ addOpen: true })}><Plus size={14} /></button></div>
+      <div className="side-head"><span className="label">订阅</span><button className="icon-btn sm" title="添加节目" onClick={() => set({ addOpen: true })}><Plus size={14} /></button></div>
       <div className="show-list">
         {shows.map((s) => (
-          <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={s.title}>
-            <span className="show-cover">{showIcon(s)}</span>
+          <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={rail ? showName(s.title) : s.title}>
+            <span className="show-cover">{showIcon(s)}{rail && s.unplayed > 0 && <span className="rail-dot" />}</span>
             <SideName title={s.title} />
             {s.unplayed > 0 && <span className="unplayed">{s.unplayed > 99 ? "99+" : s.unplayed}</span>}
           </button>
         ))}
         {!shows.length && <p className="muted small side-empty">还没有订阅</p>}
         {curated.length > 0 && <>
-          <div className="side-head second"><span>乔木精读</span></div>
+          <div className="side-head second"><span className="label">乔木精读</span></div>
           {curated.map((p) => (
             <button key={p.id} className={`show-item curated ${is({ kind: "channel", input: p.input }) ? "on" : ""}`} onClick={() => go({ kind: "channel", input: p.input })} title={`${p.zh} · 点击查看，决定是否订阅`}>
               <span className="show-cover"><img src={p.cover} alt="" loading="lazy" /></span>
@@ -51,7 +53,10 @@ export function Sidebar() {
         </>}
       </div>
       <TaskChip />
-      <button className="nav settings-btn" onClick={() => useStore.getState().openSettings()}><Cog size={16} /><span>设置</span></button>
+      <div className="side-foot">
+        <button className="nav settings-btn" onClick={() => useStore.getState().openSettings()} title={rail ? "设置" : undefined} aria-label="设置"><Cog size={16} /><span className="label">设置</span></button>
+        <button className="icon-btn side-toggle" onClick={() => putLayout({ sideOpen: rail })} title={rail ? "展开侧栏（⌘B）" : "收起为图标（⌘B）"} aria-label={rail ? "展开侧栏" : "收起侧栏"}>{rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
+      </div>
     </aside>
   );
 }
@@ -63,7 +68,6 @@ const looksLikeLink = (t: string) => /^(https?:\/\/|@)|youtube\.com|youtu\.be|xi
 /** The bar above every page: back, one search box that subscribes to pasted links or searches by name, settings. */
 export function TopBar() {
   const { history, back, reloadShows, go, openEpisode, notify, shows } = useStore();
-  const { sideOpen, put: putLayout } = useLayout();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -91,7 +95,6 @@ export function TopBar() {
   const submit = () => { if (link) void subscribe(q.trim()); else if (results?.[0]) void subscribe(results[0].feedUrl); };
   return (
     <div className="topbar" data-tauri-drag-region>
-      {!sideOpen && <button className="round-btn" title="显示侧栏（⌘B）" onClick={() => putLayout({ sideOpen: true })}><PanelLeftOpen size={16} /></button>}
       <button className="round-btn" onClick={back} disabled={!history.length} aria-label="返回"><ChevronLeft size={18} /></button>
       <div className="search-wrap">
         <div className={`top-search ${open ? "focus" : ""}`}>
