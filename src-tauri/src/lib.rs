@@ -571,11 +571,23 @@ mod live {
     #[tokio::test]
     #[ignore]
     async fn qiaomu_rss_sources() {
-        for id in ["nexttoken", "podscribe-pivot"] {
+        let ids = ["nexttoken", "bannatie", "latentspace", "podscribe-acquired", "podscribe-pivot", "podscribe-freakonomics-radio", "podscribe-invest-like-the-best", "podscribe-the-diary-of-a-ceo-with-steven-bartlett"];
+        for id in ids {
             let ch = crate::qiaomu::rss_channel(id).await.unwrap();
-            let e = &ch.episodes[0];
-            println!("{id}: {} eps={} audio={} first={} t={:?}", ch.show.title, ch.episodes.len(), ch.episodes.iter().filter(|x| x.audio_url.is_some()).count(), e.title, e.transcript_url);
+            let playable = |x: &Episode| x.audio_url.is_some() || x.video_id.is_some();
+            println!("{id}: {} eps={} playable={} deep={} cover={}", ch.show.title, ch.episodes.len(), ch.episodes.iter().filter(|x| playable(x)).count(), ch.episodes.iter().filter(|x| x.deep).count(), ch.show.cover.is_some());
+            assert!(!id.starts_with("podscribe-") || ch.episodes.iter().all(|x| x.transcript_url.is_some()), "{id}: podscribe episodes need a transcript");
+            assert!(id.starts_with("podscribe-") || ch.episodes.iter().all(playable), "{id}: unplayable entries should be skipped");
+            if id.starts_with("podscribe-") {
+                let pool = crate::qiaomu::borrowable(id, &ch.show.title).await;
+                for x in ch.episodes.iter().take(6) {
+                    let m = crate::qiaomu::find_audio(&pool, &x.title, x.published).map(|b| b.title.chars().take(60).collect::<String>());
+                    println!("  {:<62} -> {:?}", x.title.chars().take(60).collect::<String>(), m);
+                }
+            }
+            let Some(e) = ch.episodes.iter().find(|x| x.deep) else { continue };
             let rw = crate::qiaomu::rss_rewrite(&e.guid).await.unwrap();
+            assert!(rw.is_some(), "{id}: rewriteReady entry has no rewrite");
             println!("  rewrite={}", rw.as_ref().map(|h| h.chars().take(120).collect::<String>()).unwrap_or_default());
             if let Some(u) = &e.transcript_url { let s = crate::qiaomu::podscribe_transcript(u).await.unwrap(); println!("  segs={} {:?}", s.len(), s.get(1).map(|x| (x.start, x.text.chars().take(40).collect::<String>()))); }
         }

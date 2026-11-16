@@ -31,6 +31,8 @@ export interface Episode {
   progress: number;
   hasTranscript: boolean;
   showTitle?: string;
+  /** Has a 乔木精读 article. */
+  deep?: boolean;
 }
 
 export interface Segment { start: number; end: number; text: string }

@@ -39,6 +39,9 @@ pub struct Episode {
     pub has_transcript: bool,
     #[serde(default)]
     pub show_title: Option<String>,
+    /// Has a 乔木精读 / 乔木改写 article.
+    #[serde(default)]
+    pub deep: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

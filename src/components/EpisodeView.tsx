@@ -86,7 +86,7 @@ export function EpisodeView({ id }: { id: string }) {
         try { await api.qiaomuDetail(e.id); e = (await api.getEpisode(id)) ?? e; } catch { /* plays video, or shows the error later */ }
       }
       setEp(e);
-      if (e.transcriptType === "qiaomu") setTab((t) => (t === "transcript" ? "deep" : t));
+      if (e.deep) setTab((t) => (t === "transcript" ? "deep" : t));
       void loadTranscript(e);
       // Opening an episode loads it into the player, unless something else is playing.
       const s = useStore.getState();
@@ -193,7 +193,7 @@ function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: T
         {panelOpen && <section className="ep-right">
           <div className="tabs" role="tablist" data-tauri-drag-region>
             <button role="tab" title={TAB_NAMES.transcript} aria-label={TAB_NAMES.transcript} aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /><span className="tab-label">字幕</span></button>
-            {ep.transcriptType === "qiaomu" && <button role="tab" title={TAB_NAMES.deep} aria-label={TAB_NAMES.deep} aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /><span className="tab-label">精读</span></button>}
+            {ep.deep && <button role="tab" title={TAB_NAMES.deep} aria-label={TAB_NAMES.deep} aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /><span className="tab-label">精读</span></button>}
             <button role="tab" title={TAB_NAMES.chat} aria-label={TAB_NAMES.chat} aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /><span className="tab-label">问答</span></button>
             <span className="spacer" data-tauri-drag-region />
             <button className="icon-btn tabs-close" title="收起字幕栏（⌘\\）" onClick={() => put({ panelOpen: false })}><PanelRightClose size={16} /></button>

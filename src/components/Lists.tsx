@@ -23,7 +23,7 @@ function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
   const current = useStore((s) => s.current);
   const zh = useZh(ep.title);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
-  const deep = ep.transcriptType === "qiaomu";
+  const deep = !!ep.deep;
   return (
     <div className={`ep-item ${current?.id === ep.id ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
       <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>

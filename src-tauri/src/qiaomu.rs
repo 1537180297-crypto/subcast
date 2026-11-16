@@ -31,6 +31,14 @@ fn cover_for(id: &str) -> Option<String> {
         "35huan" => "Podcasts126/v4/6e/d0/de/6ed0dedb-d782-a562-e40b-043ce20441d3/mza_5066303992234991879.jpeg",
         "zhixing" => "Podcasts112/v4/b3/96/fc/b396fcc5-6e2b-d34e-8d3d-c849c43b6215/mza_4090324763067558601.jpeg",
         "mianji" => "Podcasts126/v4/a8/d9/5e/a8d95e6e-aba6-3608-9c28-8b8cde840ec4/mza_10150483960934463526.png",
+        "nexttoken" => return Some("https://image.xyzcdn.net/FhuQBR26B-8jsdfuZumu54mCylqG.png@small".into()),
+        "bannatie" => "Podcasts112/v4/95/33/4d/95334de1-1492-1ab0-aa7b-8f246bf89bde/mza_10728614257690800956.jpeg",
+        "latentspace" => "Podcasts221/v4/5c/7d/2a/5c7d2ade-4458-04e8-9838-979d187712ed/mza_16100858243175777898.jpg",
+        "podscribe-acquired" => "Podcasts211/v4/a8/e1/de/a8e1deff-9f88-4e55-a541-b0dc793c0cdc/mza_11539673419613154037.jpg",
+        "podscribe-pivot" => "Podcasts221/v4/13/22/39/1322397a-976e-3c8f-7764-91cc38d0dd70/mza_12130189257448841692.jpeg",
+        "podscribe-freakonomics-radio" => "Podcasts115/v4/f7/0c/c5/f70cc540-ce36-d96f-b111-c970aad5505c/mza_17703422762227531425.jpg",
+        "podscribe-invest-like-the-best" => "Podcasts211/v4/61/ae/be/61aebe7a-06e8-7390-3ae5-f2fc5889e36c/mza_10827489189939068066.jpg",
+        "podscribe-the-diary-of-a-ceo-with-steven-bartlett" => "Podcasts221/v4/69/af/0d/69af0ddd-1e0f-7ae3-c84b-88f18e31ad0c/mza_14445920128472365296.png",
         _ => return None,
     };
     Some(format!("https://is1-ssl.mzstatic.com/image/thumb/{path}/600x600bb.jpg"))
@@ -43,6 +51,9 @@ fn title_for(id: &str) -> Option<&'static str> {
         "trainingdata" => "Training Data", "unsupervised" => "Unsupervised Learning", "zhangxiaojun" => "张小珺Jùn｜商业访谈录",
         "42zhangjing" => "42章经", "latetalk" => "晚点聊 LateTalk", "crossing" => "十字路口Crossing", "aialchemy" => "AI炼金术",
         "35huan" => "三五环", "zhixing" => "知行小酒馆", "mianji" => "面基",
+        "nexttoken" => "Next Token｜词元之外", "bannatie" => "半拿铁 | 商业沉浮录", "latentspace" => "Latent Space",
+        "podscribe-acquired" => "Acquired", "podscribe-pivot" => "Pivot", "podscribe-freakonomics-radio" => "Freakonomics Radio",
+        "podscribe-invest-like-the-best" => "Invest Like the Best", "podscribe-the-diary-of-a-ceo-with-steven-bartlett" => "The Diary Of A CEO",
         _ => return None,
     })
 }
@@ -103,6 +114,7 @@ pub async fn channel(id: &str) -> Result<Channel> {
             notes: e["ds"].as_str().map(String::from),
             transcript_url: None,
             transcript_type: Some("qiaomu".into()),
+            deep: true,
             ..Default::default()
         })
     }).collect();
@@ -170,15 +182,55 @@ fn norm_title(t: &str) -> String {
     t.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
-/// Podscribe episodes have transcripts but no audio: borrow it from the show's own feed, matched by title.
-async fn audio_by_title(show_name: &str) -> std::collections::HashMap<String, (String, Option<f64>)> {
-    let mut out = std::collections::HashMap::new();
-    let Ok(results) = crate::feeds::search_podcasts(show_name, "US").await else { return out };
-    let Some(feed) = results.first().map(|r| r.feed_url.clone()) else { return out };
-    if let Ok((_, eps)) = crate::feeds::fetch_show(&feed, "podcast").await {
-        for e in eps { if let Some(a) = e.audio_url { out.insert(norm_title(&e.title), (a, e.duration)); } }
+/// The show's own feed for each Podscribe source (search by name finds the wrong show for some).
+fn original_feed(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "podscribe-acquired" => "https://feeds.transistor.fm/acquired",
+        "podscribe-pivot" => "https://feeds.megaphone.fm/pivot",
+        "podscribe-freakonomics-radio" => "https://feeds.simplecast.com/Y8lFbOT4",
+        "podscribe-invest-like-the-best" => "https://feeds.megaphone.fm/CLS2859450455",
+        "podscribe-the-diary-of-a-ceo-with-steven-bartlett" => "https://rss2.flightcast.com/xmsftuzjjykcmqwolaqn6mdn",
+        _ => return None,
+    })
+}
+
+pub(crate) struct Borrowable { pub title: String, pub published: Option<i64>, pub audio: String, pub duration: Option<f64> }
+
+fn words(t: &str) -> std::collections::HashSet<String> {
+    t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 3).map(String::from).collect()
+}
+
+fn overlap(a: &str, b: &str) -> f64 {
+    let (a, b) = (words(a), words(b));
+    if a.is_empty() || b.is_empty() { return 0.0; }
+    a.intersection(&b).count() as f64 / a.len().min(b.len()) as f64
+}
+
+/// The feed episode a Podscribe entry is a transcript of. Titles often differ (Podscribe sometimes carries the
+/// YouTube title), so an exact title wins, then a similar title published within about a day, then the only episode
+/// published within half a day, then a near-identical title from any date.
+pub(crate) fn find_audio<'a>(pool: &'a [Borrowable], title: &str, published: Option<i64>) -> Option<&'a Borrowable> {
+    let key = norm_title(title);
+    if let Some(b) = pool.iter().find(|b| norm_title(&b.title) == key) { return Some(b); }
+    const HOUR: i64 = 3600 * 1000;
+    let best = |c: Vec<&'a Borrowable>| c.into_iter().map(|b| (overlap(title, &b.title), b)).max_by(|x, y| x.0.total_cmp(&y.0));
+    if let Some(p) = published {
+        let within = |h: i64| pool.iter().filter(|b| b.published.is_some_and(|q| (q - p).abs() <= h * HOUR)).collect::<Vec<_>>();
+        if let Some((score, b)) = best(within(36)) { if score >= 0.3 { return Some(b); } }
+        if let [only] = within(12)[..] { return Some(only); }
     }
-    out
+    best(pool.iter().collect()).filter(|(s, _)| *s >= 0.8).map(|(_, b)| b)
+}
+
+/// Podscribe episodes have transcripts but no audio: borrow it from the show's own feed, its whole archive included.
+pub(crate) async fn borrowable(id: &str, show_name: &str) -> Vec<Borrowable> {
+    let feed = match original_feed(id) {
+        Some(f) => f.to_string(),
+        None => match crate::feeds::search_podcasts(show_name, "US").await.ok().and_then(|r| r.into_iter().next()) { Some(r) => r.feed_url, None => return vec![] },
+    };
+    let Ok(xml) = net::get_text(&feed).await else { return vec![] };
+    let Ok((_, eps)) = crate::feeds::parse_feed_limit(&xml, &feed, usize::MAX) else { return vec![] };
+    eps.into_iter().filter_map(|e| Some(Borrowable { audio: e.audio_url?, title: e.title, published: e.published, duration: e.duration })).collect()
 }
 
 pub async fn rss_channel(id: &str) -> Result<Channel> {
@@ -196,7 +248,7 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
     }
     if entries.is_empty() { return Err(anyhow!("这个频道还没有节目")); }
     let podscribe = id.starts_with("podscribe-");
-    let borrowed = if podscribe { audio_by_title(&name).await } else { Default::default() };
+    let borrowed = if podscribe { borrowable(id, &name).await } else { vec![] };
     let feed = rss_feed_url(id);
     let show_id = short_hash(&feed, 16);
     let mut zh_titles = vec![];
@@ -206,8 +258,10 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
         if let Some(zh) = e["titleZh"].as_str().filter(|z| !z.is_empty() && *z != title) { zh_titles.push((title.clone(), zh.to_string())); }
         let link = e["link"].as_str().map(String::from);
         let (mut audio, mut duration) = (e["audio"]["url"].as_str().map(String::from), None);
-        if audio.is_none() { if let Some((a, d)) = borrowed.get(&norm_title(&title)) { audio = Some(a.clone()); duration = *d; } }
+        if audio.is_none() { if let Some(b) = find_audio(&borrowed, &title, e["publishedTs"].as_i64()) { audio = Some(b.audio.clone()); duration = b.duration; } }
         let video = link.as_deref().and_then(crate::feeds::youtube_video_id);
+        // Some sources mix in written posts (Latent Space's AINews); without a transcript there is nothing to play or follow.
+        if audio.is_none() && video.is_none() && !podscribe { return None; }
         let transcript_url = if podscribe { link.as_deref().and_then(|l| l.strip_prefix("https://podcasts.happyscribe.com/")).map(|p| format!("https://api.qiaomu.ai/podscribe/v1/episodes/{p}/transcript")) } else { None };
         Some(Episode {
             id: short_hash(&format!("{show_id}:{guid}"), 20),
@@ -223,6 +277,7 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
             notes: e["summary"].as_str().map(String::from),
             transcript_url,
             transcript_type: Some(if podscribe { "podscribe" } else { "qiaomu-rss" }.into()),
+            deep: e["rewriteReady"].as_bool().unwrap_or(false),
             ..Default::default()
         })
     }).collect();
@@ -253,7 +308,8 @@ pub async fn rss_rewrite(entry_id: &str) -> Result<Option<String>> {
 fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;") }
 
 fn inline(s: &str) -> String {
-    let s = esc(s);
+    let s = Regex::new(r"!\[[^\]]*\]\([^)]*\)").unwrap().replace_all(s, "");
+    let s = esc(&s);
     let s = Regex::new(r"\*\*(.+?)\*\*").unwrap().replace_all(&s, "<strong>$1</strong>");
     let s = Regex::new(r"\[([^\]]+)\]\((https?://[^)\s]+)\)").unwrap().replace_all(&s, r#"<a href="$2">$1</a>"#);
     Regex::new(r"`([^`]+)`").unwrap().replace_all(&s, "<code>$1</code>").into_owned()
@@ -293,4 +349,41 @@ pub async fn podscribe_transcript(url: &str) -> Result<Vec<Segment>> {
     }).collect();
     for i in 0..out.len() { out[i].end = out.get(i + 1).map(|n| n.start).unwrap_or(out[i].start + 8.0); }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const D: i64 = 24 * 3600 * 1000;
+    fn b(title: &str, day: i64) -> Borrowable { Borrowable { title: title.into(), published: Some(day * D), audio: format!("a:{title}"), duration: None } }
+
+    #[test]
+    fn podscribe_audio_matching() {
+        let pool = vec![
+            b("Katt Williams: I Lied My Way Into Comedy! List The 300 People Ahead Of You", 100),
+            b("What Are The Five Lifestyle Habits Destroying Your Brain Right Now?", 103),
+            b("Most Replayed Moment: The Childhood Scripts Still Running Your Life! Chase Hughes", 104),
+            b("Ex-CIA Officer: Trump Knew About The China Spy", 107),
+            b("Prof Robert Pape: Are We Entering The Eight Most Dangerous Weeks", 96),
+        ];
+        let at = |t: &str, day: i64| find_audio(&pool, t, Some(day * D)).map(|x| x.title.as_str());
+        // Exact title, regardless of punctuation.
+        assert_eq!(at("most replayed moment - the childhood scripts still running your life chase hughes", 1), Some(pool[2].title.as_str()));
+        // A YouTube-style title on the same day as the only feed episode then.
+        assert_eq!(at("Top Neurologist: If You Drink Even Once A Week, Watch This Now!", 103), Some(pool[1].title.as_str()));
+        // Different title, same day, shared words.
+        assert_eq!(at("Katt Williams: From Homeless Runaway at 13 to Comedy Icon", 100), Some(pool[0].title.as_str()));
+        // Nothing near in time or title.
+        assert_eq!(at("Completely Unrelated Episode About Gardening", 200), None);
+        // No date: only a near-identical title counts.
+        assert_eq!(find_audio(&pool, "Ex-CIA Officer: Trump Knew About The China Spy!", None).map(|x| x.title.as_str()), Some(pool[3].title.as_str()));
+        assert!(find_audio(&pool, "The China Question", None).is_none());
+    }
+
+    #[test]
+    fn markdown_drops_images() {
+        let h = markdown_html("![No.225 莆田鞋往事](https://image.xyzcdn.net/x.jpeg)\n\n正文 **重点** [链接](https://a.b/c)");
+        assert!(!h.contains('!') && !h.contains("xyzcdn"), "{h}");
+        assert!(h.contains("<strong>重点</strong>") && h.contains(r#"<a href="https://a.b/c">链接</a>"#), "{h}");
+    }
 }

@@ -1,13 +1,13 @@
 import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Loader2, Search, X } from "lucide-react";
+import { Captions, ChevronDown, Loader2, Search, TriangleAlert, X } from "lucide-react";
 import { api, errorText, type Episode, type ModelInfo, type Segment } from "../lib/api";
 import { clock } from "../lib/format";
 import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 
-const SOURCE_LABEL: Record<string, string> = { youtube: "YouTube 字幕", "youtube-auto": "YouTube 自动字幕", rss: "节目方文字稿", whisper: "本机识别", cloud: "云端识别", qiaomu: "精读站原文 · 时间为估算" };
+const SOURCE_LABEL: Record<string, string> = { youtube: "YouTube 字幕", "youtube-auto": "YouTube 自动字幕", rss: "节目方文字稿", whisper: "本机识别", cloud: "云端识别", qiaomu: "精读站原文 · 时间为估算", podscribe: "Podscribe 文字稿" };
 
 export function activeIndex(segments: Segment[], time: number): number {
   let lo = 0, hi = segments.length - 1, found = -1;
@@ -201,19 +201,19 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   if (downloading) {
     const pct = downloading.total ? downloading.received / downloading.total : 0;
     return (
-      <div className="transcript">
-        <StatusLine text={`正在下载识别模型 · ${Math.round(pct * 100)}% · 可以先听`} spin progress={pct} action={<button className="btn ghost sm" onClick={() => cancel(downloading.id)}>取消</button>} />
-        <div className="panel-empty"><p className="muted">下载完成后会自动开始识别，之后不再需要下载。</p></div>
-      </div>
+      <GenCard icon={<Loader2 size={20} className="spin" />} title="正在准备识别模型" note="只需下载这一次，完成后自动生成字幕。可以先听着。">
+        <div className="gen-progress"><div className="bar"><div style={{ width: `${Math.max(2, pct * 100)}%` }} /></div><span>{Math.round(pct * 100)}%</span></div>
+        <button className="btn ghost sm" onClick={() => cancel(downloading.id)}>取消</button>
+      </GenCard>
     );
   }
   if (asr && asr.stage !== "done") {
     if (asr.stage === "error") {
       return (
-        <div className="transcript">
-          <StatusLine text={`字幕没有生成成功：${(asr.message ?? "").slice(0, 60)}`} action={<button className="btn primary sm" onClick={retry}>重试</button>} />
-          <div className="panel-empty"><p className="muted">可以换一个识别模型，或检查网络后重试。</p></div>
-        </div>
+        <GenCard icon={<TriangleAlert size={20} />} title="字幕没有生成成功" note="可以换一个识别模型，或检查网络后再试。">
+          {asr.message && <p className="gen-warn" title={asr.message}><span>{plainError(asr.message)}</span></p>}
+          <button className="btn primary gen-go" onClick={retry}>重试</button>
+        </GenCard>
       );
     }
     const label = asr.stage === "download" ? (asr.message ?? "正在获取音频") : asr.message ?? (ep.duration ? `正在识别 · ${clock(asr.progress * ep.duration)} / ${clock(ep.duration)}` : "正在识别");
@@ -233,29 +233,46 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
     );
   }
   const needsDownload = !cloud && model && !model.installed;
-  const reason = official === "error" ? `读取字幕失败：${officialError}` : "这集没有字幕";
+  const size = model ? (model.sizeMb >= 900 ? `${(model.sizeMb / 1024).toFixed(1)} GB` : `${model.sizeMb} MB`) : "";
+  return (
+    <GenCard icon={<Captions size={20} />} title="这集还没有字幕"
+      note={cloud ? `用${cloud.name}生成，音频会上传到该服务，速度更快。生成后自动翻译成中文。` : "用本机模型生成，音频只在这台电脑上处理。生成后自动翻译成中文。"}>
+      {official === "error" && officialError && <p className="gen-warn" title={officialError}><span>节目自带的字幕没读到：{plainError(officialError)}</span></p>}
+      <button className="btn primary gen-go" onClick={generate} disabled={!model}>生成字幕</button>
+      {needsDownload && <p className="gen-size">第一次会先下载识别模型（约 {size}），之后不用再下载</p>}
+      <button className="link-btn gen-more" aria-expanded={options} onClick={() => setOptions(!options)}>识别设置<ChevronDown size={12} className={options ? "flip" : ""} /></button>
+      {options && (
+        <div className="gen-options">
+          <label><span>识别模型</span>
+            <select value={model?.id} onChange={(e) => saveSettings({ asrModel: e.target.value })}>
+              {models.map((m) => <option key={m.id} value={m.id}>{m.name}{m.installed ? "" : ` · ${m.sizeMb} MB`}</option>)}
+            </select>
+          </label>
+          <label><span>说话语言</span>
+            <select value={settings.asrLanguage} onChange={(e) => saveSettings({ asrLanguage: e.target.value })}>
+              <option value="auto">自动识别</option><option value="en">英语</option><option value="zh">中文</option><option value="ja">日语</option><option value="ko">韩语</option><option value="de">德语</option><option value="fr">法语</option><option value="es">西班牙语</option>
+            </select>
+          </label>
+        </div>
+      )}
+    </GenCard>
+  );
+}
+
+/** An error for reading: long addresses carry no meaning for the listener (the full text stays in the tooltip). */
+const plainError = (m: string) => m.replace(/[：:]?\s*https?:\/\/\S+/g, "").trim() || m;
+
+/** The centred card shown in the subtitle panel while an episode has no subtitles yet. */
+function GenCard({ icon, title, note, children }: { icon: React.ReactNode; title: string; note: string; children?: React.ReactNode }) {
   return (
     <div className="transcript">
-      <StatusLine text={needsDownload ? `${reason} · 首次需下载识别模型（约 ${model.sizeMb >= 900 ? "1 GB" : `${model.sizeMb} MB`}，仅一次）` : reason}
-        action={<button className="btn primary sm" onClick={generate} disabled={!model}>{needsDownload ? "下载并生成字幕" : "生成字幕"}</button>} />
-      <div className="panel-empty">
-        <p className="lead">{cloud ? `用${cloud.name}生成字幕` : "用本机模型生成字幕"}</p>
-        <p className="muted">{cloud ? "音频会发送到所选的云端识别服务，速度更快。可在设置 › 语音识别里切换回本机。" : "音频只在本机处理，识别完即删除。生成后会自动翻译成中文。"}</p>
-        <button className="link-btn" onClick={() => setOptions(!options)}>{options ? "收起识别设置" : "识别设置"}</button>
-        {options && (
-          <div className="gen-options">
-            <label><span>识别模型</span>
-              <select value={model?.id} onChange={(e) => saveSettings({ asrModel: e.target.value })}>
-                {models.map((m) => <option key={m.id} value={m.id}>{m.name}{m.installed ? "" : ` · ${m.sizeMb} MB`}</option>)}
-              </select>
-            </label>
-            <label><span>说话语言</span>
-              <select value={settings.asrLanguage} onChange={(e) => saveSettings({ asrLanguage: e.target.value })}>
-                <option value="auto">自动识别</option><option value="en">英语</option><option value="zh">中文</option><option value="ja">日语</option><option value="ko">韩语</option><option value="de">德语</option><option value="fr">法语</option><option value="es">西班牙语</option>
-              </select>
-            </label>
-          </div>
-        )}
+      <div className="gen-wrap">
+        <div className="gen-card">
+          <span className="gen-icon" aria-hidden>{icon}</span>
+          <h3 className="gen-title">{title}</h3>
+          <p className="gen-note">{note}</p>
+          {children}
+        </div>
       </div>
     </div>
   );
