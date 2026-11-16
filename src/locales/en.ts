@@ -287,7 +287,6 @@ const dict: Record<string, string> = {
   "赞赏码": "Tip QR code",
   "请我喝杯咖啡": "Buy me a coffee",
   "微信扫码赞赏": "Scan with WeChat to leave a tip",
-  "订阅数据、字幕和 Key 都保存在本机。使用云端识别、翻译或 AI 功能时，相关内容会发送到你选择的服务。": "Subscriptions, subtitles and keys are all stored on this Mac. When you use cloud transcription, translation or AI features, the relevant content is sent to the service you choose.",
   "© {year} 向阳乔木 · MIT": "© {year} Xiangyang Qiaomu · MIT",
   "正在加载": "Loading",
   "正在加载字幕": "Loading subtitles",

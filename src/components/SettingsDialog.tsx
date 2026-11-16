@@ -413,27 +413,30 @@ function About() {
   const links: [string, string][] = [["qiaomu.ai", "https://qiaomu.ai"], [t("博客"), "https://blog.qiaomu.ai"], [t("乔木推荐"), "https://tuijian.qiaomu.ai"], ["X", "https://x.com/vista8"], ["GitHub", "https://github.com/joeseesun"]];
   return (
     <div className="about">
-      <div className="about-id">
+      <div className="about-top">
         <img src={logoUrl} alt="" />
-        <p className="about-name">SubCast</p>
-        <p className="about-ver">{t("版本 {version}", { version })}</p>
-        <p className="muted">{t("海外好播客，配上中文字幕、精读与 AI 问答。")}</p>
-        <UpdateStatus />
-        <div className="row-actions center">
-          <UpdateButton />
-          <button className="btn sm" onClick={() => openUrl(`${REPO}/issues/new`)}><MessageCircle size={13} /> {t("反馈问题")}</button>
-          <button className="btn sm" onClick={() => openUrl(`${REPO}#readme`)}><BookOpen size={13} /> {t("使用说明")}</button>
-          <button className="btn sm" onClick={() => openUrl(REPO)}><Github size={13} /> {t("源代码")}</button>
+        <div className="about-meta">
+          <p className="about-name">SubCast <span className="about-ver">{t("版本 {version}", { version })}</span></p>
+          <p className="muted small">{t("海外好播客，配上中文字幕、精读与 AI 问答。")}</p>
+          <UpdateStatus />
         </div>
+      </div>
+      <div className="row-actions">
+        <UpdateButton />
+        <button className="btn sm" onClick={() => openUrl(`${REPO}/issues/new`)}><MessageCircle size={13} /> {t("反馈问题")}</button>
+        <button className="btn sm" onClick={() => openUrl(`${REPO}#readme`)}><BookOpen size={13} /> {t("使用说明")}</button>
+        <button className="btn sm" onClick={() => openUrl(REPO)}><Github size={13} /> {t("源代码")}</button>
       </div>
       <HomeShowCard />
       <div className="about-qr">
-        <div className="qr-card"><img src={wechatQr} alt={t("公众号二维码")} /><p className="qr-title">{t("关注公众号")}</p><p className="muted small">{t("微信搜索「向阳乔木推荐看」")}</p></div>
-        <div className="qr-card"><img src={rewardQr} alt={t("赞赏码")} /><p className="qr-title">{t("请我喝杯咖啡")}</p><p className="muted small">{t("微信扫码赞赏")}</p></div>
+        <div className="qr-card"><img src={wechatQr} alt={t("公众号二维码")} /><div><p className="qr-title">{t("关注公众号")}</p><p className="muted small">{t("微信搜索「向阳乔木推荐看」")}</p></div></div>
+        <div className="qr-card"><img src={rewardQr} alt={t("赞赏码")} /><div><p className="qr-title">{t("请我喝杯咖啡")}</p><p className="muted small">{t("微信扫码赞赏")}</p></div></div>
       </div>
-      <div className="about-links">{links.map(([label, u]) => <button key={u} className="link-btn" onClick={() => openUrl(u)}>{label}</button>)}</div>
-      <p className="muted small center">{t("订阅数据、字幕和 Key 都保存在本机。使用云端识别、翻译或 AI 功能时，相关内容会发送到你选择的服务。")}</p>
-      <p className="muted small center">{t("© {year} 向阳乔木 · MIT", { year: new Date().getFullYear() })}</p>
+      <div className="about-foot">
+        {links.map(([label, u]) => <button key={u} className="link-btn" onClick={() => openUrl(u)}>{label}</button>)}
+        <span className="spacer" />
+        <span className="muted small">{t("© {year} 向阳乔木 · MIT", { year: new Date().getFullYear() })}</span>
+      </div>
     </div>
   );
 }

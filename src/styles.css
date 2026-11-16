@@ -1386,3 +1386,18 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .home-show { position: relative; }
 .home-show-close { position: absolute; top: 10px; right: 10px; color: var(--muted); }
 .home-show-close:hover { color: var(--text); background: var(--soft); }
+
+/* About: compact, fits the settings window without scrolling */
+.about { align-items: stretch; gap: 16px; padding: 4px 0 0; max-width: 600px; }
+.about-top { display: flex; align-items: center; gap: 16px; }
+.about-top > img { width: 64px; height: 64px; flex: none; }
+.about-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.about-meta .about-name { margin: 0; font-size: 20px; font-weight: 700; display: flex; align-items: baseline; gap: 8px; }
+.about-meta .about-ver { margin: 0; font-size: 12px; font-weight: 400; }
+.about-meta .small-check { justify-content: flex-start; margin-top: 2px; }
+.about .home-card { width: 100%; }
+.about-qr { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.about .qr-card { width: auto; flex-direction: row; align-items: center; gap: 14px; padding: 10px 12px; text-align: left; }
+.about .qr-card img { width: 92px; height: 92px; flex: none; }
+.about .qr-card .qr-title { margin: 0 0 2px; }
+.about-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding-top: 4px; border-top: 1px solid var(--line); padding-top: 12px; }
