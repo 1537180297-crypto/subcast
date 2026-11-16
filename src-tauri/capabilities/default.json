@@ -8,7 +8,31 @@
   "permissions": [
     "core:default",
     "core:event:default",
-    "opener:default"
+    "opener:default",
+    "allow-add-subscription",
+    "allow-refresh-show",
+    "allow-refresh-all",
+    "allow-list-shows",
+    "allow-list-episodes",
+    "allow-recent-episodes",
+    "allow-get-episode",
+    "allow-remove-show",
+    "allow-set-progress",
+    "allow-search-podcasts",
+    "allow-load-transcript",
+    "allow-fetch-official-transcript",
+    "allow-transcribe",
+    "allow-cancel-job",
+    "allow-asr-models",
+    "allow-download-model",
+    "allow-delete-model",
+    "allow-get-blob",
+    "allow-set-blob",
+    "allow-get-settings",
+    "allow-set-settings",
+    "allow-set-api-key",
+    "allow-has-api-key",
+    "allow-llm-chat"
   ],
   "remote": {
     "urls": [

@@ -25,7 +25,24 @@ pub struct VideoInfo {
     pub duration: Option<f64>,
     pub description: String,
     pub tracks: Vec<Track>,
+    /// The spoken language, when YouTube marks one audio track as the original (videos with dubbed audio).
+    pub original_language: Option<String>,
 }
+
+fn original_language(player: &Value) -> Option<String> {
+    let mut found = std::collections::BTreeSet::new();
+    for key in ["formats", "adaptiveFormats"] {
+        for f in player["streamingData"][key].as_array().into_iter().flatten() {
+            let a = &f["audioTrack"];
+            if a["displayName"].as_str().is_some_and(|n| n.to_lowercase().contains("original")) {
+                if let Some(id) = a["id"].as_str() { found.insert(base(id.split('.').next().unwrap_or(id))); }
+            }
+        }
+    }
+    (found.len() == 1).then(|| found.into_iter().next().unwrap())
+}
+
+fn base(lang: &str) -> String { lang.split(['-', '_']).next().unwrap_or(lang).to_lowercase() }
 
 fn tracks_of(player: &Value) -> Vec<Track> {
     player["captions"]["playerCaptionsTracklistRenderer"]["captionTracks"]
@@ -61,6 +78,7 @@ pub async fn video_info(video_id: &str) -> Result<VideoInfo> {
             duration: d["lengthSeconds"].as_str().and_then(|s| s.parse().ok()),
             description: d["shortDescription"].as_str().unwrap_or("").to_string(),
             tracks: tracks_of(&player),
+            original_language: original_language(&player),
         };
         if !info.tracks.is_empty() { return Ok(info); }
         if fallback.is_none() && !info.title.is_empty() { fallback = Some(info); }
@@ -68,16 +86,20 @@ pub async fn video_info(video_id: &str) -> Result<VideoInfo> {
     fallback.ok_or(last_err)
 }
 
-/// The track to show: a human-made one in the spoken language (the auto track's language tells us which
-/// language is spoken), else the auto track, else any human-made one.
-pub fn choose(tracks: &[Track]) -> Option<&Track> {
-    let base = |l: &str| l.split('-').next().unwrap_or(l).to_lowercase();
-    let spoken = tracks.iter().find(|t| t.auto).map(|t| base(&t.language));
+/// The track to show: a human-made one in the spoken language, else the auto track in that language.
+/// Videos with dubbed audio carry one auto track per dub, so the spoken language comes from the audio track
+/// YouTube marks "original"; with a single auto track, that track's language is the spoken one.
+pub fn choose<'a>(tracks: &'a [Track], original: Option<&str>) -> Option<&'a Track> {
+    let autos: Vec<&Track> = tracks.iter().filter(|t| t.auto).collect();
+    let spoken = original.map(base).or_else(|| (autos.len() == 1).then(|| base(&autos[0].language)));
     if let Some(sp) = &spoken {
         if let Some(t) = tracks.iter().find(|t| !t.auto && &base(&t.language) == sp) { return Some(t); }
-        return tracks.iter().find(|t| t.auto);
+        if let Some(t) = autos.iter().find(|t| &base(&t.language) == sp) { return Some(t); }
     }
-    tracks.iter().find(|t| base(&t.language) == "en").or_else(|| tracks.first())
+    tracks.iter().find(|t| !t.auto && base(&t.language) == "en")
+        .or_else(|| autos.iter().copied().find(|t| base(&t.language) == "en"))
+        .or_else(|| tracks.iter().find(|t| !t.auto))
+        .or_else(|| tracks.first())
 }
 
 pub async fn fetch_track(track: &Track) -> Result<Vec<Segment>> {
@@ -91,4 +113,19 @@ pub async fn fetch_track(track: &Track) -> Result<Vec<Segment>> {
         }
     }
     Err(anyhow!("字幕下载失败"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn t(l: &str, auto: bool) -> Track { Track { base_url: String::new(), language: l.into(), auto } }
+    #[test]
+    fn dubbed_video_picks_original() {
+        let tracks = vec![t("ar", true), t("en", true), t("en-US", false), t("de", true)];
+        assert_eq!(choose(&tracks, Some("en")).unwrap().language, "en-US");
+        assert_eq!(choose(&tracks, None).unwrap().language, "en-US");
+        let only_auto = vec![t("ar", true), t("en", true)];
+        assert_eq!(choose(&only_auto, None).unwrap().language, "en");
+        assert_eq!(choose(&[t("ja", true)], None).unwrap().language, "ja");
+    }
 }

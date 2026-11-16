@@ -164,7 +164,7 @@ async fn fetch_official_transcript(state: State<'_, AppState>, episode_id: Strin
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
     let t = if let Some(vid) = &ep.video_id {
         let info = youtube::video_info(vid).await.map_err(e)?;
-        match youtube::choose(&info.tracks) {
+        match youtube::choose(&info.tracks, info.original_language.as_deref()) {
             Some(track) => {
                 let segs = transcript::clean(youtube::fetch_track(track).await.map_err(e)?);
                 let segs = transcript::resegment(segs);
@@ -236,7 +236,7 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
             asr::WorkerEvent::Progress(p) => asr_emit(&app2, &id2, "transcribe", p, None, None),
             asr::WorkerEvent::Segment(s) => asr_emit(&app2, &id2, "segment", 0.0, None, Some(s)),
         }).await.map_err(e)?;
-        let segments = transcript::clean(out.segments);
+        let segments = transcript::resegment(transcript::clean(out.segments));
         if segments.is_empty() { return Err("没有识别出文字（可能是纯音乐或静音）".to_string()); }
         let t = Transcript { episode_id: ep.id.clone(), source: "whisper".into(), language: out.language, segments };
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
@@ -385,7 +385,7 @@ mod live {
     #[ignore]
     async fn captions() {
         let info = youtube::video_info("dQw4w9WgXcQ").await.unwrap();
-        let t = youtube::choose(&info.tracks).unwrap();
+        let t = youtube::choose(&info.tracks, info.original_language.as_deref()).unwrap();
         let segs = transcript::resegment(transcript::clean(youtube::fetch_track(t).await.unwrap()));
         println!("{} lang={} auto={} {} blocks; {:?}", info.title, t.language, t.auto, segs.len(), &segs[..2]);
         assert!(segs.len() > 5);

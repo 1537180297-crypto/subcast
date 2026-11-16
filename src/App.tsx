@@ -1,51 +1,46 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useEffect } from "react";
+import { startJobListeners } from "./lib/jobs";
+import { useStore } from "./store";
+import { AddDialog, MiniPlayer, Sidebar, Toast } from "./components/Chrome";
+import { DiscoverView, LatestView, RecentView, ShowView } from "./components/Lists";
+import { EpisodeView } from "./components/EpisodeView";
+import { AudioEngine } from "./components/Players";
+import { SettingsDialog } from "./components/SettingsDialog";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+export default function App() {
+  const { ready, view, settingsOpen, addOpen, init } = useStore();
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  useEffect(() => {
+    startJobListeners();
+    void init();
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("input, textarea, select, [contenteditable]")) return;
+      const { player, time } = useStore.getState();
+      if (e.code === "Space") { e.preventDefault(); player?.toggle(); }
+      else if (e.code === "ArrowLeft") player?.seek(Math.max(0, time - 5));
+      else if (e.code === "ArrowRight") player?.seek(time + 5);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
+  if (!ready) return <div className="boot" />;
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    <div className="app">
+      <Sidebar />
+      <main className="main">
+        {view.kind === "latest" && <LatestView />}
+        {view.kind === "recent" && <RecentView />}
+        {view.kind === "discover" && <DiscoverView />}
+        {view.kind === "show" && <ShowView key={view.id} id={view.id} />}
+        {view.kind === "episode" && <EpisodeView key={view.id} id={view.id} />}
+      </main>
+      <MiniPlayer />
+      <AudioEngine />
+      {settingsOpen && <SettingsDialog />}
+      {addOpen && <AddDialog />}
+      <Toast />
+    </div>
   );
 }
-
-export default App;
