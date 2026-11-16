@@ -3,6 +3,8 @@
 #   scripts/release-macos.sh                     arm64 (default)
 #   TARGET=x86_64-apple-darwin scripts/release-macos.sh
 #   SKIP_NOTARIZE=1 scripts/release-macos.sh     local layout check, no Apple round-trip
+#   PREBUILT_APP=path/SubCast.app TARGET=x86_64-apple-darwin scripts/release-macos.sh
+#                                                re-sign an existing build (e.g. CI's Intel app) instead of building
 # Notary credentials: keychain profile NOTARY_PROFILE (default "notary"), created once with
 #   xcrun notarytool store-credentials notary --apple-id <id> --team-id <team>
 # Output: dist-mac/SubCast_<version>_<arch>.dmg
@@ -30,15 +32,26 @@ if [ "${SKIP_NOTARIZE:-0}" != "1" ]; then
   xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null || { echo "notarytool profile '$PROFILE' unreadable"; exit 1; }
 fi
 
-echo "==> tauri build ($TARGET) signed by: $IDENTITY"
-# Only the .app: the DMG is built below with dmgbuild (no Finder scripting). Tauri signs with
-# hardened runtime + secure timestamp. Notarization happens on the DMG, so no APPLE_ID here.
-env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER \
-  APPLE_SIGNING_IDENTITY="$IDENTITY" npx tauri build --target "$TARGET" --bundles app
+if [ -n "${PREBUILT_APP:-}" ]; then
+  echo "==> re-sign $PREBUILT_APP with: $IDENTITY"
+  APP="build/prebuilt-$ARCH/$NAME.app"
+  rm -rf "build/prebuilt-$ARCH"; mkdir -p "build/prebuilt-$ARCH"
+  ditto "$PREBUILT_APP" "$APP"
+  lipo "$APP/Contents/MacOS/subcast" -verify_arch "${TARGET%%-*}"
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+else
+  echo "==> tauri build ($TARGET) signed by: $IDENTITY"
+  # Only the .app: the DMG is built below with dmgbuild (no Finder scripting). Tauri signs with
+  # hardened runtime + secure timestamp. Notarization happens on the DMG, so no APPLE_ID here.
+  env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_API_KEY -u APPLE_API_ISSUER \
+    APPLE_SIGNING_IDENTITY="$IDENTITY" npx tauri build --target "$TARGET" --bundles app
+fi
 
 codesign --verify --strict --deep --verbose=2 "$APP"
-codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "Authority=Developer ID|flags=.*runtime|Timestamp=" >/dev/null \
-  || { echo "app is missing Developer ID / hardened runtime / timestamp"; codesign -dv --verbose=4 "$APP"; exit 1; }
+SIGINFO=$(codesign -dv --verbose=4 "$APP" 2>&1)
+for want in "Authority=Developer ID Application" "flags=0x10000(runtime)" "Timestamp="; do
+  grep -qF "$want" <<<"$SIGINFO" || { echo "app signature lacks: $want"; echo "$SIGINFO"; exit 1; }
+done
 
 if [ ! -x build/.venv/bin/dmgbuild ]; then
   python3 -m venv build/.venv
