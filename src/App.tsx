@@ -6,18 +6,25 @@ import { listen } from "@tauri-apps/api/event";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
-import { DiscoverView, LatestView, RecentView, ShowView, ChannelView } from "./components/Lists";
+import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelView } from "./components/Lists";
+import { startOffline } from "./lib/offline";
+import { startUpdateChecks } from "./lib/updater";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { EpisodeView } from "./components/EpisodeView";
 import { AudioEngine, cycleMode, cycleRate } from "./components/Players";
 import { useJobs } from "./lib/jobs";
 import { activeIndex } from "./components/TranscriptPanel";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { t, useLang } from "./lib/i18n";
+import { EqBars } from "./components/Illustrations";
 
 export default function App() {
   const { ready, view, settingsOpen, addOpen, init } = useStore();
 
   useEffect(() => {
     startJobListeners();
+    void startOffline();
+    startUpdateChecks();
     void init();
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -60,20 +67,28 @@ export default function App() {
     };
     document.addEventListener("scroll", onScroll, { capture: true, passive: true });
     const offMenu = listen("open-settings", () => useStore.getState().openSettings());
-    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("scroll", onScroll, { capture: true }); void offMenu.then((f) => f()); };
+    // The first time our subtitles help someone else, say so once (and where to turn it off).
+    const offShared = listen("shared-upload", () => {
+      if (localStorage.getItem("sharedNoticeShown")) return;
+      localStorage.setItem("sharedNoticeShown", "1");
+      useStore.getState().notify(t("你的字幕已匿名分享给其他听友（设置 › 通用 可关闭）"));
+    });
+    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("scroll", onScroll, { capture: true }); void offMenu.then((f) => f()); void offShared.then((f) => f()); };
   }, []);
 
   const { sidebar, sideOpen, put: putLayout } = useLayout();
-  if (!ready) return <div className="boot" />;
+  useLang(); // re-render the tree when the interface language changes
+  if (!ready) return <div className="boot" role="status" aria-label={t("正在启动")}><EqBars /></div>;
   return (
     <div className={`app ${sideOpen ? "" : "side-collapsed"}`} style={{ "--sidebar-w": `${sideOpen ? sidebar : 72}px` } as React.CSSProperties}>
       <Sidebar />
-      <Splitter value={sideOpen ? sidebar : 72} min={SIDEBAR.min} max={SIDEBAR.max} def={SIDEBAR.def} snap={SIDEBAR.snap} edge="right" label="侧栏宽度" onChange={(w) => putLayout({ sidebar: w, sideOpen: true })} onCollapse={() => putLayout({ sideOpen: false })} />
+      <Splitter value={sideOpen ? sidebar : 72} min={SIDEBAR.min} max={SIDEBAR.max} def={SIDEBAR.def} snap={SIDEBAR.snap} edge="right" label={t("侧栏宽度")} onChange={(w) => putLayout({ sidebar: w, sideOpen: true })} onCollapse={() => putLayout({ sideOpen: false })} />
       <main className="main">
         {view.kind !== "episode" && <TopBar />}
         {view.kind === "latest" && <LatestView />}
         {view.kind === "recent" && <RecentView />}
         {view.kind === "discover" && <DiscoverView />}
+        {view.kind === "downloads" && <DownloadsView />}
         {view.kind === "show" && <ShowView key={view.id} id={view.id} />}
         {view.kind === "channel" && <ChannelView key={view.input} input={view.input} />}
         {view.kind === "episode" && <EpisodeView key={view.id} id={view.id} />}
@@ -83,6 +98,7 @@ export default function App() {
       {settingsOpen && <SettingsDialog />}
       {addOpen && <AddDialog />}
       <SelectionTools />
+      <UpdateBanner />
       <Toast />
     </div>
   );

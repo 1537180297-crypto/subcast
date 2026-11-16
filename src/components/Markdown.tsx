@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { parseClock } from "../lib/format";
+import { t } from "../lib/i18n";
 
 // A small Markdown renderer for model answers: headings, lists, bold, inline code, and [mm:ss] timestamps that seek.
 const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\[\d{1,2}:\d{2}(?::\d{2})?\](?:\s*[-–~至]\s*\[\d{1,2}:\d{2}(?::\d{2})?\])?)/g;
@@ -13,7 +14,7 @@ function inline(text: string, onSeek: (t: number) => void, key: string): ReactNo
     if (stamp) {
       const seconds = parseClock(stamp[1]);
       return seconds == null ? part : (
-        <button key={k} className="stamp" onClick={() => onSeek(seconds)} title="跳到这里播放">{stamp[1]}</button>
+        <button key={k} className="stamp" onClick={() => onSeek(seconds)} title={t("跳到这里播放")}>{stamp[1]}</button>
       );
     }
     return <Fragment key={k}>{part}</Fragment>;

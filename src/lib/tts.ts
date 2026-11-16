@@ -1,5 +1,6 @@
 import { api } from "./api";
 import { useStore } from "../store";
+import { t } from "./i18n";
 
 /** Reads text aloud with Doubao TTS, a sentence-aligned chunk (≤ 900 chars) at a time, prefetching the next. */
 let session = 0;
@@ -40,7 +41,7 @@ export async function speak(text: string, onError?: (m: string) => void) {
       next = fetchPart(i + 1);
       const el = new Audio(`data:audio/wav;base64,${b64}`);
       audio = el;
-      await new Promise<void>((resolve, reject) => { el.onended = () => resolve(); el.onerror = () => reject(new Error("音频播放失败")); void el.play().catch(reject); });
+      await new Promise<void>((resolve, reject) => { el.onended = () => resolve(); el.onerror = () => reject(new Error(t("音频播放失败"))); void el.play().catch(reject); });
       if (id !== session) return;
     }
   } catch (e) {

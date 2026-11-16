@@ -1,6 +1,10 @@
 // Shows suggested on first launch and in Discover. Covers and feeds are fixed here so the page needs no lookups.
+import { isChineseUi, t, tk } from "./i18n";
+
 export type Topic = "乔木精读" | "AI 前沿" | "AI 工程" | "创业投资" | "产品与增长" | "科技评论" | "中文播客" | "人文社科" | "个人成长";
 export const TOPICS: Topic[] = ["乔木精读", "AI 前沿", "AI 工程", "创业投资", "产品与增长", "科技评论", "中文播客", "人文社科", "个人成长"];
+/** Topics are Chinese identifiers; this list only exists so their display names get extracted. Show them with t(topic). */
+export const TOPIC_KEYS = [tk("乔木精读"), tk("AI 前沿"), tk("AI 工程"), tk("创业投资"), tk("产品与增长"), tk("科技评论"), tk("中文播客"), tk("人文社科"), tk("个人成长")];
 
 export interface Pick { id: string; title: string; zh: string; by: string; intro: string; input: string; cover: string; topics: Topic[]; video?: boolean; deep?: boolean; channel?: string }
 
@@ -8,6 +12,7 @@ const it = (path: string) => `https://is1-ssl.mzstatic.com/image/thumb/${path}/6
 const xyz = (key: string) => `https://image.xyzcdn.net/${key}@middle`;
 
 export const PICKS: Pick[] = [
+  { id: "nexttoken", title: "Next Token｜词元之外", zh: "词元之外", by: "Next Token", intro: "AI 圈一线从业者的长对谈", input: "https://rss.qiaomu.ai/sources/nexttoken", cover: "https://image.xyzcdn.net/FhuQBR26B-8jsdfuZumu54mCylqG.png@small", topics: ["乔木精读", "中文播客", "AI 前沿"], deep: true },
   { id: "dwarkesh", title: "Dwarkesh Podcast", zh: "Dwarkesh 播客", by: "Dwarkesh Patel", intro: "深度访谈 AI 实验室负责人与顶尖研究者，硬核又好懂", input: "https://www.youtube.com/@DwarkeshPatel", cover: it("Podcasts211/v4/af/6f/48/af6f4828-86a2-d4c3-b998-de2af1fdc8c0/mza_949624848217027907.jpg"), topics: ["AI 前沿"], video: true },
   { id: "no-priors", title: "No Priors", zh: "无先验", by: "Sarah Guo & Elad Gil", intro: "两位顶级投资人对话 AI 公司创始人", input: "https://nopriors.qiaomu.ai", cover: it("Podcasts221/v4/8f/46/88/8f4688ec-087f-28a1-7f6d-0d401d2e8a00/mza_14043856542292072583.jpg"), topics: ["乔木精读", "AI 前沿", "创业投资"], deep: true },
   { id: "lex", title: "Lex Fridman Podcast", zh: "Lex Fridman 播客", by: "Lex Fridman", intro: "科技、科学与人物的长篇对谈", input: "https://lex.qiaomu.ai", cover: it("Podcasts211/v4/ea/42/d7/ea42d7b1-8d4e-dd97-da5d-c508756550ca/mza_16782152345430036863.jpg"), topics: ["乔木精读", "科技评论", "AI 前沿"], video: true, deep: true },
@@ -34,7 +39,6 @@ export const PICKS: Pick[] = [
   { id: "35huan", title: "三五环", zh: "三五环", by: "刘飞", intro: "互联网产品与商业观察", input: "https://35huan.qiaomu.ai", cover: it("Podcasts126/v4/6e/d0/de/6ed0dedb-d782-a562-e40b-043ce20441d3/mza_5066303992234991879.jpeg"), topics: ["乔木精读", "中文播客"], deep: true },
   { id: "zhixing", title: "知行小酒馆", zh: "知行小酒馆", by: "有知有行", intro: "投资理财与人生选择", input: "https://zhixing.qiaomu.ai", cover: it("Podcasts112/v4/b3/96/fc/b396fcc5-6e2b-d34e-8d3d-c849c43b6215/mza_4090324763067558601.jpeg"), topics: ["乔木精读", "中文播客"], deep: true },
   { id: "mianji", title: "面基", zh: "面基", by: "面基", intro: "和有意思的人见面聊天", input: "https://mianji.qiaomu.ai", cover: it("Podcasts126/v4/a8/d9/5e/a8d95e6e-aba6-3608-9c28-8b8cde840ec4/mza_10150483960934463526.png"), topics: ["乔木精读", "中文播客"], deep: true },
-  { id: "nexttoken", title: "Next Token｜词元之外", zh: "词元之外", by: "Next Token", intro: "AI 圈一线从业者的长对谈", input: "https://rss.qiaomu.ai/sources/nexttoken", cover: "https://image.xyzcdn.net/FhuQBR26B-8jsdfuZumu54mCylqG.png@small", topics: ["乔木精读", "中文播客", "AI 前沿"], deep: true },
   { id: "joerogan", title: "The Joe Rogan Experience", zh: "乔·罗根秀", by: "Joe Rogan", intro: "全球收听量最高的长篇访谈", input: "https://www.youtube.com/@joerogan", cover: it("Podcasts211/v4/d8/97/bf/d897bfdd-73ea-6a4e-5c3e-02ab30707f2b/mza_8607972238001778397.jpg"), topics: ["科技评论"], video: true },
   { id: "80k", title: "80,000 Hours Podcast", zh: "八万小时", by: "80,000 Hours", intro: "关于 AI 风险与人生选择的深度访谈", input: "https://feeds.transistor.fm/80000-hours-podcast", cover: it("Podcasts221/v4/1e/ca/c2/1ecac2c7-a567-01ee-8bbe-80145ef185e3/mza_1975528560600666532.jpg"), topics: ["AI 前沿"] },
   { id: "pivot", title: "Pivot", zh: "Pivot", by: "Kara Swisher & Scott Galloway", intro: "两位科技评论人每周辣评科技与商业", input: "https://rss.qiaomu.ai/sources/podscribe-pivot", cover: it("Podcasts221/v4/13/22/39/1322397a-976e-3c8f-7764-91cc38d0dd70/mza_12130189257448841692.jpeg"), topics: ["乔木精读", "科技评论"], deep: true },
@@ -84,8 +88,13 @@ export function shortName(title: string): string {
 export function showName(title: string): string {
   const short = shortName(title);
   const p = PICKS.find((x) => x.title === title || shortName(x.title) === short || x.by === title || x.channel === title);
-  return p?.zh ?? short;
+  return p && isChineseUi() ? t(p.zh) : short;
 }
+
+/** A pick's name in the interface language: the curated Chinese name in Chinese UIs, its own title elsewhere. */
+export const pickName = (p: Pick) => (isChineseUi() ? t(p.zh) : p.title);
+/** The line under a pick's name: the original title when the name differs from it, else the host. */
+export const pickSub = (p: Pick) => (isChineseUi() && p.zh !== p.title ? p.title : p.by);
 
 const norm = (u: string) => u.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
 export const sameFeed = (a: string, b: string) => norm(a) === norm(b);

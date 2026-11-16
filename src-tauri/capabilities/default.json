@@ -41,6 +41,18 @@
     "allow-tts-speak",
     "allow-cached-show",
     "allow-save-image",
+    "allow-set-menu-labels",
+    "allow-download-episode",
+    "allow-list-downloads",
+    "allow-delete-download",
+    "allow-clear-downloads",
+    "allow-storage-info",
+    "allow-open-data-folder",
+    "allow-reveal-download",
+    "allow-clear-temp",
+    "allow-full-notes",
+    "updater:default",
+    "process:allow-restart",
     "core:window:allow-start-dragging"
   ],
   "remote": {

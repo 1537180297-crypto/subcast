@@ -1,11 +1,12 @@
 // Long-running work that outlives any one screen: transcription and translation of an episode.
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
-import { api, errorText, type AsrEvent, type Episode, type Segment, type Transcript } from "./api";
+import { api, rawErrorText, type AsrEvent, type Episode, type Segment, type Transcript } from "./api";
 import { batches, translateBatch } from "./ai";
 import { isChinese } from "./format";
 import { providerFor, useStore } from "../store";
 
+// Messages and errors are kept as the backend wrote them (so they can be matched) and translated with tr() where shown.
 export interface AsrJob { stage: "download" | "transcribe" | "done" | "error"; progress: number; message?: string; live: Segment[] }
 export type TranslateEngine = "llm" | "google";
 export interface TranslationJob { items: (string | null)[]; running: boolean; error?: string; failed: number; engine?: TranslateEngine }
@@ -45,7 +46,7 @@ export async function loadTranscript(ep: Episode) {
     if (t) { patch("transcripts", ep.id, t); patch("officialChecked", ep.id, "found"); }
     else patch("officialChecked", ep.id, "none");
   } catch (e) {
-    patch("officialError", ep.id, errorText(e));
+    patch("officialError", ep.id, rawErrorText(e));
     patch("officialChecked", ep.id, "error");
   }
 }
@@ -61,7 +62,7 @@ export async function generateTranscript(ep: Episode, model: string, language: s
     void useStore.getState().reloadShows();
   } catch (e) {
     const job = useJobs.getState().asr[ep.id];
-    patch("asr", ep.id, { ...(job ?? { live: [], progress: 0 }), stage: "error", message: errorText(e) });
+    patch("asr", ep.id, { ...(job ?? { live: [], progress: 0 }), stage: "error", message: rawErrorText(e) });
   }
 }
 
@@ -136,7 +137,7 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
         }
         merge(result);
       } catch (err) {
-        failed++; lastError = errorText(err);
+        failed++; lastError = rawErrorText(err);
         // A bad key or exhausted quota fails every batch; stop instead of hammering the service.
         if (/API Key|权限|额度|不存在|连不上|网络/.test(lastError)) { controller.abort(); }
       }

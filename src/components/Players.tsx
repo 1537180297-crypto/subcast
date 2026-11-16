@@ -4,6 +4,8 @@ import { api, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
 import { useStore } from "../store";
+import { t, tr } from "../lib/i18n";
+import { audioSrc, useOffline } from "../lib/offline";
 
 const SAVE_EVERY = 10;
 let lastSaved = 0;
@@ -20,6 +22,13 @@ export function AudioEngine() {
   const rate = useStore((s) => s.settings.playbackRate);
   const ref = useRef<HTMLAudioElement>(null);
   const audio = current && !current.videoId ? current : null;
+  const saved = useOffline((s) => (audio ? s.saved[audio.id]?.path : undefined));
+  // The address is fixed per episode so a download finishing mid-episode does not cut in; it takes over at the next pause.
+  const [chosen, setChosen] = useState<{ id: string; src?: string } | null>(null);
+  const src = audio ? (chosen?.id === audio.id ? chosen.src : audioSrc(audio)) : undefined;
+  const setSrc = (s?: string) => audio && setChosen({ id: audio.id, src: s });
+  useEffect(() => { if (audio && chosen?.id !== audio.id) setSrc(src); }, [audio?.id]);
+  useEffect(() => { if (audio && saved && ref.current?.paused !== false) setSrc(audioSrc(audio)); }, [saved]);
 
   useEffect(() => {
     const el = ref.current;
@@ -36,22 +45,28 @@ export function AudioEngine() {
 
   useEffect(() => { if (ref.current) ref.current.playbackRate = rate; }, [rate, audio?.id]);
 
-  if (!audio?.audioUrl) return null;
+  if (!audio || !src) return null;
   return (
     <audio
       ref={ref}
-      src={audio.audioUrl}
+      src={src}
       preload="metadata"
       onLoadedMetadata={(e) => {
         const el = e.currentTarget;
         el.playbackRate = rate;
-        if (audio.progress > 5 && audio.progress < el.duration - 10) el.currentTime = audio.progress;
+        const s = useStore.getState();
+        const start = s.current?.id === audio.id ? s.time : audio.progress;
+        if (start > 5 && start < el.duration - 10) el.currentTime = start;
         track(audio, el.currentTime, el.duration);
       }}
       onTimeUpdate={(e) => track(audio, e.currentTarget.currentTime)}
       onPlay={() => useStore.getState().set({ playing: true })}
-      onPause={(e) => { useStore.getState().set({ playing: false }); void api.setProgress(audio.id, e.currentTarget.currentTime); }}
-      onError={() => useStore.getState().notify("音频加载失败，可能是网络问题或地址已失效")}
+      onPause={(e) => {
+        useStore.getState().set({ playing: false });
+        void api.setProgress(audio.id, e.currentTarget.currentTime);
+        if (saved && src !== audioSrc(audio)) setSrc(audioSrc(audio));
+      }}
+      onError={() => useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效"))}
     />
   );
 }
@@ -75,7 +90,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   const fallback = async (why: string) => {
     setFallingBack(true);
     try { setNative(await api.youtubeStream(ep.videoId!)); setError(null); }
-    catch (e) { if (onUnplayable) onUnplayable(); else setError(`${why}。${String((e as any)?.message ?? e)}`); }
+    catch (e) { if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(String((e as any)?.message ?? e)) })); }
     finally { setFallingBack(false); }
   };
   useEffect(() => { setNative(null); setError(null); }, [ep.id]);
@@ -83,7 +98,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   return (
     <div className="video" ref={box}>
       {native ? <NativeVideo ep={ep} src={native} onFullscreen={fullscreen} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
-      {fallingBack && <div className="video-note"><span className="spin-dot" /> 作者限制了嵌入播放，正在切换到直连播放…</div>}
+      {fallingBack && <div className="video-note"><span className="spin-dot" /> {t("作者限制了嵌入播放，正在切换到直连播放…")}</div>}
       {error && <div className="video-error">{error}</div>}
       {overlay}
     </div>
@@ -143,12 +158,12 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
           },
           onError: (e: any) => {
-            if ([100, 101, 150, 152, 153].includes(e.data)) onBlocked(e.data === 100 ? "视频不存在或已设为私享" : "视频作者不允许在其他应用中嵌入播放");
-            else onError(`视频无法播放（错误 ${e.data}）`);
+            if ([100, 101, 150, 152, 153].includes(e.data)) onBlocked(e.data === 100 ? t("视频不存在或已设为私享") : t("视频作者不允许在其他应用中嵌入播放"));
+            else onError(t("视频无法播放（错误 {code}）", { code: e.data }));
           },
         },
       });
-    }).catch((e) => onError(String(e.message ?? e)));
+    }).catch((e) => onError(tr(String(e.message ?? e))));
     return () => {
       disposed = true;
       window.clearInterval(timer);
@@ -215,11 +230,11 @@ export function Controls({ compact = false }: { compact?: boolean }) {
   const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
-      <button className="icon-btn" title="后退 15 秒（←）" onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
-      <button className="play-btn" title={playing ? "暂停（空格）" : "播放（空格）"} onClick={() => player?.toggle()} disabled={!player}>
+      <button className="icon-btn" title={t("后退 15 秒（←）")} onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
+      <button className="play-btn" title={playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player}>
         {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
-      <button className="icon-btn" title="前进 30 秒（→）" onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
+      <button className="icon-btn" title={t("前进 30 秒（→）")} onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
       <span className="time">{clock(shown)}</span>
       <input
         className="seek"
@@ -232,11 +247,11 @@ export function Controls({ compact = false }: { compact?: boolean }) {
         onPointerUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
         onKeyUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
         style={{ "--fill": `${length ? (shown / length) * 100 : 0}%` } as React.CSSProperties}
-        aria-label="播放进度"
+        aria-label={t("播放进度")}
       />
       <span className="time">{length ? clock(length) : "--:--"}</span>
-      <button className="rate-btn" onClick={nextRate} title="播放速度（S）">{settings.playbackRate}×</button>
-      <button className="rate-btn" onClick={() => cycleMode()} title="字幕：双语 / 中文 / 原文（C）">{settings.subtitleMode === "bilingual" ? "双语" : settings.subtitleMode === "translation" ? "中文" : "原文"}</button>
+      <button className={`rate-btn${settings.playbackRate >= 2 ? " fast" : ""}`} onClick={nextRate} title={t("播放速度（S）")}>{settings.playbackRate >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{settings.playbackRate}×</button>
+      <button className="rate-btn" onClick={() => cycleMode()} title={t("字幕：双语 / 中文 / 原文（C）")}>{settings.subtitleMode === "bilingual" ? t("双语") : settings.subtitleMode === "translation" ? t("中文") : t("原文")}</button>
     </div>
   );
 }

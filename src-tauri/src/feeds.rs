@@ -362,4 +362,14 @@ mod tests {
         assert_eq!(youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1").as_deref(), Some("dQw4w9WgXcQ"));
         assert_eq!(youtube_video_id("https://youtu.be/dQw4w9WgXcQ").as_deref(), Some("dQw4w9WgXcQ"));
     }
+
+    /// Network: the 小宇宙 page carries the full shownotes that rss.qiaomu.ai cuts to ~300 characters.
+    #[tokio::test]
+    #[ignore]
+    async fn xiaoyuzhou_full_shownotes() {
+        let ep = xiaoyuzhou_episode("https://www.xiaoyuzhoufm.com/episode/6af9e512fe62f8f52c4ba6fb").await.unwrap();
+        let n = ep.notes.unwrap_or_default();
+        println!("shownotes chars: {}", n.chars().count());
+        assert!(n.chars().count() > 600);
+    }
 }

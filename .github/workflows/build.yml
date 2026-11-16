@@ -1,5 +1,6 @@
 name: Build
 
+# macOS builds are signed and notarized locally (scripts/release.sh); CI builds Windows and Linux.
 on:
   push:
     tags: ["v*"]
@@ -11,10 +12,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: --target aarch64-apple-darwin
-          - platform: macos-13
-            args: --target x86_64-apple-darwin
           - platform: windows-latest
             args: ""
           - platform: ubuntu-22.04
@@ -29,8 +26,6 @@ jobs:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || matrix.platform == 'macos-13' && 'x86_64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
@@ -46,8 +41,13 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater packages; the matching public key is in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: SubCast ${{ github.ref_name }}
           releaseDraft: true
+          # latest.json is written by scripts/release.sh once the Mac builds are in.
+          includeUpdaterJson: false
           args: ${{ matrix.args }}

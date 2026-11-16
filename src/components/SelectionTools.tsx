@@ -4,12 +4,15 @@ import { api, type Episode } from "../lib/api";
 import { CJK, drawPoster } from "../lib/poster";
 import { showName } from "../lib/picks";
 import { useStore } from "../store";
+import { t, tx } from "../lib/i18n";
 import { Modal } from "./Chrome";
 import logoUrl from "../assets/logo.png";
 
 const ZONES = ".deep-body, .lines, .notes-body, .chat-scroll, .summary";
 
 interface Sel { text: string; x: number; y: number; below: boolean; ts?: string }
+
+const DOWNLOADS_DIR = /^.*\/(Downloads|下载)\//; // i18n-ignore (macOS folder names)
 
 const toSeconds = (t?: string) => (t ? t.split(":").reduce((n, p) => n * 60 + Number(p), 0) : 0);
 
@@ -47,23 +50,23 @@ export function SelectionTools() {
     if (!sel) return;
     const ep = await episode();
     const src = ep ? `——《${ep.title}》${ep.showTitle ? ` · ${showName(ep.showTitle)}` : ""}${sel.ts ? ` · ${sel.ts}` : ""}${ep.link ? `\n${ep.link}` : ""}` : "";
-    try { await navigator.clipboard.writeText(`“${sel.text}”\n${src}`); useStore.getState().notify("已复制，带出处"); } catch { useStore.getState().notify("复制失败"); }
+    try { await navigator.clipboard.writeText(`“${sel.text}”\n${src}`); useStore.getState().notify(t("已复制，带出处")); } catch { useStore.getState().notify(t("复制失败")); }
   };
   const translate = async () => {
     if (!sel) return;
     setTr("…");
-    try { setTr((await api.translateTexts([sel.text], CJK.test(sel.text) && !/[a-z]{4}/i.test(sel.text) ? "en" : "zh-CN"))[0] || "没有翻译结果"); }
-    catch { setTr("翻译服务暂时连不上，稍后再试"); }
+    try { setTr((await api.translateTexts([sel.text], CJK.test(sel.text) && !/[a-z]{4}/i.test(sel.text) ? "en" : "zh-CN"))[0] || t("没有翻译结果")); }
+    catch { setTr(t("翻译服务暂时连不上，稍后再试")); }
   };
 
   return (
     <>
       {sel && (
-        <div className={`sel-bar ${sel.below ? "below" : ""}`} style={{ left: sel.x, top: sel.y }} role="toolbar" aria-label="选中文字操作" onMouseDown={(e) => e.preventDefault()}>
+        <div className={`sel-bar ${sel.below ? "below" : ""}`} style={{ left: sel.x, top: sel.y }} role="toolbar" aria-label={t("选中文字操作")} onMouseDown={(e) => e.preventDefault()}>
           <div className="sel-actions">
-            <button onClick={copy}><Copy size={13} /> 复制</button>
-            <button onClick={translate}><Languages size={13} /> 翻译</button>
-            <button onClick={() => { setPoster({ text: sel.text, ts: sel.ts }); setSel(null); }}><ImageIcon size={13} /> 生成海报</button>
+            <button onClick={copy}><Copy size={13} /> {t("复制")}</button>
+            <button onClick={translate}><Languages size={13} /> {t("翻译")}</button>
+            <button onClick={() => { setPoster({ text: sel.text, ts: sel.ts }); setSel(null); }}><ImageIcon size={13} /> {t("生成海报")}</button>
           </div>
           {tr && <div className="sel-tr">{tr === "…" ? <Loader2 size={13} className="spin" /> : tr}</div>}
         </div>
@@ -75,7 +78,7 @@ export function SelectionTools() {
 
 function PosterDialog({ text, ts, getEpisode, onClose }: { text: string; ts?: string; getEpisode: () => Promise<Episode | null>; onClose: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
-  const [name, setName] = useState("SubCast 摘句");
+  const [name, setName] = useState(() => t("SubCast 摘句"));
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
@@ -93,28 +96,28 @@ function PosterDialog({ text, ts, getEpisode, onClose }: { text: string; ts?: st
           zh, en: cjk ? "" : text,
           title: titleZh,
           show: ep?.showTitle ? showName(ep.showTitle) : "",
-          meta: [ep?.published ? new Date(ep.published).toLocaleDateString("zh-CN") : "", ts ? `第 ${ts}` : ""].filter(Boolean).join(" · "),
+          meta: [ep?.published ? new Date(ep.published).toLocaleDateString("zh-CN") : "", ts ? t("第 {ts}", { ts }) : ""].filter(Boolean).join(" · "),
           url: link,
         }, logo);
-        setName(`SubCast 摘句 ${(titleZh || "").slice(0, 20)}`);
+        setName(t("SubCast 摘句 {title}", { title: (titleZh || "").slice(0, 20) }));
         setUrl(c.toDataURL("image/png"));
       } catch (e) { setError(String((e as any)?.message ?? e)); }
     })();
   }, []);
-  const save = async () => { if (!url) return; try { const p = await api.saveImage(name, url); useStore.getState().notify(`已保存到 ${p.replace(/^.*\/(Downloads|下载)\//, "下载/")}`); } catch (e) { useStore.getState().notify(String(e)); } };
+  const save = async () => { if (!url) return; try { const p = await api.saveImage(name, url); useStore.getState().notify(t("已保存到 {path}", { path: p.replace(DOWNLOADS_DIR, tx("folder", "下载") + "/") })); } catch (e) { useStore.getState().notify(String(e)); } };
   const copyImg = async () => {
     if (!url) return;
-    try { const blob = await (await fetch(url)).blob(); await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); useStore.getState().notify("图片已复制"); }
-    catch { useStore.getState().notify("复制失败，请用「保存图片」"); }
+    try { const blob = await (await fetch(url)).blob(); await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); useStore.getState().notify(t("图片已复制")); }
+    catch { useStore.getState().notify(t("复制失败，请用「保存图片」")); }
   };
   return (
-    <Modal title="分享海报" onClose={onClose}>
-      <div className="poster-pv">{url ? <img src={url} alt="分享海报" /> : error ? <p className="error-text">{error}</p> : <div className="poster-wait"><Loader2 className="spin" size={18} /> 正在生成海报…</div>}</div>
+    <Modal title={t("分享海报")} onClose={onClose}>
+      <div className="poster-pv">{url ? <img src={url} alt={t("分享海报")} /> : error ? <p className="error-text">{error}</p> : <div className="poster-wait"><Loader2 className="spin" size={18} /> {t("正在生成海报…")}</div>}</div>
       <div className="modal-foot">
         <span className="spacer" />
-        <button className="btn ghost" onClick={onClose}><X size={14} /> 关闭</button>
-        <button className="btn" onClick={copyImg} disabled={!url}><Copy size={14} /> 复制图片</button>
-        <button className="btn primary" onClick={save} disabled={!url}>保存图片</button>
+        <button className="btn ghost" onClick={onClose}><X size={14} /> {t("关闭")}</button>
+        <button className="btn" onClick={copyImg} disabled={!url}><Copy size={14} /> {t("复制图片")}</button>
+        <button className="btn primary" onClick={save} disabled={!url}>{t("保存图片")}</button>
       </div>
     </Modal>
   );

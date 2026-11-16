@@ -38,6 +38,21 @@ pub fn get_key(provider: &str) -> Option<String> {
     keyring::Entry::new(KEYRING_SERVICE, provider).ok()?.get_password().ok()
 }
 
+/// OpenCode Go/Zen refuses requests without this header (it drives prompt-cache routing).
+/// Any stable value passes; a per-install id from the keychain gives the best cache affinity.
+fn opencode_session() -> &'static str {
+    static ID: once_cell::sync::Lazy<String> = once_cell::sync::Lazy::new(|| {
+        let entry = keyring::Entry::new(KEYRING_SERVICE, "opencode-session").ok();
+        if let Some(v) = entry.as_ref().and_then(|e| e.get_password().ok()).filter(|v| !v.is_empty()) { return v; }
+        let v = uuid::Uuid::new_v4().to_string();
+        if let Some(e) = entry { let _ = e.set_password(&v); }
+        v
+    });
+    &ID
+}
+
+fn needs_opencode_session(base_url: &str) -> bool { base_url.contains("opencode.ai") }
+
 fn openai_url(base: &str) -> String {
     let b = base.trim().trim_end_matches('/');
     if b.ends_with("/chat/completions") { b.to_string() } else { format!("{b}/chat/completions") }
@@ -80,6 +95,7 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
         let mut body = json!({ "model": p.model, "messages": msgs, "stream": true, "max_tokens": max_tokens });
         if json_mode { body["response_format"] = json!({"type": "json_object"}); }
         let mut r = net::client().post(openai_url(&p.base_url)).json(&body);
+        if needs_opencode_session(&p.base_url) { r = r.header("x-opencode-session", opencode_session()); }
         if let Some(k) = key.filter(|k| !k.is_empty()) { r = r.bearer_auth(k); }
         r
     };

@@ -1,39 +1,52 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Compass, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X } from "lucide-react";
+import { ChevronLeft, Compass, Download, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { useStore, type View } from "../store";
-import { PICKS, deepPickFor, isSubscribed, showName } from "../lib/picks";
+import { hasUpdate, useUpdate } from "../lib/updater";
+import { PICKS, deepPickFor, isSubscribed, pickName, showName } from "../lib/picks";
+import { isChineseUi, t, tk, tr, tx, useLang } from "../lib/i18n";
 import { useShowName } from "../lib/zh";
 import { useJobs } from "../lib/jobs";
 import { BiTitle, ZhText } from "./Bi";
 import { useLayout } from "../lib/layout";
+import { useOffline } from "../lib/offline";
 import logoUrl from "../assets/logo.png";
 import { showIcon } from "./Lists";
+import { EqBars, SearchArt, useKonami, useTaps } from "./Illustrations";
 
 export function Sidebar() {
   const { shows, view, go, set } = useStore();
+  useLang((s) => s.lang);
+  // Eggs: five quick clicks on the logo make it dance; the Konami code switches the seek bar to tape.
+  const [dance, setDance] = useState(false);
+  const tapLogo = useTaps(5, () => { setDance(true); window.setTimeout(() => setDance(false), 3600); });
+  useKonami(() => { const on = document.body.classList.toggle("tape-seek"); useStore.getState().notify(on ? t("磁带模式已开启") : t("磁带模式已关闭")); });
   const is = (v: View) => view.kind === v.kind && (v.kind !== "show" || (view.kind === "show" && view.id === v.id)) && (v.kind !== "channel" || (view.kind === "channel" && view.input === v.input));
   // A 精读 channel is listed once: hidden here when its show is already followed (either version).
   const curated = PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
   const { sideOpen, put: putLayout } = useLayout();
+  const updateWaiting = useUpdate(hasUpdate);
   const rail = !sideOpen;
+  const hasDownloads = useOffline((s) => Object.keys(s.saved).length + Object.keys(s.active).length > 0);
   const Nav = ({ v, icon, label }: { v: View; icon: React.ReactNode; label: string }) => (
     <button className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)} title={rail ? label : undefined} aria-label={label}>{icon}<span className="label">{label}</span></button>
   );
   return (
     <aside className={`sidebar ${rail ? "rail" : ""}`}>
       <div className="traffic-space" data-tauri-drag-region />
-      <div className="brand" data-tauri-drag-region>
+      <div className={`brand${dance ? " dance" : ""}`} data-tauri-drag-region onClick={tapLogo}>
         <img className="logo-img" src={logoUrl} alt="" />
         <p className="brand-name">SubCast</p>
+        {dance && <EqBars className="brand-eq" />}
       </div>
       <nav>
-        <Nav v={{ kind: "latest" }} icon={<Inbox size={16} />} label="首页" />
-        <Nav v={{ kind: "recent" }} icon={<History size={16} />} label="继续收听" />
-        <Nav v={{ kind: "discover" }} icon={<Compass size={16} />} label="发现" />
+        <Nav v={{ kind: "latest" }} icon={<Inbox size={16} />} label={t("首页")} />
+        <Nav v={{ kind: "recent" }} icon={<History size={16} />} label={t("继续收听")} />
+        <Nav v={{ kind: "discover" }} icon={<Compass size={16} />} label={t("发现")} />
+        {(hasDownloads || view.kind === "downloads") && <Nav v={{ kind: "downloads" }} icon={<Download size={16} />} label={t("已下载")} />}
       </nav>
       <div className="side-sep" />
-      <div className="side-head"><span className="label">订阅</span><button className="icon-btn sm" title="添加节目" onClick={() => set({ addOpen: true })}><Plus size={14} /></button></div>
+      <div className="side-head"><span className="label">{tx("sidebar", "订阅")}</span><button className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true })}><Plus size={14} /></button></div>
       <div className="show-list">
         {shows.map((s) => (
           <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={rail ? showName(s.title) : s.title}>
@@ -42,27 +55,27 @@ export function Sidebar() {
             {s.unplayed > 0 && <span className="unplayed">{s.unplayed > 99 ? "99+" : s.unplayed}</span>}
           </button>
         ))}
-        {!shows.length && <p className="muted small side-empty">还没有订阅</p>}
+        {!shows.length && <p className="muted small side-empty">{t("还没有订阅")}</p>}
         {curated.length > 0 && <>
-          <div className="side-head second"><span className="label">乔木精读</span></div>
+          <div className="side-head second"><span className="label">{t("乔木精读")}</span></div>
           {curated.map((p) => (
-            <button key={p.id} className={`show-item curated ${is({ kind: "channel", input: p.input }) ? "on" : ""}`} onClick={() => go({ kind: "channel", input: p.input })} title={`${p.zh} · 点击查看，决定是否订阅`}>
+            <button key={p.id} className={`show-item curated ${is({ kind: "channel", input: p.input }) ? "on" : ""}`} onClick={() => go({ kind: "channel", input: p.input })} title={t("{name} · 点击查看，决定是否订阅", { name: pickName(p) })}>
               <span className="show-cover"><img src={p.cover} alt="" loading="lazy" /></span>
-              <span className="show-names"><span className="show-title">{p.zh}</span>{p.zh !== p.title && <span className="show-orig">{p.title}</span>}</span>
+              <span className="show-names"><span className="show-title">{pickName(p)}</span>{isChineseUi() && p.zh !== p.title && <span className="show-orig">{p.title}</span>}</span>
             </button>
           ))}
         </>}
       </div>
       <TaskChip />
       <div className="side-foot">
-        <button className="nav settings-btn" onClick={() => useStore.getState().openSettings()} title={rail ? "设置" : undefined} aria-label="设置"><Cog size={16} /><span className="label">设置</span></button>
-        <button className="icon-btn side-toggle" onClick={() => putLayout({ sideOpen: rail })} title={rail ? "展开侧栏（⌘B）" : "收起为图标（⌘B）"} aria-label={rail ? "展开侧栏" : "收起侧栏"}>{rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
+        <button className="nav settings-btn" onClick={() => useStore.getState().openSettings(updateWaiting ? "about" : undefined)} title={updateWaiting ? t("有新版本，点击更新") : rail ? t("设置") : undefined} aria-label={updateWaiting ? t("设置，有新版本") : t("设置")}><span className="cog-wrap"><Cog size={16} />{updateWaiting && <span className="update-dot" />}</span><span className="label">{t("设置")}</span>{updateWaiting && !rail && <span className="update-pill">{t("更新")}</span>}</button>
+        <button className="icon-btn side-toggle" onClick={() => putLayout({ sideOpen: rail })} title={rail ? t("展开侧栏（⌘B）") : t("收起为图标（⌘B）")} aria-label={rail ? t("展开侧栏") : t("收起侧栏")}>{rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
       </div>
     </aside>
   );
 }
 
-const PLACEHOLDERS = ["粘贴 YouTube / 小宇宙 / 播客链接，或搜索节目名", "试试搜 Lex Fridman", "粘贴一个 YouTube 视频链接，直接看双语字幕"];
+const PLACEHOLDERS = [tk("粘贴 YouTube / 小宇宙 / 播客链接，或搜索节目名"), tk("试试搜 Lex Fridman"), tk("粘贴一个 YouTube 视频链接，直接看双语字幕")];
 const placeholder = PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)];
 const looksLikeLink = (t: string) => /^(https?:\/\/|@)|youtube\.com|youtu\.be|xiaoyuzhoufm\.com|feed\.xyzfm\.space|podcasts\.apple\.com|\.(xml|rss)\b/i.test(t.trim());
 
@@ -89,32 +102,32 @@ export function TopBar() {
     try {
       const r = await api.addSubscription(input);
       setQ(""); setOpen(false); setResults(null);
-      if (r.show) { await reloadShows(); notify(`已订阅「${r.show.title}」`); go({ kind: "show", id: r.show.id }); }
+      if (r.show) { await reloadShows(); notify(t("已订阅「{name}」", { name: r.show.title })); go({ kind: "show", id: r.show.id }); }
       else if (r.episode) openEpisode(r.episode);
     } catch (e) { notify(errorText(e)); } finally { setAdding(null); }
   };
   const submit = () => { if (link) void subscribe(q.trim()); else if (results?.[0]) void subscribe(results[0].feedUrl); };
   return (
     <div className="topbar" data-tauri-drag-region>
-      <button className="round-btn" onClick={back} disabled={!history.length} aria-label="返回"><ChevronLeft size={18} /></button>
+      <button className="round-btn" onClick={back} disabled={!history.length} aria-label={t("返回")}><ChevronLeft size={18} /></button>
       <div className="search-wrap">
         <div className={`top-search ${open ? "focus" : ""}`}>
           {link ? <Link2 size={16} /> : <Search size={16} />}
-          <input value={q} placeholder={placeholder} spellCheck={false} autoCapitalize="off" autoCorrect="off"
+          <input value={q} placeholder={t(placeholder)} spellCheck={false} autoCapitalize="off" autoCorrect="off"
             onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
-          {busy || adding ? <Loader2 size={14} className="spin" /> : link ? <span className="kbd-hint">回车订阅</span> : !open && !q && <kbd className="kbd-hint" title="按 ⌘L 搜索">⌘L</kbd>}
+          {busy || adding ? <Loader2 size={14} className="spin" /> : link ? <span className="kbd-hint">{t("回车订阅")}</span> : !open && !q && <kbd className="kbd-hint" title={t("按 ⌘L 搜索")}>⌘L</kbd>}
         </div>
         {open && results && (
           <div className="search-drop">
-            {results.length === 0 ? <p className="muted small center">没有找到，换个关键词试试</p> : results.map((r) => {
+            {results.length === 0 ? <div className="drop-empty"><SearchArt /><p className="muted small">{t("没有找到，换个关键词试试")}</p></div> : results.map((r) => {
               const done = shows.some((s) => s.feedUrl === r.feedUrl);
               return (
                 <div key={r.feedUrl} className="drop-row" onMouseDown={(e) => e.preventDefault()}>
                   {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
                   <div className="drop-meta"><BiTitle text={r.title} className="ep-name" subClassName="clamp1" /><p className="meta-line clamp1">{r.author}</p></div>
-                  {done ? <span className="sub-done">已订阅</span> : <button className="btn sm" onClick={() => subscribe(r.feedUrl)} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} 订阅</button>}
+                  {done ? <span className="sub-done">{t("已订阅")}</span> : <button className="btn sm" onClick={() => subscribe(r.feedUrl)} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}</button>}
                 </div>
               );
             })}
@@ -145,7 +158,7 @@ function TaskChip() {
   const [id, job] = running;
   return (
     <button className="task-chip" onClick={() => go({ kind: "episode", id })}>
-      <Loader2 size={13} className="spin" /> {job.stage === "download" ? (job.message ?? "正在准备") : "正在生成字幕"} · {Math.round(job.progress * 100)}%
+      <Loader2 size={13} className="spin" /> {job.stage === "download" ? (job.message ? tr(job.message) : t("正在准备")) : t("正在生成字幕")} · {Math.round(job.progress * 100)}%
     </button>
   );
 }
@@ -175,7 +188,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
   return (
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
-        <div className="modal-head"><h3>{title}</h3><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={18} /></button></div>
+        <div className="modal-head"><h3>{title}</h3><button className="icon-btn" onClick={onClose} aria-label={t("关闭")}><X size={18} /></button></div>
         <div className="modal-body">{children}</div>
       </div>
     </div>
@@ -188,6 +201,8 @@ export function AddDialog() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const close = () => set({ addOpen: false });
+  // Split around the placeholder so "RSS" can stay bold wherever the translation puts it.
+  const rss = t("任意播客 {rss} 地址", { rss: "\u0000" }).split("\u0000");
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
@@ -195,26 +210,26 @@ export function AddDialog() {
     try {
       const r = await api.addSubscription(input);
       close();
-      if (r.show) { await reloadShows(); notify(`已订阅「${r.show.title}」`); go({ kind: "show", id: r.show.id }); }
+      if (r.show) { await reloadShows(); notify(t("已订阅「{name}」", { name: r.show.title })); go({ kind: "show", id: r.show.id }); }
       else if (r.episode) openEpisode(r.episode);
     } catch (err) { setError(errorText(err)); } finally { setBusy(false); }
   };
   return (
-    <Modal title="添加节目" onClose={close}>
+    <Modal title={t("添加节目")} onClose={close}>
       <form onSubmit={submit} className="add-form">
-        <input autoFocus autoCapitalize="off" autoCorrect="off" spellCheck={false} value={input} onChange={(e) => setInput(e.target.value)} placeholder="粘贴 YouTube / Apple Podcasts / 小宇宙 / RSS 链接" />
+        <input autoFocus autoCapitalize="off" autoCorrect="off" spellCheck={false} value={input} onChange={(e) => setInput(e.target.value)} placeholder={t("粘贴 YouTube / Apple Podcasts / 小宇宙 / RSS 链接")} />
         {error && <p className="error-text">{error}</p>}
         <ul className="hints muted small">
-          <li><b>YouTube</b> 频道（@名字 / 频道链接 / 播放列表），或单个视频链接</li>
-          <li><b>Apple Podcasts</b> 节目链接</li>
-          <li><b>小宇宙</b> 节目或单集链接</li>
-          <li>任意播客 <b>RSS</b> 地址</li>
+          <li><b>YouTube</b> {t("频道（@名字 / 频道链接 / 播放列表），或单个视频链接")}</li>
+          <li><b>Apple Podcasts</b> {t("节目链接")}</li>
+          <li><b>{t("小宇宙")}</b> {t("节目或单集链接")}</li>
+          <li>{rss[0]}<b>RSS</b>{rss[1]}</li>
         </ul>
         <div className="modal-foot">
-          <button type="button" className="btn ghost" onClick={() => { close(); useStore.getState().go({ kind: "discover" }); }}>按名称搜索节目</button>
+          <button type="button" className="btn ghost" onClick={() => { close(); useStore.getState().go({ kind: "discover" }); }}>{t("按名称搜索节目")}</button>
           <div className="spacer" />
-          <button type="button" className="btn ghost" onClick={close}>取消</button>
-          <button type="submit" className="btn primary" disabled={busy || !input.trim()}>{busy ? <><Loader2 size={14} className="spin" /> 正在读取…</> : "添加"}</button>
+          <button type="button" className="btn ghost" onClick={close}>{t("取消")}</button>
+          <button type="submit" className="btn primary" disabled={busy || !input.trim()}>{busy ? <><Loader2 size={14} className="spin" /> {t("正在读取…")}</> : t("添加")}</button>
         </div>
       </form>
     </Modal>

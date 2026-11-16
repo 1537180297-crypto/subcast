@@ -5,7 +5,9 @@ mod feeds;
 mod llm;
 mod model;
 mod net;
+mod offline;
 mod qiaomu;
+mod shared;
 mod transcript;
 mod translate;
 mod youtube;
@@ -349,16 +351,123 @@ async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res
 
 #[tauri::command]
 async fn youtube_stream(state: State<'_, AppState>, video_id: String) -> Res<String> {
-    let ytdlp = match asr::find_ytdlp(&state.data) {
-        Some(p) => p,
-        None => asr::install_ytdlp(&state.data, &std::sync::atomic::AtomicBool::new(false), |_, _| {}).await.map_err(e)?,
-    };
-    asr::youtube_stream_url(&ytdlp, &video_id).await.map_err(e)
+    asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v).await } }).await.map_err(e)
+}
+
+// ---- offline -------------------------------------------------------------------------------------------
+
+#[tauri::command]
+async fn download_episode(app: AppHandle, state: State<'_, AppState>, episode_id: String) -> Res<offline::Saved> {
+    if let Some(s) = offline::find(&state.data, &episode_id) { return Ok(s); }
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let job = format!("dl:{episode_id}");
+    let cancel = state.job(&job);
+    let id = episode_id.clone();
+    let result = offline::download(&state.data, &ep, cancel, |p| { let _ = app.emit("offline", json!({ "episodeId": id, "progress": p })); }).await.map_err(e);
+    state.done(&job);
+    result
+}
+
+#[tauri::command]
+fn list_downloads(state: State<'_, AppState>) -> Vec<offline::Saved> { offline::list(&state.data) }
+
+#[tauri::command]
+fn delete_download(state: State<'_, AppState>, episode_id: String) -> Res<()> { offline::remove(&state.data, &episode_id).map_err(e) }
+
+#[tauri::command]
+fn clear_downloads(state: State<'_, AppState>) -> Res<()> { offline::clear(&state.data).map_err(e) }
+
+fn dir_bytes(p: &std::path::Path) -> u64 {
+    std::fs::read_dir(p).map(|rd| rd.flatten().map(|f| match f.metadata() {
+        Ok(m) if m.is_dir() => dir_bytes(&f.path()),
+        Ok(m) => m.len(),
+        Err(_) => 0,
+    }).sum()).unwrap_or(0)
+}
+
+/// The full show notes when the feed only carried a short summary (rss.qiaomu.ai channels cut it at
+/// ~300 characters): the YouTube description when the episode has a video (chapters and links), else
+/// the 小宇宙 shownotes. Kept in the "notes-full" blob, so each episode is fetched once.
+#[tauri::command]
+async fn full_notes(state: State<'_, AppState>, episode_id: String) -> Res<Option<String>> {
+    if let Some(cached) = db::get_blob(&state.db.lock().unwrap(), &episode_id, "notes-full").map_err(e)? { return Ok(Some(cached).filter(|s| !s.is_empty())); }
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let have = ep.notes.as_deref().map(|n| n.chars().count()).unwrap_or(0);
+    let mut best: Option<String> = None;
+    let mut reached = false;
+    if let Some(v) = &ep.video_id {
+        if let Ok(info) = youtube::video_info(v).await { reached = true; if !info.description.trim().is_empty() { best = Some(info.description); } }
+    }
+    if let Some(link) = ep.link.as_deref().filter(|l| l.contains("xiaoyuzhoufm.com/episode/")) {
+        if let Ok(x) = feeds::xiaoyuzhou_episode(link).await {
+            reached = true;
+            if let Some(n) = x.notes { if best.as_ref().map_or(true, |b| n.chars().count() > b.chars().count()) { best = Some(n); } }
+        }
+    }
+    // Only keep it when it really is longer; "" marks "checked, nothing better" so we don't ask again.
+    let out = best.filter(|b| b.chars().count() > have + 40);
+    if out.is_none() && !reached { return Ok(None); } // offline or blocked: try again next time
+    db::set_blob(&state.db.lock().unwrap(), &episode_id, "notes-full", out.as_deref().unwrap_or("")).map_err(e)?;
+    Ok(out)
+}
+
+/// What SubCast keeps on disk, for the storage section of Settings.
+#[tauri::command]
+fn storage_info(state: State<'_, AppState>) -> serde_json::Value {
+    let d = &state.data;
+    let library: u64 = ["subcast.db", "subcast.db-wal", "subcast.db-shm"].iter().map(|f| std::fs::metadata(d.join(f)).map(|m| m.len()).unwrap_or(0)).sum();
+    json!({
+        "downloads": dir_bytes(&offline::dir(d)),
+        "models": dir_bytes(&asr::models_dir(d)),
+        "library": library,
+        "temp": dir_bytes(&d.join("work")),
+    })
+}
+
+/// Opens one of SubCast's folders in Finder / Explorer ("downloads" or "models"), creating it first.
+#[tauri::command]
+fn open_data_folder(app: AppHandle, state: State<'_, AppState>, kind: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = match kind.as_str() { "downloads" => offline::dir(&state.data), "models" => asr::models_dir(&state.data), _ => state.data.clone() };
+    std::fs::create_dir_all(&dir).map_err(e)?;
+    app.opener().open_path(dir.to_string_lossy(), None::<&str>).map_err(e)
+}
+
+/// Shows one downloaded episode's file selected in Finder / Explorer.
+#[tauri::command]
+fn reveal_download(app: AppHandle, state: State<'_, AppState>, episode_id: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let saved = offline::find(&state.data, &episode_id).ok_or("没有找到下载的文件")?;
+    app.opener().reveal_item_in_dir(&saved.path).map_err(e)
+}
+
+/// Removes leftovers of interrupted transcriptions.
+#[tauri::command]
+fn clear_temp(state: State<'_, AppState>) -> Res<()> {
+    let dir = state.data.join("work");
+    if dir.exists() { std::fs::remove_dir_all(&dir).map_err(e)?; }
+    Ok(())
 }
 
 #[tauri::command]
 async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String, cloud: Option<cloud::CloudAsr>) -> Res<Transcript> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    // Someone else may have shared this episode's subtitles; a hit skips the download + ASR pass
+    // entirely (and works even without a local model).
+    let share_keys = shared::keys(&ep);
+    if let Some(mut hit) = shared::lookup(&share_keys).await {
+        let translation = hit.translation.take();
+        let t = shared::into_transcript(&ep.id, hit);
+        if let Some(tr) = &translation {
+            let conn = state.db.lock().unwrap();
+            for (seg, item) in t.segments.iter().zip(tr.items.iter()) {
+                if let Some(v) = item { let _ = db::tr_put(&conn, &short_hash(&format!("{}|{}", tr.lang, seg.text), 24), v); }
+            }
+        }
+        db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
+        asr_emit(&app, &episode_id, "done", 1.0, None, None);
+        return Ok(t);
+    }
     let spec = asr::spec(&model).ok_or("未知模型")?;
     let model_path = asr::models_dir(&state.data).join(spec.file);
     if cloud.is_none() && !model_path.is_file() { return Err("请先下载识别模型".into()); }
@@ -367,19 +476,14 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
     let result = async {
         let _ = tokio::fs::create_dir_all(&work).await;
         asr_emit(&app, &episode_id, "download", 0.0, None, None);
-        let audio = if let Some(vid) = &ep.video_id {
-            let ytdlp = match asr::find_ytdlp(&state.data) {
-                Some(p) => p,
-                None => {
-                    asr_emit(&app, &episode_id, "download", 0.0, Some("正在准备 YouTube 下载工具".into()), None);
-                    asr::install_ytdlp(&state.data, &cancel, |_, _| {}).await.map_err(e)?
-                }
-            };
-            asr::youtube_audio(&ytdlp, vid, &work, cancel.clone()).await.map_err(e)?
+        let audio = if let Some(saved) = offline::find(&state.data, &episode_id) {
+            PathBuf::from(saved.path)
+        } else if let Some(vid) = &ep.video_id {
+            if asr::find_ytdlp(&state.data).is_none() { asr_emit(&app, &episode_id, "download", 0.0, Some("正在准备 YouTube 下载工具".into()), None); }
+            asr::with_ytdlp(&state.data, |bin| { let (v, w, c) = (vid.clone(), work.clone(), cancel.clone()); async move { asr::youtube_audio(&bin, &v, &w, c).await } }).await.map_err(e)?
         } else {
             let url = ep.audio_url.clone().ok_or("这集没有音频地址")?;
-            let ext = url.split('?').next().and_then(|u| u.rsplit('.').next()).filter(|x| x.len() <= 4).unwrap_or("mp3").to_lowercase();
-            let dest = work.join(format!("audio.{ext}"));
+            let dest = work.join(format!("audio.{}", offline::audio_ext(&url)));
             let app2 = app.clone();
             let id2 = episode_id.clone();
             asr::download(&url, &dest, &cancel, move |got, total| {
@@ -433,11 +537,53 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
     state.done(&episode_id);
+    // Share what we just made, so the next person listening to this episode skips transcribing.
+    if let (Ok(t), false) = (&result, share_keys.is_empty()) {
+        let (share_on, install) = {
+            let conn = state.db.lock().unwrap();
+            let on = db::get_setting(&conn, "app").ok().flatten()
+                .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                .and_then(|s| s["shareTranscripts"].as_bool()).unwrap_or(true);
+            (on, install_id(&conn))
+        };
+        if share_on {
+            let last_end = t.segments.last().map(|s| s.end).unwrap_or(0.0);
+            let translation = {
+                let conn = state.db.lock().unwrap();
+                let items: Vec<Option<String>> = t.segments.iter().map(|s| db::tr_get(&conn, &short_hash(&format!("zh-CN|{}", s.text), 24)).ok().flatten()).collect();
+                let filled = items.iter().filter(|i| i.is_some()).count();
+                (filled * 5 >= items.len() * 3).then(|| ("zh-CN".to_string(), items))
+            };
+            let meta = shared::UploadMeta {
+                title: ep.title.clone(),
+                show: ep.show_title.clone().unwrap_or_default(),
+                duration: ep.duration.unwrap_or(0.0).max(last_end).max(1.0),
+                source: if cloud.is_some() { "cloud".into() } else if spec.engine == "qwen3" { "qwen3".into() } else { "whisper".into() },
+                model: cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.to_string()),
+                language: t.language.clone(),
+                install,
+                translation,
+            };
+            let segs = t.segments.clone();
+            let app2 = app.clone();
+            tokio::spawn(async move {
+                if let Ok(action) = shared::upload(&share_keys, meta, &segs).await { let _ = app2.emit("shared-upload", action); }
+            });
+        }
+    }
     match &result {
         Ok(_) => asr_emit(&app, &episode_id, "done", 1.0, None, None),
         Err(m) => asr_emit(&app, &episode_id, "error", 0.0, Some(m.clone()), None),
     }
     result
+}
+
+/// A random id for this install; the server stores only a salted hash of it, for vote/report dedupe.
+fn install_id(conn: &Connection) -> String {
+    if let Ok(Some(id)) = db::get_setting(conn, "install") { return id; }
+    let id = uuid::Uuid::new_v4().to_string();
+    let _ = db::set_setting(conn, "install", &id);
+    id
 }
 
 #[tauri::command]
@@ -531,6 +677,19 @@ async fn translate_texts(state: State<'_, AppState>, texts: Vec<String>, target:
     Ok(out.into_iter().map(Option::unwrap_or_default).collect())
 }
 
+/// The native menu's own items, in the interface language: [settings].
+#[tauri::command]
+fn set_menu_labels(app: AppHandle, labels: Vec<String>) -> Res<()> {
+    let Some(menu) = app.menu() else { return Ok(()) };
+    for sub in menu.items().map_err(e)? {
+        let Some(sub) = sub.as_submenu() else { continue };
+        if let Some(item) = sub.get("settings").and_then(|i| i.as_menuitem().cloned()) {
+            if let Some(l) = labels.first() { item.set_text(l).map_err(e)?; }
+        }
+    }
+    Ok(())
+}
+
 // ---- app ------------------------------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -544,7 +703,10 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_localhost::Builder::new(LOCAL_PORT).build());
     builder
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data)?;
             let conn = db::open(&data.join("subcast.db"))?;
@@ -584,7 +746,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -601,7 +764,8 @@ mod live {
         for id in ids {
             let ch = crate::qiaomu::rss_channel(id).await.unwrap();
             let playable = |x: &Episode| x.audio_url.is_some() || x.video_id.is_some();
-            println!("{id}: {} eps={} playable={} deep={} cover={}", ch.show.title, ch.episodes.len(), ch.episodes.iter().filter(|x| playable(x)).count(), ch.episodes.iter().filter(|x| x.deep).count(), ch.show.cover.is_some());
+            println!("{id}: {} eps={} playable={} video={} deep={} cover={}", ch.show.title, ch.episodes.len(), ch.episodes.iter().filter(|x| playable(x)).count(), ch.episodes.iter().filter(|x| x.video_id.is_some()).count(), ch.episodes.iter().filter(|x| x.deep).count(), ch.show.cover.is_some());
+            if id == "nexttoken" { assert!(ch.episodes.iter().filter(|x| x.video_id.is_some()).count() * 2 >= ch.episodes.len(), "nexttoken episodes should mostly have the YouTube video"); }
             assert!(!id.starts_with("podscribe-") || ch.episodes.iter().all(|x| x.transcript_url.is_some()), "{id}: podscribe episodes need a transcript");
             assert!(id.starts_with("podscribe-") || ch.episodes.iter().all(playable), "{id}: unplayable entries should be skipped");
             if id.starts_with("podscribe-") {
@@ -682,6 +846,21 @@ mod live {
             }
         }
         assert!(bad.is_empty(), "failed: {bad:?}");
+    }
+    #[tokio::test]
+    #[ignore]
+    async fn ytdlp_stays_current() {
+        let data = std::env::temp_dir().join(format!("subcast-ytdlp-{}", uuid::Uuid::new_v4()));
+        let bin = asr::ytdlp(&data).await.unwrap();
+        assert!(bin.starts_with(&data), "uses its own copy");
+        std::fs::remove_file(data.join("bin/yt-dlp.checked")).ok();
+        // Freshly installed from the latest release: the check finds nothing newer.
+        assert!(!asr::update_ytdlp(&data, false).await.unwrap());
+        // Checked just now: no second network call within the day.
+        assert!(!asr::update_ytdlp(&data, false).await.unwrap());
+        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ").await }).await.unwrap();
+        println!("stream: {}", &url[..url.len().min(80)]);
+        let _ = std::fs::remove_dir_all(&data);
     }
     #[tokio::test]
     #[ignore]

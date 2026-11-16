@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { tr } from "./i18n";
 
 export interface Show {
   id: string;
@@ -43,11 +44,15 @@ export interface Provider { id: string; name: string; protocol: "openai" | "anth
 export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
 export interface ChatMessage { role: "user" | "assistant"; content: string; /** Which model wrote an answer, for display. */ model?: string }
 
+/** An episode saved for offline listening. */
+export interface Saved { episodeId: string; path: string; bytes: number; savedAt: number }
+
 export interface AsrEvent { episodeId: string; stage: "download" | "transcribe" | "segment" | "done" | "error"; progress: number; message?: string; segment?: Segment }
 
 export const api = {
   addSubscription: (input: string) => invoke<{ show?: Show; episode?: Episode }>("add_subscription", { input }),
   refreshShow: (id: string) => invoke<Show>("refresh_show", { id }),
+  setMenuLabels: (labels: string[]) => invoke<void>("set_menu_labels", { labels }),
   refreshAll: () => invoke<{ shows: number; newEpisodes: number; skipped: boolean }>("refresh_all"),
   listShows: () => invoke<Show[]>("list_shows"),
   listEpisodes: (showId?: string, limit?: number) => invoke<Episode[]>("list_episodes", { showId, limit }),
@@ -78,6 +83,15 @@ export const api = {
   ttsSpeak: (text: string, voice: string, resource?: string) => invoke<string>("tts_speak", { text, voice, resource }),
   youtubeStream: (videoId: string) => invoke<string>("youtube_stream", { videoId }),
   translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
+  downloadEpisode: (episodeId: string) => invoke<Saved>("download_episode", { episodeId }),
+  listDownloads: () => invoke<Saved[]>("list_downloads"),
+  deleteDownload: (episodeId: string) => invoke<void>("delete_download", { episodeId }),
+  clearDownloads: () => invoke<void>("clear_downloads"),
+  storageInfo: () => invoke<{ downloads: number; models: number; library: number; temp: number }>("storage_info"),
+  openDataFolder: (kind: "downloads" | "models" | "data") => invoke<void>("open_data_folder", { kind }),
+  revealDownload: (episodeId: string) => invoke<void>("reveal_download", { episodeId }),
+  clearTemp: () => invoke<void>("clear_temp"),
+  fullNotes: (episodeId: string) => invoke<string | null>("full_notes", { episodeId }),
 };
 
 let llmCounter = 0;
@@ -120,4 +134,6 @@ export async function llmChat(opts: {
   }
 }
 
-export const errorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+/** The error as it came, for matching on its wording; show it with errorText (or tr). */
+export const rawErrorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+export const errorText = (e: unknown) => tr(rawErrorText(e));

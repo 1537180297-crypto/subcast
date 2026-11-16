@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { t } from "../lib/i18n";
 
 /** A draggable column edge. `edge` says which side of the resized column it sits on: dragging toward the column
  *  shrinks it. Past `snap` it collapses; double-click restores the default; arrow keys nudge by 16px. */
@@ -19,7 +20,7 @@ export function Splitter({ value, min, max, def, snap, edge, onChange, onCollaps
       aria-valuemax={max}
       aria-valuenow={value}
       tabIndex={0}
-      title={`拖动调整宽度 · 双击恢复默认`}
+      title={t("拖动调整宽度 · 双击恢复默认")}
       onPointerDown={(e) => {
         e.preventDefault();
         (e.target as HTMLElement).setPointerCapture(e.pointerId);

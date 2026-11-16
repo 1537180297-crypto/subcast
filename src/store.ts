@@ -1,11 +1,13 @@
 import { create } from "zustand";
 import { api, type Episode, type Show } from "./lib/api";
 import { DEFAULTS, loadSettings, type Settings } from "./lib/settings";
+import { setLang, t } from "./lib/i18n";
 
 export type View =
   | { kind: "latest" }
   | { kind: "recent" }
   | { kind: "discover" }
+  | { kind: "downloads" }
   | { kind: "show"; id: string }
   | { kind: "channel"; input: string }
   | { kind: "episode"; id: string };
@@ -32,7 +34,7 @@ interface State {
   player: PlayerHandle | null;
   toast: string | null;
   settingsOpen: boolean;
-  settingsSection?: "model" | "asr" | "tts" | "general" | "about";
+  settingsSection?: "model" | "asr" | "tts" | "general" | "storage" | "about";
   addOpen: boolean;
   init(): Promise<void>;
   go(view: View): void;
@@ -43,7 +45,7 @@ interface State {
   /** Loads an episode into the player without navigating. */
   load(ep: Episode): void;
   notify(text: string): void;
-  openSettings(section?: "model" | "asr" | "tts" | "general" | "about"): void;
+  openSettings(section?: "model" | "asr" | "tts" | "general" | "storage" | "about"): void;
   /** Checks every subscription for new episodes; tells the user when there are some. */
   checkUpdates(): Promise<void>;
   lastChecked: number;
@@ -71,6 +73,8 @@ export const useStore = create<State>((set, get) => ({
   addOpen: false,
   async init() {
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
+    setLang(settings.uiLang);
+    void api.setMenuLabels([t("设置…")]).catch(() => {});
     set({ settings, shows, ready: true });
     void get().checkUpdates();
     // Periodically, and when the window comes back after a while (the app may sit in the background for hours).
@@ -85,7 +89,7 @@ export const useStore = create<State>((set, get) => ({
       const r = await api.refreshAll();
       if (r.skipped) return;
       await get().reloadShows();
-      if (r.newEpisodes > 0) get().notify(`订阅有 ${r.newEpisodes} 期新节目`);
+      if (r.newEpisodes > 0) get().notify(t("订阅有 {n} 期新节目", { n: r.newEpisodes }));
     } catch { /* offline: try again next time */ }
   },
   go(view) {
@@ -101,6 +105,7 @@ export const useStore = create<State>((set, get) => ({
   },
   async saveSettings(patch) {
     const settings = { ...get().settings, ...patch };
+    if (patch.uiLang) { setLang(patch.uiLang); void api.setMenuLabels([t("设置…")]).catch(() => {}); }
     set({ settings });
     await api.setSettings(settings);
   },

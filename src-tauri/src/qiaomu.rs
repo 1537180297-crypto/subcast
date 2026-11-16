@@ -182,6 +182,29 @@ fn norm_title(t: &str) -> String {
     t.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
+/// rss.qiaomu.ai sources that also post every episode to a YouTube channel: source id → channel id.
+/// Videos are matched to episodes by the number both titles carry ("#010 …" ↔ "EP010 …").
+fn youtube_channel(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "nexttoken" => "UC_9pr_usdNG29RauPFwIFQw",
+        _ => return None,
+    })
+}
+
+struct YtVideo { id: String, num: Option<u32> }
+
+/// The channel's recent videos from its public feed (no API key, no yt-dlp needed).
+async fn youtube_videos(channel_id: &str) -> Vec<YtVideo> {
+    let Ok(xml) = net::get_text(&format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")).await else { return vec![] };
+    Regex::new(r"(?s)<yt:videoId>s*([^<]+?)s*</yt:videoId>.*?<title>([^<]*)</title>").unwrap()
+        .captures_iter(&xml).map(|c| YtVideo { id: c[1].to_string(), num: episode_num(&c[2]) }).collect()
+}
+
+/// The episode number both the audio feed ("#010 …") and the video title ("EP010 …") carry.
+fn episode_num(title: &str) -> Option<u32> {
+    Regex::new(r"(?i)(?:\bEP\s*0*|#\s*0*)(\d{1,4})\b").unwrap().captures(title)?.get(1)?.as_str().parse().ok()
+}
+
 /// The show's own feed for each Podscribe source (search by name finds the wrong show for some).
 fn original_feed(id: &str) -> Option<&'static str> {
     Some(match id {
@@ -249,6 +272,7 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
     if entries.is_empty() { return Err(anyhow!("这个频道还没有节目")); }
     let podscribe = id.starts_with("podscribe-");
     let borrowed = if podscribe { borrowable(id, &name).await } else { vec![] };
+    let yt = match youtube_channel(id) { Some(ch) => youtube_videos(ch).await, None => vec![] };
     let feed = rss_feed_url(id);
     let show_id = short_hash(&feed, 16);
     let mut zh_titles = vec![];
@@ -259,7 +283,8 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
         let link = e["link"].as_str().map(String::from);
         let (mut audio, mut duration) = (e["audio"]["url"].as_str().map(String::from), None);
         if audio.is_none() { if let Some(b) = find_audio(&borrowed, &title, e["publishedTs"].as_i64()) { audio = Some(b.audio.clone()); duration = b.duration; } }
-        let video = link.as_deref().and_then(crate::feeds::youtube_video_id);
+        let video = link.as_deref().and_then(crate::feeds::youtube_video_id)
+            .or_else(|| episode_num(&title).and_then(|n| yt.iter().find(|v| v.num == Some(n))).map(|v| v.id.clone()));
         // Some sources mix in written posts (Latent Space's AINews); without a transcript there is nothing to play or follow.
         if audio.is_none() && video.is_none() && !podscribe { return None; }
         let transcript_url = if podscribe { link.as_deref().and_then(|l| l.strip_prefix("https://podcasts.happyscribe.com/")).map(|p| format!("https://api.qiaomu.ai/podscribe/v1/episodes/{p}/transcript")) } else { None };
@@ -378,6 +403,15 @@ mod tests {
         // No date: only a near-identical title counts.
         assert_eq!(find_audio(&pool, "Ex-CIA Officer: Trump Knew About The China Spy!", None).map(|x| x.title.as_str()), Some(pool[3].title.as_str()));
         assert!(find_audio(&pool, "The China Question", None).is_none());
+    }
+
+    #[test]
+    fn episode_numbers() {
+        assert_eq!(episode_num("#010 黄仁勋辞职，Fable 杀死比赛，语言即世界"), Some(10));
+        assert_eq!(episode_num("EP010 Jensen Huang Steps Down, Fable Blows Rivals Away"), Some(10));
+        assert_eq!(episode_num("Weekly #001 大模型进入“斩杀线”大战"), Some(1));
+        assert_eq!(episode_num("#3 没有前导零"), Some(3));
+        assert_eq!(episode_num("没有编号的一期节目 2024"), None);
     }
 
     #[test]

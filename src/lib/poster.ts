@@ -1,6 +1,7 @@
 // Quote posters, after elon.qiaomu.ai's kit.js: a 1080px-wide canvas with the quote (Chinese first, original
 // below), where it came from, and a QR code back to the episode.
 import qrcode from "qrcode-generator";
+import { t } from "./i18n";
 
 const SERIF = '"Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif';
 const LATIN = 'Georgia, "Times New Roman", serif';
@@ -54,7 +55,7 @@ export async function drawPoster(o: PosterInput, logo?: HTMLImageElement): Promi
   g.fillStyle = "#16171a"; g.font = `700 32px ${SANS}`; g.textBaseline = "alphabetic";
   g.fillText("SubCast", P + (logo ? 56 : 0), 110);
   g.font = `400 22px ${SANS}`; g.fillStyle = "#6b6e76";
-  const kick = o.show || "播客摘句";
+  const kick = o.show || t("播客摘句");
   g.fillText(kick, W - P - g.measureText(kick).width, 108);
   g.fillStyle = "#16171a"; g.fillRect(P, 140, CW, 3); g.fillRect(P, 148, CW, 1);
   // quote mark in the brand orange
@@ -68,7 +69,7 @@ export async function drawPoster(o: PosterInput, logo?: HTMLImageElement): Promi
   // source
   y += 70;
   g.fillStyle = "#16171a"; g.font = `600 30px ${SERIF}`;
-  g.fillText(`—— ${o.show || "播客"}`, P, y);
+  g.fillText(`—— ${o.show || t("播客")}`, P, y);
   y += 44; g.fillStyle = "#55585f"; g.font = srcFont;
   srcLines.forEach((ln) => { g.fillText(ln, P, y); y += 42; });
   if (o.meta) { g.font = `400 24px ${SANS}`; g.fillStyle = "#8b8f98"; g.fillText(o.meta, P, y); }
@@ -76,8 +77,8 @@ export async function drawPoster(o: PosterInput, logo?: HTMLImageElement): Promi
   const fy = c.height - P - 220;
   g.fillStyle = "#dcdde2"; g.fillRect(P, fy - 30, CW, 1);
   g.fillStyle = "#16171a"; g.font = `700 38px ${SANS}`; g.fillText("SubCast", P, fy + 52);
-  g.font = `400 26px ${SANS}`; g.fillStyle = "#55585f"; g.fillText("海外好播客 · 中文字幕 · 精读与 AI 问答", P, fy + 104);
-  g.fillStyle = "#3a6df0"; g.font = `600 26px ${SANS}`; g.fillText("扫码收听原节目这一段", P, fy + 152);
+  g.font = `400 26px ${SANS}`; g.fillStyle = "#55585f"; g.fillText(t("海外好播客 · 中文字幕 · 精读与 AI 问答"), P, fy + 104);
+  g.fillStyle = "#3a6df0"; g.font = `600 26px ${SANS}`; g.fillText(t("扫码收听原节目这一段"), P, fy + 152);
   if (o.url) {
     try {
       const qr = qrcode(0, "M"); qr.addData(o.url); qr.make();
