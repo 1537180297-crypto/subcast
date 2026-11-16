@@ -1,48 +1,33 @@
 # 部署 SubCast 共享字幕 API（myvps）
 
-目标：systemd 独立 Node 服务（不用 Docker），监听私有回环端口 8787，经 Nginx 暴露在 `https://subcast.qiaomu.ai/api/`。遵循 qiaomu-vps-website-ops 约定（参考 rss.qiaomu.ai 的 systemd Node 服务）。
+目标：Docker Compose（Qiaomu 服务器的约定），容器只绑私有回环端口 127.0.0.1:8787，经 Nginx 暴露在 `https://subcast.qiaomu.ai/api/`。服务零依赖，直接用官方 `node:22-alpine` 镜像运行源码，不需要构建镜像。
 
-## 1. 服务器准备（一次性）
-
-```bash
-ssh myvps 'useradd --system --home /opt/qiaomu-apps/subcast-api --shell /usr/sbin/nologin subcast || true'
-ssh myvps 'mkdir -p /opt/qiaomu-apps/subcast-api/data && chown -R subcast:subcast /opt/qiaomu-apps/subcast-api'
-```
-
-VPS 上是 Node v22.23.4（`/usr/bin/node`），内置 `node:sqlite` 无需额外参数即可用，**不需要 npm install**（零依赖）。
-
-## 2. 同步代码
+## 1. 同步代码
 
 在本地仓库根目录执行：
 
 ```bash
-rsync -az --delete --exclude data --exclude node_modules --exclude .git \
+ssh myvps 'mkdir -p /opt/qiaomu-apps/subcast-api/data'
+rsync -az --delete --exclude data --exclude node_modules --exclude test --exclude .env \
   server/ myvps:/opt/qiaomu-apps/subcast-api/
+scp server/deploy/docker-compose.yml myvps:/opt/qiaomu-apps/subcast-api/docker-compose.yml
 ```
 
-## 3. 环境文件
+## 2. 环境文件（只在服务器上生成，不经过本机）
 
 ```bash
-ssh myvps 'install -m 600 -o subcast -g subcast /dev/null /opt/qiaomu-apps/subcast-api/.env'
+ssh myvps 'cd /opt/qiaomu-apps/subcast-api && [ -f .env ] || (umask 077; printf "ADMIN_TOKEN=%s\n" "$(openssl rand -hex 32)" > .env)'
 ```
 
-然后写入以下内容（`ADMIN_TOKEN` 生成一个随机长串，例如 `openssl rand -hex 32`）：
-
-```
-PORT=8787
-HOST=127.0.0.1
-DATA_DIR=/opt/qiaomu-apps/subcast-api/data
-ADMIN_TOKEN=<随机长串>
-```
-
-## 4. systemd 服务
+## 3. 启动 / 更新
 
 ```bash
-scp server/deploy/subcast-api.service myvps:/etc/systemd/system/subcast-api.service
-ssh myvps 'systemctl daemon-reload && systemctl enable --now subcast-api && systemctl status subcast-api --no-pager | head -15'
+ssh myvps 'cd /opt/qiaomu-apps/subcast-api && docker compose up -d && docker compose ps'
 ```
 
-日志：`ssh myvps 'journalctl -u subcast-api -f'`（每请求一行，无 IP）。
+代码只读挂载，更新代码后 `docker compose restart` 即可。日志：`ssh myvps 'docker logs -f qiaomu-subcast-api'`（每请求一行，无 IP）。数据库在宿主机 `data/`，备份：`npm run backup` 等价于在容器里执行 `node scripts/backup.js`。
+
+（`deploy/subcast-api.service` 是早期的 systemd 方案，保留作参考，线上不用。）
 
 ## 5. Nginx
 
