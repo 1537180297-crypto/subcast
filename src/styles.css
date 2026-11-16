@@ -671,3 +671,36 @@ body.resizing iframe, body.resizing video { pointer-events: none; }
 .tabs button { white-space: nowrap; flex: none; padding: 0 10px; }
 @container (max-width: 420px) { .tabs button svg { display: none; } }
 .ep-right { container-type: inline-size; }
+
+/* ===================== settings v2 (Capwise port) ===================== */
+.settings-body { overflow-y: auto; }
+.provider-split { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; min-height: 380px; }
+.provider-list { overflow-y: auto; max-height: 440px; padding-right: 4px; border-right: 1px solid var(--line); }
+.provider-group + .provider-group { margin-top: 12px; }
+.provider-group-h { display: flex; align-items: baseline; justify-content: space-between; padding: 0 8px 4px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.provider-group-h span { font-weight: 400; font-size: 11px; }
+.provider-item { display: flex; align-items: center; justify-content: space-between; width: 100%; height: 30px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; text-align: left; }
+.provider-item:hover { background: var(--soft); }
+.provider-item.on { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.dot-on { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.provider-title { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+.model-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip.sm { height: 24px; padding: 0 9px; font-size: 12px; }
+.chip.on { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); font-weight: 600; }
+.engine-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.engine { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); text-align: left; cursor: pointer; color: var(--text-2); }
+.engine p:first-child { font-weight: 600; color: var(--text); }
+.engine.on { border-color: var(--accent); background: var(--accent-soft); }
+.engine.on svg { color: var(--accent); }
+.about { display: flex; flex-direction: column; align-items: center; gap: 22px; padding: 12px 0 8px; }
+.about-id { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+.about-id img { width: 72px; height: 72px; }
+.about-name { margin-top: 8px; font-size: 22px; font-weight: 700; }
+.about-ver { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 6px; }
+.row-actions.center { justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+.about-qr { display: flex; gap: 16px; }
+.qr-card { width: 180px; padding: 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+.qr-card img { width: 140px; height: 140px; object-fit: contain; border-radius: 8px; background: #fff; }
+.qr-title { margin-top: 6px; font-weight: 600; font-size: 13.5px; }
+.about-links { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+.center { text-align: center; }

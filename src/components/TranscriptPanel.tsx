@@ -186,9 +186,10 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   const { downloading, start, cancel } = useModelDownload(refresh);
   const [options, setOptions] = useState(false);
   const model = models.find((m) => m.id === settings.asrModel) ?? models[0];
+  const cloud = settings.asrEngine !== "local" ? settings.cloudAsr[settings.asrEngine] : undefined;
   const generate = async () => {
     if (!model) return;
-    if (!model.installed && !(await start(model.id, settings.mirrorFirst))) return;
+    if (!cloud && !model.installed && !(await start(model.id, settings.mirrorFirst))) return;
     void generateTranscript(ep, model.id, settings.asrLanguage);
   };
   const retry = () => useJobs.setState((s) => { const a = { ...s.asr }; delete a[ep.id]; return { asr: a }; });
@@ -230,15 +231,15 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
       </div>
     );
   }
-  const needsDownload = model && !model.installed;
+  const needsDownload = !cloud && model && !model.installed;
   const reason = official === "error" ? `读取字幕失败：${officialError}` : "这集没有字幕";
   return (
     <div className="transcript">
       <StatusLine text={needsDownload ? `${reason} · 首次需下载识别模型（约 ${model.sizeMb >= 900 ? "1 GB" : `${model.sizeMb} MB`}，仅一次）` : reason}
         action={<button className="btn primary sm" onClick={generate} disabled={!model}>{needsDownload ? "下载并生成字幕" : "生成字幕"}</button>} />
       <div className="panel-empty">
-        <p className="lead">用本机模型生成字幕</p>
-        <p className="muted">音频只在本机处理，识别完即删除。生成后会自动翻译成中文。</p>
+        <p className="lead">{cloud ? `用${cloud.name}生成字幕` : "用本机模型生成字幕"}</p>
+        <p className="muted">{cloud ? "音频会发送到所选的云端识别服务，速度更快。可在设置 › 语音识别里切换回本机。" : "音频只在本机处理，识别完即删除。生成后会自动翻译成中文。"}</p>
         <button className="link-btn" onClick={() => setOptions(!options)}>{options ? "收起识别设置" : "识别设置"}</button>
         {options && (
           <div className="gen-options">

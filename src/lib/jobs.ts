@@ -53,7 +53,9 @@ export async function loadTranscript(ep: Episode) {
 export async function generateTranscript(ep: Episode, model: string, language: string) {
   patch("asr", ep.id, { stage: "download", progress: 0, live: [] });
   try {
-    const t = await api.transcribe(ep.id, model, language);
+    const { settings } = useStore.getState();
+    const cloud = settings.asrEngine !== "local" ? settings.cloudAsr[settings.asrEngine] : undefined;
+    const t = await api.transcribe(ep.id, model, language, cloud);
     patch("transcripts", ep.id, t);
     patch("translations", ep.id, { items: [], running: false, failed: 0 });
     void useStore.getState().reloadShows();

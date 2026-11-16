@@ -1,4 +1,4 @@
-import { api, type Provider } from "./api";
+import { api, type CloudAsr, type Provider } from "./api";
 
 export interface Settings {
   providers: Record<string, Provider>;
@@ -14,18 +14,81 @@ export interface Settings {
   autoTranslate: boolean;
   subtitleMode: "bilingual" | "original" | "translation";
   playbackRate: number;
+  /** "local", or the id of a cloud transcription service. */
+  asrEngine: string;
+  cloudAsr: Record<string, CloudAsr>;
+  ttsVoice: string;
+  ttsResource: string;
 }
 
-// Model names are suggestions; every field stays editable because providers rename models often.
+// The model catalogue, ported from Capwise. Model names are suggestions; every field stays editable because providers
+// rename models often, and 「获取模型列表」 reads the live list from the provider.
+type G = Provider["group"];
+const o = (id: string, name: string, group: G, baseUrl: string, keyUrl: string | undefined, models: string[] = [], needsKey = group !== "local"): Provider =>
+  ({ id, name, group, protocol: "openai", baseUrl, model: models[0] ?? "", needsKey, keyUrl, models });
+
 export const PRESETS: Provider[] = [
-  { id: "deepseek", name: "DeepSeek", protocol: "openai", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-flash", needsKey: true, keyUrl: "https://platform.deepseek.com/api_keys", models: ["deepseek-flash", "deepseek-v4-pro", "deepseek-chat"] },
-  { id: "siliconflow", name: "硅基流动", protocol: "openai", baseUrl: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3", needsKey: true, keyUrl: "https://cloud.siliconflow.cn/account/ak", models: ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen3-235B-A22B-Instruct-2507"] },
-  { id: "moonshot", name: "Kimi（月之暗面）", protocol: "openai", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k3", needsKey: true, keyUrl: "https://platform.moonshot.cn/console/api-keys", models: ["kimi-k3", "kimi-k2.6"] },
-  { id: "anthropic", name: "Claude（Anthropic）", protocol: "anthropic", baseUrl: "https://api.anthropic.com", model: "claude-opus-5-5", needsKey: true, keyUrl: "https://console.anthropic.com/settings/keys", models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] },
-  { id: "openai", name: "OpenAI", protocol: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-5.6-luna", needsKey: true, keyUrl: "https://platform.openai.com/api-keys", models: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"] },
-  { id: "openrouter", name: "OpenRouter", protocol: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-5.5", needsKey: true, keyUrl: "https://openrouter.ai/keys" },
-  { id: "ollama", name: "Ollama（本机）", protocol: "openai", baseUrl: "http://127.0.0.1:11434/v1", model: "qwen3.5", needsKey: false, models: ["qwen3.5", "gemma4", "gpt-oss:20b"] },
-  { id: "custom", name: "其他（OpenAI 兼容）", protocol: "openai", baseUrl: "", model: "", needsKey: true },
+  o("deepseek", "DeepSeek", "provider", "https://api.deepseek.com/v1", "https://platform.deepseek.com/api_keys", ["deepseek-flash", "deepseek-v4-pro"]),
+  o("siliconflow", "硅基流动", "relay", "https://api.siliconflow.cn/v1", "https://cloud.siliconflow.cn/account/ak", ["deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4-pro"]),
+  o("tokendance", "TokenDance", "relay", "https://tokendance.space/gateway/v1", "https://tokendance.space/keys", ["deepseek-v4-flash", "qwen3.8-flash", "kimi-k3"]),
+  o("openrouter", "OpenRouter", "relay", "https://openrouter.ai/api/v1", "https://openrouter.ai/settings/keys", ["anthropic/claude-sonnet-5.5"]),
+  o("opencode-go", "OpenCode Go", "relay", "https://opencode.ai/zen/go/v1", "https://opencode.ai/auth", ["deepseek-v4.1-flash", "glm-5.3-flash", "kimi-k3", "longcat-2.0", "mimo-v2.6-flash"]),
+  { id: "anthropic", name: "Claude（Anthropic）", group: "provider", protocol: "anthropic", baseUrl: "https://api.anthropic.com", model: "claude-opus-5-5", needsKey: true, keyUrl: "https://console.anthropic.com/settings/keys", models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] },
+  o("openai", "OpenAI", "provider", "https://api.openai.com/v1", "https://platform.openai.com/api-keys", ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]),
+  o("google-gemini", "Google Gemini", "provider", "https://generativelanguage.googleapis.com/v1beta/openai", "https://aistudio.google.com/app/apikey", ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"]),
+  o("moonshot", "Kimi（月之暗面）", "provider", "https://api.moonshot.cn/v1", "https://platform.moonshot.cn/console/api-keys", ["kimi-k3", "kimi-k2.6"]),
+  o("zhipu", "智谱 GLM", "provider", "https://open.bigmodel.cn/api/paas/v4", "https://open.bigmodel.cn/usercenter/apikeys"),
+  o("qwen-cn", "通义千问（百炼）", "provider", "https://dashscope.aliyuncs.com/compatible-mode/v1", "https://bailian.console.aliyun.com/?apiKey=1"),
+  o("doubao", "豆包（火山方舟）", "provider", "https://ark.cn-beijing.volces.com/api/v3", "https://ai.volcengine.com/console/apikey"),
+  o("minimax-cn", "MiniMax", "provider", "https://api.minimaxi.com/v1", "https://platform.minimaxi.com/user-center/basic-information/interface-key"),
+  o("stepfun", "阶跃星辰", "provider", "https://api.stepfun.com/v1", "https://platform.stepfun.com/interface-key"),
+  o("qianfan", "百度千帆", "provider", "https://qianfan.baidubce.com/v2", "https://console.bce.baidu.com/iam/#/iam/apikey/list"),
+  o("hunyuan", "腾讯混元", "provider", "https://api.hunyuan.cloud.tencent.com/v1", "https://console.cloud.tencent.com/hunyuan/api-key"),
+  o("mimo", "小米 MiMo", "provider", "https://api.xiaomimimo.com/v1", "https://platform.xiaomimimo.com/"),
+  o("xai", "xAI", "provider", "https://api.x.ai/v1", "https://console.x.ai", ["grok-4.5", "grok-4.3"]),
+  o("mistral", "Mistral", "provider", "https://api.mistral.ai/v1", "https://console.mistral.ai/api-keys"),
+  o("groq", "Groq", "provider", "https://api.groq.com/openai/v1", "https://console.groq.com/keys"),
+  o("perplexity", "Perplexity", "provider", "https://api.perplexity.ai", "https://www.perplexity.ai/settings/api", ["sonar", "sonar-pro"]),
+  o("nvidia", "NVIDIA", "provider", "https://integrate.api.nvidia.com/v1", "https://build.nvidia.com/settings/api-keys"),
+  o("together", "Together AI", "provider", "https://api.together.xyz/v1", "https://api.together.xyz/settings/api-keys"),
+  o("fireworks", "Fireworks AI", "provider", "https://api.fireworks.ai/inference/v1", "https://fireworks.ai/account/api-keys"),
+  o("cerebras", "Cerebras", "provider", "https://api.cerebras.ai/v1", "https://cloud.cerebras.ai/"),
+  o("ollama", "Ollama", "local", "http://127.0.0.1:11434/v1", undefined, ["qwen3.5", "gemma4", "gpt-oss:20b"]),
+  o("lmstudio", "LM Studio", "local", "http://127.0.0.1:1234/v1", undefined),
+  o("magpie", "Magpie", "local", "http://127.0.0.1:3425/v1", "https://github.com/yetone/magpie"),
+  o("custom", "其他（OpenAI 兼容）", "provider", "", undefined, [], true),
+];
+
+export const GROUPS: { id: NonNullable<G>; name: string; note: string }[] = [
+  { id: "relay", name: "一个 Key 用多家模型", note: "中转平台" },
+  { id: "provider", name: "模型厂商", note: "官方接口" },
+  { id: "local", name: "本机运行", note: "不需要 Key" },
+];
+
+/** Cloud transcription services, ported from Capwise. */
+export const ASR_SERVICES: CloudAsr[] = [
+  { id: "doubao", name: "豆包语音（极速版）", note: "中文最准，5 分钟一段，速度快", protocol: "doubao", baseUrl: "https://openspeech.bytedance.com/api/v3", model: "bigmodel", models: ["bigmodel"], keyUrl: "https://console.volcengine.com/speech/new/experience/asr", needsKey: true, chunkSecs: 300 },
+  { id: "siliconflow", name: "硅基流动", note: "Qwen3-ASR、SenseVoice 等，便宜", protocol: "openai", baseUrl: "https://api.siliconflow.cn/v1", model: "Qwen/Qwen3-ASR-1.7B", models: ["Qwen/Qwen3-ASR-1.7B", "FunAudioLLM/SenseVoiceSmall", "XingChenAGI/XingChenASR-V3.2"], keyUrl: "https://cloud.siliconflow.cn/account/ak", needsKey: true, chunkSecs: 20 },
+  { id: "groq", name: "Groq", note: "Whisper large-v3，极快", protocol: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "whisper-large-v3-turbo", models: ["whisper-large-v3-turbo", "whisper-large-v3"], keyUrl: "https://console.groq.com/keys", needsKey: true, chunkSecs: 600 },
+  { id: "openai", name: "OpenAI", note: "Whisper / gpt-4o-transcribe", protocol: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini-transcribe", models: ["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"], keyUrl: "https://platform.openai.com/api-keys", needsKey: true, chunkSecs: 600 },
+  { id: "glm", name: "智谱 GLM-ASR", note: "中文识别", protocol: "openai", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-asr-2512", models: ["glm-asr-2512"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys", needsKey: true, chunkSecs: 25 },
+  { id: "stepfun", name: "阶跃星辰", note: "Step ASR", protocol: "openai", baseUrl: "https://api.stepfun.com/v1", model: "stepaudio-2.5-asr", models: ["stepaudio-2.5-asr", "step-asr"], keyUrl: "https://platform.stepfun.com/interface-key", needsKey: true, chunkSecs: 20 },
+  { id: "local-server", name: "本机识别服务", note: "OpenAI 兼容的本地服务", protocol: "openai", baseUrl: "http://127.0.0.1:8765/v1", model: "Qwen/Qwen3-ASR-0.6B", models: ["Qwen/Qwen3-ASR-0.6B", "whisper-1"], needsKey: false, chunkSecs: 60 },
+];
+
+/** Doubao seed-tts-2.0 voices (from Capwise). */
+export const VOICES: [string, string][] = [
+  ["zh_female_vv_uranus_bigtts", "Vivi 2.0"],
+  ["zh_male_liufei_uranus_bigtts", "刘飞 2.0"],
+  ["zh_female_xiaohe_uranus_bigtts", "小何 2.0"],
+  ["zh_male_m191_uranus_bigtts", "云舟 2.0"],
+  ["zh_male_taocheng_uranus_bigtts", "小天 2.0"],
+  ["zh_male_shenyeboke_uranus_bigtts", "深夜播客 2.0"],
+  ["zh_male_youyoujunzi_uranus_bigtts", "悠悠君子 2.0"],
+  ["zh_female_shuangkuaisisi_uranus_bigtts", "爽快思思 2.0"],
+  ["zh_female_cancan_uranus_bigtts", "知性灿灿 2.0"],
+  ["en_male_tim_uranus_bigtts", "Tim"],
+  ["en_female_dacey_uranus_bigtts", "Dacey"],
 ];
 
 export const DEFAULTS: Settings = {
@@ -41,6 +104,10 @@ export const DEFAULTS: Settings = {
   autoTranslate: true,
   subtitleMode: "bilingual",
   playbackRate: 1,
+  asrEngine: "local",
+  cloudAsr: Object.fromEntries(ASR_SERVICES.map((a) => [a.id, a])),
+  ttsVoice: "zh_female_vv_uranus_bigtts",
+  ttsResource: "seed-tts-2.0",
 };
 
 export async function loadSettings(): Promise<Settings> {
@@ -48,6 +115,8 @@ export async function loadSettings(): Promise<Settings> {
   if (!raw) return structuredClone(DEFAULTS);
   // Keep presets' metadata (key links, suggestions) current while keeping what the user edited.
   const providers: Record<string, Provider> = {};
-  for (const p of PRESETS) providers[p.id] = { ...p, ...(raw.providers?.[p.id] ?? {}), keyUrl: p.keyUrl, models: p.models, needsKey: p.needsKey, name: p.name };
-  return { ...DEFAULTS, ...raw, providers };
+  for (const p of PRESETS) providers[p.id] = { ...p, ...(raw.providers?.[p.id] ?? {}), keyUrl: p.keyUrl, models: p.models, needsKey: p.needsKey, name: p.name, group: p.group };
+  const cloudAsr: Record<string, CloudAsr> = {};
+  for (const a of ASR_SERVICES) cloudAsr[a.id] = { ...a, ...(raw.cloudAsr?.[a.id] ?? {}), name: a.name, note: a.note, models: a.models, keyUrl: a.keyUrl, needsKey: a.needsKey, protocol: a.protocol };
+  return { ...DEFAULTS, ...raw, providers, cloudAsr };
 }

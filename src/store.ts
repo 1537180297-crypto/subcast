@@ -18,6 +18,7 @@ export interface PlayerHandle {
 }
 
 interface State {
+  speaking: boolean;
   ready: boolean;
   settings: Settings;
   shows: Show[];
@@ -31,7 +32,7 @@ interface State {
   player: PlayerHandle | null;
   toast: string | null;
   settingsOpen: boolean;
-  settingsSection?: "model" | "asr" | "general";
+  settingsSection?: "model" | "asr" | "tts" | "general" | "about";
   addOpen: boolean;
   init(): Promise<void>;
   go(view: View): void;
@@ -42,7 +43,7 @@ interface State {
   /** Loads an episode into the player without navigating. */
   load(ep: Episode): void;
   notify(text: string): void;
-  openSettings(section?: "model" | "asr" | "general"): void;
+  openSettings(section?: "model" | "asr" | "tts" | "general" | "about"): void;
   set(patch: Partial<State>): void;
 }
 
@@ -50,6 +51,7 @@ let toastTimer: number | undefined;
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
+  speaking: false,
   settings: DEFAULTS,
   shows: [],
   view: { kind: "latest" },

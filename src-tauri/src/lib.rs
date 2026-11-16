@@ -1,4 +1,5 @@
 mod asr;
+mod cloud;
 mod db;
 mod feeds;
 mod llm;
@@ -268,6 +269,17 @@ async fn qiaomu_detail(state: State<'_, AppState>, episode_id: String) -> Res<qi
 }
 
 #[tauri::command]
+async fn list_models(provider: llm::Provider) -> Res<Vec<String>> { cloud::list_models(&provider).await.map_err(e) }
+
+/// Doubao TTS: a base64 WAV for up to 1,000 characters.
+#[tauri::command]
+async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res<String> {
+    use base64::Engine;
+    let wav = cloud::tts(&voice, resource.as_deref().unwrap_or(""), &text).await.map_err(e)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(wav))
+}
+
+#[tauri::command]
 async fn youtube_stream(state: State<'_, AppState>, video_id: String) -> Res<String> {
     let ytdlp = match asr::find_ytdlp(&state.data) {
         Some(p) => p,
@@ -277,11 +289,11 @@ async fn youtube_stream(state: State<'_, AppState>, video_id: String) -> Res<Str
 }
 
 #[tauri::command]
-async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String) -> Res<Transcript> {
+async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String, cloud: Option<cloud::CloudAsr>) -> Res<Transcript> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
     let spec = asr::spec(&model).ok_or("未知模型")?;
     let model_path = asr::models_dir(&state.data).join(spec.file);
-    if !model_path.is_file() { return Err("请先下载识别模型".into()); }
+    if cloud.is_none() && !model_path.is_file() { return Err("请先下载识别模型".into()); }
     let cancel = state.job(&episode_id);
     let work = state.data.join("work").join(&episode_id);
     let result = async {
@@ -312,7 +324,15 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         let prompt = format!("{} — {}", ep.show_title.clone().unwrap_or_default(), ep.title).chars().take(200).collect::<String>();
         let app2 = app.clone();
         let id2 = episode_id.clone();
-        let out = if spec.engine == "qwen3" {
+        let out = if let Some(cfg) = &cloud {
+            asr_emit(&app, &episode_id, "transcribe", 0.01, Some("正在解码音频".into()), None);
+            let src = audio.clone();
+            let samples = tokio::task::spawn_blocking(move || asr::decode_16k_mono(&src)).await.map_err(e)?.map_err(e)?;
+            let segments = cloud::transcribe(cfg, samples, &language, &prompt, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, Some("云端识别中".into()), None)).await.map_err(e)?;
+            let sample: String = segments.iter().take(5).map(|s| s.text.as_str()).collect();
+            let lang = if language != "auto" { language.clone() } else if sample.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) { "zh".into() } else { "auto".into() };
+            asr::WorkerResult { language: lang, segments }
+        } else if spec.engine == "qwen3" {
             let bin = match asr::find_crispasr(&state.data) {
                 Some(p) => p,
                 None => {
@@ -339,7 +359,7 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         };
         let segments = transcript::resegment(transcript::clean(out.segments));
         if segments.is_empty() { return Err("没有识别出文字（可能是纯音乐或静音）".to_string()); }
-        let t = Transcript { episode_id: ep.id.clone(), source: "whisper".into(), language: out.language, segments };
+        let t = Transcript { episode_id: ep.id.clone(), source: if cloud.is_some() { "cloud" } else { "whisper" }.into(), language: out.language, segments };
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
         Ok(t)
     }.await;
@@ -485,7 +505,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

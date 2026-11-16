@@ -37,6 +37,8 @@
     "allow-youtube-stream",
     "allow-qiaomu-detail",
     "allow-preview-show",
+    "allow-list-models",
+    "allow-tts-speak",
     "core:window:allow-start-dragging"
   ],
   "remote": {

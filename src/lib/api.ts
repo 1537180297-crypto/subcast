@@ -37,7 +37,8 @@ export interface Segment { start: number; end: number; text: string }
 export interface Transcript { episodeId: string; source: string; language: string; segments: Segment[] }
 export interface SearchResult { title: string; author: string; cover?: string; feedUrl: string; genre?: string; episodes?: number }
 export interface ModelInfo { id: string; name: string; sizeMb: number; note: string; installed: boolean }
-export interface Provider { id: string; name: string; protocol: "openai" | "anthropic"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[] }
+export interface Provider { id: string; name: string; protocol: "openai" | "anthropic"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[]; group?: "relay" | "provider" | "local" }
+export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
 export interface ChatMessage { role: "user" | "assistant"; content: string }
 
 export interface AsrEvent { episodeId: string; stage: "download" | "transcribe" | "segment" | "done" | "error"; progress: number; message?: string; segment?: Segment }
@@ -55,7 +56,7 @@ export const api = {
   searchPodcasts: (term: string, country?: string) => invoke<SearchResult[]>("search_podcasts", { term, country }),
   loadTranscript: (episodeId: string) => invoke<Transcript | null>("load_transcript", { episodeId }),
   fetchOfficialTranscript: (episodeId: string) => invoke<Transcript | null>("fetch_official_transcript", { episodeId }),
-  transcribe: (episodeId: string, model: string, language: string) => invoke<Transcript>("transcribe", { episodeId, model, language }),
+  transcribe: (episodeId: string, model: string, language: string, cloud?: CloudAsr) => invoke<Transcript>("transcribe", { episodeId, model, language, cloud: cloud ?? null }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   asrModels: () => invoke<ModelInfo[]>("asr_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),
@@ -69,6 +70,8 @@ export const api = {
   /** Free Google translation with a persistent cache (no model needed). */
   previewShow: (input: string) => invoke<{ show: Show; episodes: Episode[] }>("preview_show", { input }),
   qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
+  listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),
+  ttsSpeak: (text: string, voice: string, resource?: string) => invoke<string>("tts_speak", { text, voice, resource }),
   youtubeStream: (videoId: string) => invoke<string>("youtube_stream", { videoId }),
   translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
 };

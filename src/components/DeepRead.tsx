@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, ExternalLink, Loader2 } from "lucide-react";
+import { BookOpen, ExternalLink, Loader2, Square, Volume2 } from "lucide-react";
+import { speak, stopSpeaking } from "../lib/tts";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
 import { useStore } from "../store";
@@ -41,6 +42,13 @@ export function DeepRead({ ep, children }: { ep: Episode; children?: React.React
     return () => { live = false; };
   }, [ep.id]);
   const clean = useMemo(() => (html ? sanitize(html) : ""), [html]);
+  const speaking = useStore((s) => s.speaking);
+  const read = () => {
+    const doc = new DOMParser().parseFromString(clean, "text/html");
+    doc.querySelectorAll("[data-t]").forEach((n) => n.remove());
+    const text = Array.from(doc.body.querySelectorAll("p, h2, h3, h4, li, blockquote")).map((n) => n.textContent?.trim()).filter(Boolean).join("\n");
+    void speak(text, (m) => useStore.getState().notify(m.includes("Key") ? `${m}（设置 › 朗读）` : m));
+  };
   if (html === undefined) return <div className="panel-empty"><Loader2 className="spin" size={20} /><p className="muted small">正在载入精读…</p></div>;
   if (!html) return <>{children}</>;
   return (
@@ -48,6 +56,9 @@ export function DeepRead({ ep, children }: { ep: Episode; children?: React.React
       <div className="deep-head">
         <span className="deep-badge"><BookOpen size={13} /> 乔木精读</span>
         <span className="muted small">AI 基于完整访谈改写的中文长文，不是逐字翻译</span>
+        {speaking
+          ? <button className="btn sm" onClick={stopSpeaking}><Square size={11} /> 停止朗读</button>
+          : <button className="btn sm" title="用豆包语音朗读精读全文" onClick={read}><Volume2 size={13} /> 朗读</button>}
         {ep.link && <button className="icon-btn" title="在网页中打开" onClick={() => openUrl(ep.link!)}><ExternalLink size={14} /></button>}
       </div>
       <article
