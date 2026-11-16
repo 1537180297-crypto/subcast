@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, ExternalLink, Loader2, Trash2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type ModelInfo, type Provider } from "../lib/api";
+import { llmReady } from "../lib/jobs";
 import { useStore } from "../store";
 import { Modal } from "./Chrome";
 import { useModelDownload } from "./TranscriptPanel";
@@ -58,7 +59,10 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
 
 export function SettingsDialog() {
   const { settings, saveSettings, set, notify, settingsSection } = useStore();
-  const [section, setSection] = useState<"model" | "asr" | "general">(settingsSection ?? "model");
+  const [section, setSection] = useState<"overview" | "model" | "asr" | "general">(settingsSection ?? "overview");
+  const [chatOk, setChatOk] = useState<boolean | null>(null);
+  const [trOk, setTrOk] = useState<boolean | null>(null);
+  useEffect(() => { void llmReady("chat").then(setChatOk); void llmReady("translate").then(setTrOk); }, [settings, section]);
   const [editing, setEditing] = useState(settings.chatProvider);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
@@ -73,14 +77,39 @@ export function SettingsDialog() {
     <Modal title="设置" onClose={() => set({ settingsOpen: false })} wide>
       <div className="settings">
         <nav className="settings-nav">
+          <button className={section === "overview" ? "on" : ""} onClick={() => setSection("overview")}>概览</button>
           <button className={section === "model" ? "on" : ""} onClick={() => setSection("model")}>AI 模型</button>
-          <button className={section === "asr" ? "on" : ""} onClick={() => setSection("asr")}>字幕识别</button>
-          <button className={section === "general" ? "on" : ""} onClick={() => setSection("general")}>翻译与网络</button>
+          <button className={section === "asr" ? "on" : ""} onClick={() => setSection("asr")}>本机识别</button>
+          <button className={section === "general" ? "on" : ""} onClick={() => setSection("general")}>网络</button>
         </nav>
         <div className="settings-body">
+          {section === "overview" && (
+            <div className="overview">
+              <div className="ov-card">
+                <div className="ov-head"><p className="ov-title">字幕翻译</p><span className={`pill ok`}>{trOk ? `${settings.providers[settings.translateProvider]?.name}` : "谷歌翻译 · 免费"}</span></div>
+                <p className="muted small">{trOk ? "用你的模型翻译，译文更通顺、术语更准。" : "无需设置即可使用；连接自己的模型可获得更好的译文。"}</p>
+                <div className="seg-control">
+                  {([["auto", "自动"], ["google", "谷歌翻译"], ["llm", "我的模型"]] as const).map(([k, label]) => (
+                    <button key={k} className={settings.translateMode === k ? "on" : ""} onClick={() => saveSettings({ translateMode: k })}>{label}</button>
+                  ))}
+                </div>
+                <label className="check"><input type="checkbox" checked={settings.autoTranslate} onChange={(e) => saveSettings({ autoTranslate: e.target.checked })} /> 打开外语节目时自动翻译字幕</label>
+                </div>
+              <div className="ov-card">
+                <div className="ov-head"><p className="ov-title">AI 问答与导读</p><span className={`pill ${chatOk ? "ok" : ""}`}>{chatOk ? settings.providers[settings.chatProvider]?.name : "未连接"}</span></div>
+                <p className="muted small">基于整期文字稿回答问题、生成中文导读。推荐 DeepSeek，国内直连，一集约 ¥0.1。</p>
+                <button className="btn sm primary" onClick={() => setSection("model")}>{chatOk ? "管理模型" : "连接模型"}</button>
+              </div>
+              <div className="ov-card">
+                <div className="ov-head"><p className="ov-title">本机识别</p><span className={`pill ${models.find((m) => m.id === settings.asrModel)?.installed ? "ok" : ""}`}>{models.find((m) => m.id === settings.asrModel)?.installed ? "已下载" : "未下载"}</span></div>
+                <p className="muted small">没有字幕的节目用本机模型生成，音频不出本机。当前：{models.find((m) => m.id === settings.asrModel)?.name ?? "—"}</p>
+                <button className="btn sm" onClick={() => setSection("asr")}>管理</button>
+              </div>
+            </div>
+          )}
           {section === "model" && (
             <>
-              <p className="muted small">问答、导读和翻译使用你自己的模型服务，Key 只保存在本机钥匙串。</p>
+              <p className="muted small">问答、导读（以及可选的字幕翻译）使用你自己的模型服务，Key 只保存在本机钥匙串。</p>
               <p className="usage">问答与导读：<b>{settings.providers[settings.chatProvider]?.name}</b>　·　字幕翻译：<b>{settings.providers[settings.translateProvider]?.name}</b></p>
               <div className="provider-tabs">
                 {providers.map((x) => <button key={x.id} className={`chip ${editing === x.id ? "on" : ""}`} onClick={() => setEditing(x.id)}>{x.name}{x.id === settings.chatProvider || x.id === settings.translateProvider ? " •" : ""}</button>)}
@@ -118,14 +147,13 @@ export function SettingsDialog() {
           )}
           {section === "general" && (
             <>
-              <label className="check"><input type="checkbox" checked={settings.autoTranslate} onChange={(e) => saveSettings({ autoTranslate: e.target.checked })} /> 打开外语节目时自动翻译字幕</label>
               <label><span>网络代理</span>
                 <div className="key-row">
                   <input {...NO_AUTO} value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder="留空使用系统代理，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890" />
                   <button className="btn sm" onClick={async () => { try { await saveSettings({ proxy }); notify("代理已保存"); } catch (e) { notify(errorText(e)); } }}>保存</button>
                 </div>
               </label>
-              <p className="muted small">在国内访问 YouTube 需要代理。视频画面由系统浏览器内核播放，使用系统代理设置。</p>
+              <p className="muted small">在国内访问 YouTube 需要代理。视频画面由系统浏览器内核播放，使用系统代理设置。谷歌翻译连不上时会自动改走国内中转。</p>
             </>
           )}
         </div>

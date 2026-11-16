@@ -25,9 +25,9 @@ export function AudioEngine() {
     const el = ref.current;
     if (!el || !audio) return;
     const handle = {
-      seek: (t: number) => { el.currentTime = t; void el.play(); },
-      toggle: () => (el.paused ? void el.play() : el.pause()),
-      play: () => void el.play(),
+      seek: (t: number) => { el.currentTime = t; el.play().catch(() => {}); },
+      toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
+      play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
     };
     useStore.getState().set({ player: handle });
@@ -56,6 +56,14 @@ export function AudioEngine() {
   );
 }
 
+/** Our subtitles replace YouTube's: turning the caption module off alone is not enough when the viewer has captions on. */
+function hideYouTubeCaptions(player: any) {
+  try { player.setOption?.("captions", "track", {}); } catch { /* module not loaded yet */ }
+  try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ }
+}
+
+export const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
+
 export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.ReactNode }) {
   const host = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +86,7 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
           onReady: () => {
             playerRef.current = player;
             // Our own subtitles replace YouTube's.
-            try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ }
+            hideYouTubeCaptions(player);
             player.setPlaybackRate?.(useStore.getState().settings.playbackRate);
             useStore.getState().set({
               length: player.getDuration?.() || ep.duration || 0,
@@ -96,7 +104,7 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
           },
           onStateChange: (e: any) => {
             useStore.getState().set({ playing: e.data === 1 });
-            if (e.data === 1) { try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ } }
+            if (e.data === 1) hideYouTubeCaptions(player);
             if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
           },
           onError: (e: any) => setError(e.data === 150 || e.data === 101 ? "视频作者不允许在其他应用中播放，可点「在 YouTube 打开」" : `视频无法播放（错误 ${e.data}）`),
@@ -123,25 +131,19 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
   );
 }
 
-const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
 
 export function Controls({ compact = false }: { compact?: boolean }) {
-  const { time, length, playing, player, settings, saveSettings } = useStore();
+  const { time, length, playing, player, settings } = useStore();
   const [drag, setDrag] = useState<number | null>(null);
   const shown = drag ?? time;
-  const nextRate = () => {
-    const i = RATES.indexOf(settings.playbackRate);
-    const r = RATES[(i + 1) % RATES.length];
-    player?.setRate(r);
-    void saveSettings({ playbackRate: r });
-  };
+  const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
-      <button className="icon-btn" title="后退 15 秒" onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
+      <button className="icon-btn" title="后退 15 秒（←）" onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
       <button className="play-btn" title={playing ? "暂停（空格）" : "播放（空格）"} onClick={() => player?.toggle()} disabled={!player}>
         {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
-      <button className="icon-btn" title="前进 30 秒" onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
+      <button className="icon-btn" title="前进 30 秒（→）" onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
       <span className="time">{clock(shown)}</span>
       <input
         className="seek"
@@ -157,7 +159,21 @@ export function Controls({ compact = false }: { compact?: boolean }) {
         aria-label="播放进度"
       />
       <span className="time">{length ? clock(length) : "--:--"}</span>
-      <button className="rate-btn" onClick={nextRate} title="播放速度">{settings.playbackRate}×</button>
+      <button className="rate-btn" onClick={nextRate} title="播放速度（S）">{settings.playbackRate}×</button>
+      <button className="rate-btn" onClick={() => cycleMode()} title="字幕：双语 / 中文 / 原文（C）">{settings.subtitleMode === "bilingual" ? "双语" : settings.subtitleMode === "translation" ? "中文" : "原文"}</button>
     </div>
   );
+}
+
+export function cycleMode() {
+  const { settings, saveSettings } = useStore.getState();
+  const order = ["bilingual", "translation", "original"] as const;
+  void saveSettings({ subtitleMode: order[(order.indexOf(settings.subtitleMode) + 1) % 3] });
+}
+
+export function cycleRate() {
+  const { settings, saveSettings, player } = useStore.getState();
+  const r = RATES[(RATES.indexOf(settings.playbackRate) + 1) % RATES.length];
+  player?.setRate(r);
+  void saveSettings({ playbackRate: r });
 }

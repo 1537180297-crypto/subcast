@@ -2,9 +2,34 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Loader2, RefreshCw, Sparkles, Square, Trash2 } from "lucide-react";
 import { api, errorText, type ChatMessage, type Episode } from "../lib/api";
 import { askEpisode, QUICK_QUESTIONS, SUMMARY_PROMPT, transcriptForModel } from "../lib/ai";
-import { useJobs } from "../lib/jobs";
+import { llmReady, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 import { Markdown } from "./Markdown";
+
+/** Whether a model is connected for Q&A; re-checked whenever settings change or the settings window closes. */
+function useConnected() {
+  const settings = useStore((s) => s.settings);
+  const open = useStore((s) => s.settingsOpen);
+  const [ok, setOk] = useState<boolean | null>(null);
+  useEffect(() => { if (!open) void llmReady("chat").then(setOk); }, [settings, open]);
+  return ok;
+}
+
+function ConnectCard({ what }: { what: string }) {
+  const [later, setLater] = useState(false);
+  if (later) return null;
+  return (
+    <div className="connect-card">
+      <Sparkles size={22} className="accent" />
+      <p className="lead">{what}需要连接一个 AI 模型</p>
+      <p className="muted">推荐 DeepSeek，国内直连，一集约 ¥0.1。Key 只保存在本机。</p>
+      <div className="row-actions center">
+        <button className="btn primary" onClick={() => { const s = useStore.getState(); void s.saveSettings({ chatProvider: s.settings.chatProvider || "deepseek" }); s.openSettings("model"); }}>连接模型</button>
+        <button className="btn ghost" onClick={() => setLater(true)}>稍后</button>
+      </div>
+    </div>
+  );
+}
 
 function useReady(ep: Episode) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
@@ -30,6 +55,7 @@ function useSeek(ep: Episode) {
 
 export function ChatPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
+  const connected = useConnected();
   const seek = useSeek(ep);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -72,11 +98,12 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   return (
     <div className="chat">
       <div className="chat-scroll">
-        {!messages.length && streaming == null && (
+        {!messages.length && streaming == null && connected === false && <ConnectCard what="问答" />}
+        {!messages.length && streaming == null && connected !== false && (
           <div className="chat-intro">
             <Sparkles size={22} className="accent" />
             <p className="lead">问问这期节目</p>
-            <p className="muted">回答基于整期文字稿，带时间戳，点一下就能跳过去听原话。</p>
+            <p className="muted">回答基于整期文字稿，点时间戳就能跳过去听。</p>
             <div className="chips">
               {QUICK_QUESTIONS.map((q) => <button key={q} className="chip" onClick={() => send(q)} disabled={!transcript}>{q}</button>)}
             </div>
@@ -103,8 +130,8 @@ export function ChatPanel({ ep }: { ep: Episode }) {
         <textarea
           value={input}
           rows={1}
-          placeholder={transcript ? "问点什么，比如：他们怎么看 AGI 的时间线？" : "字幕准备好后可以提问"}
-          disabled={!transcript}
+          placeholder={connected === false ? "连接模型后可以提问" : transcript ? "问点什么，比如：他们怎么看 AGI 的时间线？" : "字幕准备好后可以提问"}
+          disabled={!transcript || connected === false}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(input); } }}
         />
@@ -112,13 +139,14 @@ export function ChatPanel({ ep }: { ep: Episode }) {
           ? <button type="button" className="send" title="停止" onClick={() => abort.current?.abort()}><Square size={14} fill="currentColor" /></button>
           : <button type="submit" className="send" title="发送" disabled={!input.trim()}><ArrowUp size={16} /></button>}
       </form>
-      <p className="model-note">{provider ? `${provider.name} · ${provider.model}` : "未选择模型"}</p>
+      {connected && <p className="model-note">{provider ? `${provider.name} · ${provider.model}` : ""}</p>}
     </div>
   );
 }
 
 export function SummaryPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
+  const connected = useConnected();
   const seek = useSeek(ep);
   const [summary, setSummary] = useState<string | null>(null);
   const [streaming, setStreaming] = useState<string | null>(null);
@@ -142,11 +170,12 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
   };
 
   const text = streaming ?? summary;
+  if (!text && connected === false) return <div className="panel-empty"><ConnectCard what="导读" /></div>;
   if (!text) {
     return (
       <div className="panel-empty">
         <Sparkles size={26} className="accent" />
-        <p className="lead">中文导读</p>
+        <p className="lead">一键中文导读</p>
         <p className="muted">一句话总结、核心观点、章节和值得记住的原话，全部带时间戳。</p>
         {error && <p className="error-text">{error}</p>}
         {error && /设置|API Key/.test(error) && <button className="btn" onClick={() => useStore.getState().openSettings("model")}>去设置</button>}

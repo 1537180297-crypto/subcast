@@ -32,7 +32,8 @@
     "allow-set-settings",
     "allow-set-api-key",
     "allow-has-api-key",
-    "allow-llm-chat"
+    "allow-llm-chat",
+    "allow-translate-texts"
   ],
   "remote": {
     "urls": [

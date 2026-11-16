@@ -10,10 +10,12 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { ArrowLeft, Captions, ExternalLink, MessageCircle, Play, ScrollText } from "lucide-react";
+import { ArrowLeft, Captions, ChevronDown, ExternalLink, MessageCircle, Play, ScrollText } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
 import { date, duration, notesText } from "../lib/format";
+import { showName } from "../lib/picks";
+import { useZh, useZhParagraphs } from "../lib/zh";
 import { loadTranscript, useJobs } from "../lib/jobs";
 import { useStore } from "../store";
 import { ChatPanel, SummaryPanel } from "./AiPanels";
@@ -24,7 +26,7 @@ type Tab = "transcript" | "chat" | "summary";
 
 /** Splits a long subtitle block into screen-sized pieces at word / punctuation boundaries. */
 export function pieces(text: string, cjk: boolean): string[] {
-  const max = cjk ? 30 : 84;
+  const max = cjk ? 26 : 60;
   const parts = cjk ? text.split(/(?<=[，。！？；：、,.!?;])/) : text.split(/(?<=\s)/);
   const out: string[] = [];
   let cur = "";
@@ -66,7 +68,7 @@ function SubtitleOverlay({ ep }: { ep: Episode }) {
 }
 
 export function EpisodeView({ id }: { id: string }) {
-  const { back, current, load, player, playing } = useStore();
+  const { load } = useStore();
   const [ep, setEp] = useState<Episode | null>(null);
   const [tab, setTab] = useState<Tab>("transcript");
 
@@ -82,6 +84,34 @@ export function EpisodeView({ id }: { id: string }) {
   }, [id]);
 
   if (!ep) return <div className="page" />;
+  return <EpisodeBody ep={ep} tab={tab} setTab={setTab} />;
+}
+
+function Notes({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const [orig, setOrig] = useState(false);
+  const zh = useZhParagraphs(text, open);
+  const paras = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  return (
+    <div className={`notes ${open ? "open" : ""}`}>
+      <div className="notes-head" role="button" tabIndex={0} onClick={() => setOpen(!open)} onKeyDown={(e) => e.key === "Enter" && setOpen(!open)}>
+        <span>本集简介</span>
+        {open && zh && <button className="link-btn" onClick={(e) => { e.stopPropagation(); setOrig(!orig); }}>{orig ? "看中文" : "原文"}</button>}
+        <ChevronDown size={14} className={open ? "flip" : ""} />
+      </div>
+      {open && (
+        <div className="notes-body">
+          {open && !zh && !orig && paras.length > 0 && !/[\u4e00-\u9fff]/.test(text) && <p className="muted small">正在翻译…</p>}
+          {(orig || !zh ? paras : zh).map((p, i) => <p key={i}>{p}</p>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EpisodeBody({ ep, tab, setTab }: { ep: Episode; tab: Tab; setTab: (t: Tab) => void }) {
+  const { back, current, load } = useStore();
+  const titleZh = useZh(ep.title);
   const isCurrent = current?.id === ep.id;
   const notes = notesText(ep.notes);
 
@@ -90,10 +120,11 @@ export function EpisodeView({ id }: { id: string }) {
       <header className="ep-head">
         <button className="icon-btn" onClick={back} title="返回"><ArrowLeft size={18} /></button>
         <div className="ep-title">
-          <p className="muted small">{ep.showTitle && ep.showId !== "single" ? ep.showTitle : ""}{ep.published ? ` · ${date(ep.published)}` : ""}{ep.duration ? ` · ${duration(ep.duration)}` : ""}</p>
-          <h1>{ep.title}</h1>
+          <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? <span key="s">{showName(ep.showTitle)}</span> : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
+          <h1>{titleZh ?? ep.title}</h1>
+          {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
         </div>
-        {ep.link && <button className="btn ghost sm" onClick={() => openUrl(ep.link!)}><ExternalLink size={13} /> {ep.videoId ? "在 YouTube 打开" : "原网页"}</button>}
+        {ep.link && <button className="btn ghost sm" onClick={() => openUrl(ep.link!)}><ExternalLink size={13} /> {ep.videoId ? "在 YouTube 打开" : "节目网页"}</button>}
       </header>
       <div className="ep-body">
         <section className="ep-left">
@@ -108,18 +139,12 @@ export function EpisodeView({ id }: { id: string }) {
           {isCurrent ? <Controls /> : (
             <button className="btn primary" onClick={() => { load(ep); setTimeout(() => useStore.getState().player?.play(), 400); }}><Play size={14} /> 播放这一集</button>
           )}
-          {!ep.videoId && isCurrent && !playing && player == null && <p className="muted small">正在加载音频…</p>}
-          {notes && (
-            <details className="notes" open={!ep.videoId}>
-              <summary>节目简介</summary>
-              <p>{notes}</p>
-            </details>
-          )}
+          {notes && <Notes text={notes} />}
         </section>
         <section className="ep-right">
           <div className="tabs" role="tablist">
             <button role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /> 字幕</button>
-            <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /> AI 问答</button>
+            <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /> 问答</button>
             <button role="tab" aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /> 导读</button>
           </div>
           <div className="tab-body">

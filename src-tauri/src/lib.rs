@@ -5,6 +5,7 @@ mod llm;
 mod model;
 mod net;
 mod transcript;
+mod translate;
 mod youtube;
 
 use model::*;
@@ -341,6 +342,28 @@ async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String
     r.map_err(e)
 }
 
+/// Machine translation (Google, free) with a persistent cache; used for titles, show notes, and subtitles
+/// when no model of the user's own is set up.
+#[tauri::command]
+async fn translate_texts(state: State<'_, AppState>, texts: Vec<String>, target: Option<String>) -> Res<Vec<String>> {
+    let tl = target.unwrap_or_else(|| "zh-CN".into());
+    let keys: Vec<String> = texts.iter().map(|t| short_hash(&format!("{tl}|{t}"), 24)).collect();
+    let mut out: Vec<Option<String>> = {
+        let conn = state.db.lock().unwrap();
+        keys.iter().map(|k| db::tr_get(&conn, k).ok().flatten()).collect()
+    };
+    let missing: Vec<usize> = (0..texts.len()).filter(|&i| out[i].is_none() && !texts[i].trim().is_empty()).collect();
+    if !missing.is_empty() {
+        let lines: Vec<String> = missing.iter().map(|&i| texts[i].clone()).collect();
+        let done = translate::translate_lines(&lines, &tl).await.map_err(e)?;
+        let conn = state.db.lock().unwrap();
+        for (j, &i) in missing.iter().enumerate() {
+            if let Some(t) = done.get(j) { let _ = db::tr_put(&conn, &keys[i], t); out[i] = Some(t.clone()); }
+        }
+    }
+    Ok(out.into_iter().map(Option::unwrap_or_default).collect())
+}
+
 // ---- app ------------------------------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -377,7 +400,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

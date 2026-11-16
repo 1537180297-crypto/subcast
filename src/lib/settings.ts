@@ -4,6 +4,9 @@ export interface Settings {
   providers: Record<string, Provider>;
   chatProvider: string;
   translateProvider: string;
+  /** auto: the user's model when it is set up, else Google; google: always Google; llm: always the model. */
+  translateMode: "auto" | "google" | "llm";
+  onboarded: boolean;
   proxy: string;
   asrModel: string;
   asrLanguage: string;
@@ -29,6 +32,8 @@ export const DEFAULTS: Settings = {
   providers: Object.fromEntries(PRESETS.map((p) => [p.id, p])),
   chatProvider: "deepseek",
   translateProvider: "deepseek",
+  translateMode: "auto",
+  onboarded: false,
   proxy: "",
   asrModel: "qwen3-asr",
   asrLanguage: "auto",
