@@ -19,28 +19,24 @@ func render(scale: CGFloat, to path: String) {
     cg.scaleBy(x: 1, y: -1)
     NSGraphicsContext.current = NSGraphicsContext(cgContext: cg, flipped: true)
 
-    // Warm paper background with a soft top glow.
-    NSColor(srgbRed: 0.985, green: 0.978, blue: 0.965, alpha: 1).setFill()
+    // Light paper background with a soft accent glow behind the title.
+    NSColor(srgbRed: 0.975, green: 0.982, blue: 0.978, alpha: 1).setFill()
     NSRect(x: 0, y: 0, width: w, height: h).fill()
-    let glow = NSGradient(colors: [NSColor(srgbRed: 1, green: 0.55, blue: 0.25, alpha: 0.10), NSColor(white: 1, alpha: 0)])!
-    glow.draw(fromCenter: NSPoint(x: w / 2, y: -40), radius: 0, toCenter: NSPoint(x: w / 2, y: -40), radius: 420, options: [])
+    let glow = NSGradient(colors: [NSColor(srgbRed: 0.05, green: 0.48, blue: 0.41, alpha: 0.09), NSColor(srgbRed: 0.05, green: 0.48, blue: 0.41, alpha: 0)])!
+    glow.draw(fromCenter: NSPoint(x: w / 2, y: -60), radius: 0, toCenter: NSPoint(x: w / 2, y: -60), radius: 440, options: [])
 
-    // Sound-wave bars along the bottom, a quiet nod to "声渡".
-    let bars = 64
-    let barW: CGFloat = 3
-    let gap = (w - CGFloat(bars) * barW) / CGFloat(bars + 1)
-    for i in 0..<bars {
-        let t = Double(i) / Double(bars - 1)
-        let amp = 0.35 + 0.65 * abs(sin(t * .pi * 3.2) * cos(t * .pi * 1.3))
-        let bh = CGFloat(6 + 22 * amp)
-        let x = gap + CGFloat(i) * (barW + gap)
-        NSColor(srgbRed: 0.93, green: 0.42, blue: 0.16, alpha: 0.10 + 0.10 * amp).setFill()
-        NSBezierPath(roundedRect: NSRect(x: x, y: h - 18 - bh, width: barW, height: bh), xRadius: 1.5, yRadius: 1.5).fill()
+    // Small waveform mark above the wordmark, a quiet nod to "声渡".
+    let amps: [CGFloat] = [0.35, 0.6, 1.0, 0.7, 0.45, 0.8, 0.55, 0.3]
+    for (i, a) in amps.enumerated() {
+        let bh = 4 + 14 * a
+        let x = w / 2 - CGFloat(amps.count) * 3 + CGFloat(i) * 6
+        NSColor(srgbRed: 0.05, green: 0.48, blue: 0.41, alpha: 0.75).setFill()
+        NSBezierPath(roundedRect: NSRect(x: x, y: 30 - bh / 2, width: 3, height: bh), xRadius: 1.5, yRadius: 1.5).fill()
     }
 
     // Arrow between the two icons, at icon-centre height.
     let y: CGFloat = 186
-    let accent = NSColor(srgbRed: 0.93, green: 0.42, blue: 0.16, alpha: 0.85)
+    let accent = NSColor(srgbRed: 0.05, green: 0.48, blue: 0.41, alpha: 0.8)
     let line = NSBezierPath()
     line.move(to: NSPoint(x: 250, y: y)); line.line(to: NSPoint(x: 384, y: y))
     line.lineWidth = 2
@@ -59,9 +55,9 @@ func render(scale: CGFloat, to path: String) {
         let a = NSAttributedString(string: s, attributes: [.font: f, .foregroundColor: color, .paragraphStyle: para, .kern: kern])
         a.draw(in: NSRect(x: 0, y: top, width: w, height: 30))
     }
-    text("SUBCAST · 声渡", .systemFont(ofSize: 11, weight: .semibold), NSColor(white: 0.45, alpha: 1), 40, kern: 1.6)
-    text("拖到「应用程序」完成安装", .systemFont(ofSize: 15, weight: .medium), NSColor(white: 0.08, alpha: 1), 292)
-    text("听懂海外播客和 YouTube", .systemFont(ofSize: 11.5, weight: .regular), NSColor(white: 0.46, alpha: 1), 318)
+    text("SUBCAST · 声渡", .systemFont(ofSize: 11, weight: .semibold), NSColor(white: 0.42, alpha: 1), 46, kern: 1.6)
+    text("拖到「应用程序」完成安装", .systemFont(ofSize: 15, weight: .medium), NSColor(white: 0.08, alpha: 1), 284)
+    text("听懂海外播客和 YouTube", .systemFont(ofSize: 11.5, weight: .regular), NSColor(white: 0.46, alpha: 1), 308)
 
     NSGraphicsContext.restoreGraphicsState()
     try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: path))
