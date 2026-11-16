@@ -744,6 +744,8 @@ const dict: Record<string, string> = {
   "不再显示": "Don't show again",
   "好的，不再显示。可以在设置 › 通用里重新打开": "Got it. You can turn it back on in Settings › General.",
   "在发现页顶部推荐「词元之外」": "Feature Next Token at the top of Discover",
+  "播放全部": "Play all",
+  "按列表顺序连着播放没听完的 {n} 集": "Play the {n} unfinished episodes in list order",
 };
 
 export default dict;

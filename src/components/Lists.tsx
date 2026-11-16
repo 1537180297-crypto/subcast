@@ -1,7 +1,7 @@
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, Link2, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Trash2, Youtube } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, Link2, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Trash2, Youtube } from "lucide-react";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
@@ -345,13 +345,14 @@ export function ShowView({ id }: { id: string }) {
   useEffect(() => { setEps(null); api.listEpisodes(id).then(setEps); }, [id]);
   const byFilter = useMemo(() => eps?.filter((e) => filter === "all" || (filter === "unplayed" ? e.progress < 5 : e.hasTranscript || e.transcriptUrl)) ?? null, [eps, filter]);
   const { month, setMonth, filtered: shown } = useMonthFilter(byFilter);
+  // "Play all" follows the list as filtered, newest first, skipping finished and unplayable episodes.
+  const playable = (shown ?? []).filter((e) => (e.audioUrl || e.videoId) && !(e.duration && e.progress >= e.duration * 0.97));
   if (!show) return <div className="page" />;
   const refresh = async () => {
     setBusy(true);
     try { await api.refreshShow(id); setEps(await api.listEpisodes(id)); await reloadShows(); } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
   };
   const remove = async () => {
-    setMenu(false);
     setMenu(false);
     if (!(await ask({ title: t("取消订阅「{name}」？", { name: show.title }), message: t("已生成的字幕、精读和收听进度会保留。"), ok: t("取消订阅"), danger: true }))) return;
     await api.removeShow(id); await reloadShows(); go({ kind: "latest" });
@@ -378,6 +379,7 @@ export function ShowView({ id }: { id: string }) {
           <div className="row-actions">
             {ytPromo && links.youtube && <YtButton channel={links.youtube} small />}
             <button className="btn sm" onClick={refresh} disabled={busy}>{busy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} {t("检查更新")}</button>
+            {playable.length > 1 && <button className="btn sm" title={t("按列表顺序连着播放没听完的 {n} 集", { n: playable.length })} onClick={() => playAll(playable)}><ListVideo size={14} /> {t("播放全部")}</button>}
             <div className="menu-wrap">
               <button className="btn ghost sm" onClick={() => setMenu(!menu)} aria-haspopup="menu" aria-expanded={menu}><MoreHorizontal size={14} /> {t("更多")}</button>
               {menu && <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}><button role="menuitem" className="danger" onClick={remove}>{t("取消订阅")}</button></div>}
