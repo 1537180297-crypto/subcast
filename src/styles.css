@@ -426,3 +426,6 @@ svg { transition: transform .16s var(--ease); }
 .status-line .seg-control { flex: none; }
 .seg-control button { white-space: nowrap; }
 .status-line .status-text { flex: 1 1 auto; }
+
+.show-names { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.show-orig { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

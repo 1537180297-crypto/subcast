@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Link2, Loader2, MoreHorizontal, Plus, RefreshCw, Search, Youtube } from "lucide-react";
 import { api, errorText, type Episode, type SearchResult, type Show } from "../lib/api";
 import { date, duration } from "../lib/format";
-import { PICKS, TOPICS, shortName, showName, type Pick, type Topic } from "../lib/picks";
-import { useZh } from "../lib/zh";
+import { PICKS, TOPICS, shortName, type Pick, type Topic } from "../lib/picks";
+import { useShowName, useZh } from "../lib/zh";
 import { useStore } from "../store";
 import { BiTitle } from "./Bi";
 
@@ -22,7 +22,8 @@ function Status({ ep }: { ep: Episode }) {
 
 function ShowName({ title }: { title?: string }) {
   if (!title) return null;
-  return <span className="show-name">{showName(title)}</span>;
+  const { zh, orig } = useShowName(title);
+  return <span className="show-name">{zh ?? orig}</span>;
 }
 
 function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
@@ -126,6 +127,7 @@ export function ShowView({ id }: { id: string }) {
   const [expanded, setExpanded] = useState(false);
   const [showOrig, setShowOrig] = useState(false);
   const [menu, setMenu] = useState(false);
+  const names = useShowName(show?.title ?? "");
   const desc = (show?.description ?? "").replace(/<[^>]+>/g, "").trim().slice(0, 1500);
   const descZh = useZh(desc);
   useEffect(() => { setEps(null); api.listEpisodes(id).then(setEps); }, [id]);
@@ -147,8 +149,8 @@ export function ShowView({ id }: { id: string }) {
         {show.cover ? <img src={show.cover} alt="" /> : <div className="cover-fallback" />}
         <div className="show-info">
           <p className="meta-line">{show.kind === "youtube" ? "YouTube 频道" : show.kind === "xiaoyuzhou" ? "小宇宙" : "播客"}{show.author && show.author !== show.title ? ` · ${show.author}` : ""}</p>
-          <h1 className="show-title-h">{showName(show.title)}</h1>
-          {shortName(show.title) !== show.title || !/[\u4e00-\u9fff]/.test(show.title) ? <span className="orig-line clamp1">{show.title}</span> : null}
+          <h1 className="show-title-h">{names.zh ?? names.orig}</h1>
+          {(names.zh || names.orig !== show.title) && <span className="orig-line clamp1">{show.title}</span>}
           {desc && (
             <>
               <p className={`show-desc ${expanded ? "" : "clamp3"}`}>{descText}</p>

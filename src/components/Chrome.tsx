@@ -3,6 +3,7 @@ import { Compass, History, Inbox, Loader2, Pause, Play, Plus, Settings as Cog, X
 import { api, errorText } from "../lib/api";
 import { useStore, type View } from "../store";
 import { showName } from "../lib/picks";
+import { useShowName } from "../lib/zh";
 import { useJobs } from "../lib/jobs";
 import { ZhText } from "./Bi";
 import { showIcon } from "./Lists";
@@ -30,7 +31,7 @@ export function Sidebar() {
         {shows.map((s) => (
           <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={s.title}>
             <span className="show-cover">{showIcon(s)}</span>
-            <span className="show-title">{showName(s.title)}</span>
+            <SideName title={s.title} />
           </button>
         ))}
         {!shows.length && <p className="muted small side-empty">还没有订阅</p>}
@@ -38,6 +39,16 @@ export function Sidebar() {
       <TaskChip />
       <button className="nav settings-btn" onClick={() => useStore.getState().openSettings()}><Cog size={16} /><span>设置</span></button>
     </aside>
+  );
+}
+
+function SideName({ title }: { title: string }) {
+  const { zh, orig } = useShowName(title);
+  return (
+    <span className="show-names">
+      <span className="show-title">{zh ?? orig}</span>
+      {zh && <span className="show-orig">{orig}</span>}
+    </span>
   );
 }
 

@@ -61,3 +61,18 @@ export function useZhParagraphs(text: string | undefined, enabled: boolean): str
 }
 
 export { CJK };
+
+import { PICKS, shortName } from "./picks";
+
+/** A pure transliteration of a person's name ("德瓦克什·帕特尔") tells a Chinese reader nothing; drop it. */
+const isTransliteration = (zh: string) => /^[\u4e00-\u9fff]{1,8}(·[\u4e00-\u9fff]{1,8})+$/.test(zh.trim());
+
+/** Bilingual show name: a curated Chinese name when we have one, else a machine translation (unless it is only a
+ *  transliteration), plus the original. `zh` is undefined when the name is already Chinese or has no useful translation. */
+export function useShowName(title: string): { zh?: string; orig: string } {
+  const orig = shortName(title);
+  const pick = PICKS.find((x) => x.title === title || shortName(x.title) === orig);
+  const auto = useZh(pick ? undefined : orig);
+  const zh = pick?.zh ?? (auto && !isTransliteration(auto) ? auto : undefined);
+  return { zh: zh && zh !== orig && !isZh(orig) ? zh : undefined, orig };
+}
