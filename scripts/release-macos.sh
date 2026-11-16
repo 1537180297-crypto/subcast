@@ -89,5 +89,5 @@ hdiutil detach "$MNT" >/dev/null
 codesign --verify --strict --deep --verbose=2 "$TMPAPP/$NAME.app"
 spctl --assess --type execute -vv "$TMPAPP/$NAME.app"
 rm -rf "$TMPAPP"
-shasum -a 256 "$DMG" | tee "$DMG.sha256"
+(cd "$OUT" && shasum -a 256 "$(basename "$DMG")") | tee "$DMG.sha256"   # bare name so `shasum -c` works next to the download
 echo "DMG: $DMG"

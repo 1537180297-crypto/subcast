@@ -65,6 +65,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
         run: |
           if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_ID" ]; then echo "apple=true" >> "$GITHUB_OUTPUT"; else echo "apple=false" >> "$GITHUB_OUTPUT"; fi
+      # macOS jobs never upload to the GitHub Release: the release DMGs come from scripts/release-macos.sh
+      # (dmgbuild, DMG itself signed + notarized) and share these file names, so CI must not overwrite them.
+      # macOS bundles are still uploaded as workflow artifacts below.
       - name: Build (macOS, signed + notarized)
         if: startsWith(matrix.platform, 'macos') && steps.signing.outputs.apple == 'true'
         uses: tauri-apps/tauri-action@v0
@@ -78,7 +81,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          tagName: ${{ github.ref_type == 'tag' && !startsWith(matrix.platform, 'macos') && github.ref_name || '' }}
           releaseName: SubCast ${{ github.ref_name }}
           releaseDraft: true
           args: ${{ matrix.args }}
@@ -90,7 +93,7 @@ jobs:
           # No Apple secrets: build an ad-hoc signed macOS bundle instead of failing on the Developer ID lookup.
           APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && '-' || '' }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          tagName: ${{ github.ref_type == 'tag' && !startsWith(matrix.platform, 'macos') && github.ref_name || '' }}
           releaseName: SubCast ${{ github.ref_name }}
           releaseDraft: true
           args: ${{ matrix.args }}
