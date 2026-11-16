@@ -1,3 +1,4 @@
+import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { TopBar } from "./Chrome";
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
@@ -234,7 +235,7 @@ function DownloadButton({ ep }: { ep: Episode }) {
             <p className="menu-note">{t("已下载 · {size}", { size: bytes(saved.bytes) })}</p>
             <button role="menuitem" onClick={() => { close(); void api.revealDownload(ep.id).catch((e) => notify(errorText(e))); }}><FolderOpen size={14} /> {t("在文件夹中显示")}</button>
             <button role="menuitem" onClick={() => { close(); go({ kind: "downloads" }); }}><ArrowDownToLine size={14} /> {t("管理全部下载")}</button>
-            <button role="menuitem" className="danger" onClick={() => { close(); if (window.confirm(t("删除这一集已下载的音频？"))) void removeDownload(ep.id); }}><Trash2 size={14} /> {t("删除下载")}</button>
+            <button role="menuitem" className="danger" onClick={() => { close(); void ask({ title: t("删除这一集已下载的音频？"), message: t("之后在线播放，字幕和进度都会保留。"), ok: t("删除"), danger: true }).then((yes) => { if (yes) void removeDownload(ep.id); }); }}><Trash2 size={14} /> {t("删除下载")}</button>
           </div>
         )}
       </div>

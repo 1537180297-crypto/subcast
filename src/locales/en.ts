@@ -142,7 +142,6 @@ const dict: Record<string, string> = {
   "还没有订阅节目": "You haven't subscribed to any shows yet",
   "去发现节目": "Discover shows",
   "加载更多": "Load more",
-  "取消订阅「{name}」？已生成的字幕会保留。": "Unsubscribe from \"{name}\"? Subtitles already generated will be kept.",
   "YouTube 频道": "YouTube channel",
   "播客": "Podcast",
   "收起": "Show less",
@@ -580,7 +579,6 @@ const dict: Record<string, string> = {
   "下载音频，离线也能听": "Download the audio to listen offline",
   "下载中": "Downloading",
   "下载中 {pct}%": "Downloading {pct}%",
-  "删除全部已下载的音频？字幕、精读和收听进度都会保留。": "Delete all downloaded audio? Subtitles, deep reads and listening progress are kept.",
   "全部删除": "Delete all",
   "{n} 集 · 占用 {size} · 没有网络也能听": "{n} episodes · {size} · playable offline",
   "在单集页点下载按钮，就能离线收听": "Click the download button on an episode to listen offline",
@@ -739,6 +737,11 @@ const dict: Record<string, string> = {
   "连不上 {host}：{why}。请检查网络或代理设置": "Can't reach {host}: {why}. Check your network or proxy settings.",
   "网络请求失败（{host}）：{why}": "Network request failed ({host}): {why}",
   "网络请求失败（{host}）": "Network request failed ({host})",
+  "之后在线播放，字幕和进度都会保留。": "It will stream from then on. Subtitles and progress are kept.",
+  "删除全部已下载的音频？": "Delete all downloaded audio?",
+  "字幕、精读和收听进度都会保留。": "Subtitles, deep reads and listening progress are kept.",
+  "取消订阅「{name}」？": "Unsubscribe from {name}?",
+  "已生成的字幕、精读和收听进度会保留。": "Subtitles, deep reads and listening progress you already have are kept.",
 };
 
 export default dict;

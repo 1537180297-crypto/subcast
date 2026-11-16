@@ -1374,3 +1374,12 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .poster-layout .poster-pv img { position: absolute; inset: 14px; width: calc(100% - 28px); height: calc(100% - 28px); max-width: none; max-height: none; object-fit: contain; box-shadow: none; border-radius: 0; filter: drop-shadow(0 8px 24px rgba(0,0,0,.14)); }
 .poster-layout .poster-wait, .poster-layout .poster-pv > .error-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .poster-theme span:last-child { white-space: nowrap; font-size: 11.5px; }
+
+/* In-app confirmation (window.confirm does nothing in the macOS webview) */
+.confirm-back { z-index: 80; }
+.modal.confirm { width: min(400px, calc(100vw - 32px)); padding: 22px 22px 18px; }
+.confirm-title { font-size: 16px; font-weight: 600; color: var(--text); line-height: 1.45; }
+.confirm-msg { margin-top: 6px; font-size: 13.5px; line-height: 1.6; }
+.modal.confirm .modal-foot { margin-top: 20px; }
+.btn.danger-btn { background: var(--danger); color: #fff; border-color: transparent; }
+.btn.danger-btn:hover { background: color-mix(in srgb, var(--danger) 88%, #000); }

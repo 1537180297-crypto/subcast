@@ -1,3 +1,4 @@
+import { ConfirmHost } from "./components/ConfirmHost";
 import { useShallow } from "zustand/react/shallow";
 import { Splitter } from "./components/Splitter";
 import { SelectionTools } from "./components/SelectionTools";
@@ -102,6 +103,7 @@ export default function App() {
       {addOpen && <AddDialog />}
       <SelectionTools />
       <UpdateBanner />
+      <ConfirmHost />
       <Toast />
     </div>
   );

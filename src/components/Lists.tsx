@@ -1,3 +1,4 @@
+import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, Link2, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Trash2, Youtube } from "lucide-react";
@@ -306,7 +307,7 @@ export function DownloadsView() {
   const total = Object.values(saved).reduce((n, x) => n + x.bytes, 0);
   const n = Object.keys(saved).length;
   const clear = async () => {
-    if (!window.confirm(t("删除全部已下载的音频？字幕、精读和收听进度都会保留。"))) return;
+    if (!(await ask({ title: t("删除全部已下载的音频？"), message: t("字幕、精读和收听进度都会保留。"), ok: t("全部删除"), danger: true }))) return;
     await clearDownloads();
   };
   return (
@@ -351,7 +352,8 @@ export function ShowView({ id }: { id: string }) {
   };
   const remove = async () => {
     setMenu(false);
-    if (!window.confirm(t("取消订阅「{name}」？已生成的字幕会保留。", { name: show.title }))) return;
+    setMenu(false);
+    if (!(await ask({ title: t("取消订阅「{name}」？", { name: show.title }), message: t("已生成的字幕、精读和收听进度会保留。"), ok: t("取消订阅"), danger: true }))) return;
     await api.removeShow(id); await reloadShows(); go({ kind: "latest" });
   };
   const descText = showOrig || !descZh ? desc : descZh;

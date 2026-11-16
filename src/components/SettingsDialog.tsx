@@ -1,3 +1,4 @@
+import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
 import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, Play, RefreshCw, Square, Trash2 } from "lucide-react";
@@ -356,7 +357,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
   const n = Object.keys(saved).length;
   const size = (b?: number) => (info ? (b ? bytes(b) : "0 MB") : "…");
   const clearAll = async () => {
-    if (!window.confirm(t("删除全部已下载的音频？字幕、精读和收听进度都会保留。"))) return;
+    if (!(await ask({ title: t("删除全部已下载的音频？"), message: t("字幕、精读和收听进度都会保留。"), ok: t("全部删除"), danger: true }))) return;
     await clearDownloads(); load();
   };
   return (
