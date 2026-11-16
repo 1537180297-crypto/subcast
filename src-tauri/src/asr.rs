@@ -14,15 +14,20 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub struct ModelSpec {
     pub id: &'static str,
     pub name: &'static str,
+    /// whisper: whisper.cpp in our own worker process; qwen3: Qwen3-ASR through the CrispASR program.
+    pub engine: &'static str,
+    /// Hugging Face repository the file comes from.
+    pub repo: &'static str,
     pub file: &'static str,
     pub size_mb: u32,
     pub note: &'static str,
 }
 
 pub const MODELS: &[ModelSpec] = &[
-    ModelSpec { id: "large-v3-turbo", name: "Whisper large-v3-turbo（推荐）", file: "ggml-large-v3-turbo-q5_0.bin", size_mb: 547, note: "准确率高，Apple 芯片上 1 小时音频约 3–5 分钟" },
-    ModelSpec { id: "small", name: "Whisper small", file: "ggml-small-q5_1.bin", size_mb: 181, note: "体积小、速度快，准确率稍低" },
-    ModelSpec { id: "base", name: "Whisper base", file: "ggml-base-q5_1.bin", size_mb: 57, note: "最快，适合试用或老电脑" },
+    ModelSpec { id: "qwen3-asr", name: "Qwen3-ASR 0.6B（推荐）", engine: "qwen3", repo: "cstr/qwen3-asr-0.6b-GGUF", file: "qwen3-asr-0.6b-q8_0.gguf", size_mb: 960, note: "中英文都准，自带标点，专有名词识别好；首次使用另需下载约 20 MB 识别程序" },
+    ModelSpec { id: "large-v3-turbo", name: "Whisper large-v3-turbo", engine: "whisper", repo: "ggerganov/whisper.cpp", file: "ggml-large-v3-turbo-q5_0.bin", size_mb: 547, note: "支持语言最多，Apple 芯片上 1 小时音频约 3–5 分钟" },
+    ModelSpec { id: "small", name: "Whisper small", engine: "whisper", repo: "ggerganov/whisper.cpp", file: "ggml-small-q5_1.bin", size_mb: 181, note: "体积小、速度快，准确率稍低" },
+    ModelSpec { id: "base", name: "Whisper base", engine: "whisper", repo: "ggerganov/whisper.cpp", file: "ggml-base-q5_1.bin", size_mb: 57, note: "最快，适合试用或老电脑" },
 ];
 
 pub fn spec(id: &str) -> Option<&'static ModelSpec> { MODELS.iter().find(|m| m.id == id) }
@@ -82,7 +87,7 @@ pub async fn download_model(data: &Path, id: &str, cancel: &AtomicBool, mirror_f
     let hosts = if mirror_first { ["hf-mirror.com", "huggingface.co"] } else { ["huggingface.co", "hf-mirror.com"] };
     let mut err = anyhow!("下载失败");
     for host in hosts {
-        let url = format!("https://{host}/ggerganov/whisper.cpp/resolve/main/{}", m.file);
+        let url = format!("https://{host}/{}/resolve/main/{}", m.repo, m.file);
         match download(&url, &dest, cancel, &mut progress).await {
             Ok(()) => return Ok(()),
             Err(e) if cancel.load(Ordering::Relaxed) => return Err(e),
@@ -151,6 +156,117 @@ pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc
         if e.file_name().to_string_lossy().starts_with(video_id) { return Ok(e.path()); }
     }
     Err(anyhow!("没有找到下载的音频"))
+}
+
+// ---- CrispASR (runs Qwen3-ASR) ----------------------------------------------------------------------
+
+const CRISPASR_VERSION: &str = "v0.8.54";
+
+fn crispasr_asset() -> Option<&'static str> {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) { Some("crispasr-macos-arm64.tar.gz") }
+    else if cfg!(target_os = "macos") { Some("crispasr-macos-x86_64.tar.gz") }
+    else if cfg!(windows) { Some("crispasr-windows-x86_64-cpu.zip") }
+    else if cfg!(all(target_os = "linux", target_arch = "aarch64")) { Some("crispasr-linux-arm64.tar.gz") }
+    else if cfg!(target_os = "linux") { Some("crispasr-linux-x86_64.tar.gz") }
+    else { None }
+}
+
+fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if p.is_dir() { if let Some(f) = find_file(&p, name) { return Some(f); } }
+        else if p.file_name().is_some_and(|n| n == name) { return Some(p); }
+    }
+    None
+}
+
+pub fn find_crispasr(data: &Path) -> Option<PathBuf> {
+    find_file(&data.join("bin").join(format!("crispasr-{CRISPASR_VERSION}")), &exe("crispasr"))
+}
+
+pub async fn install_crispasr(data: &Path, cancel: &AtomicBool, progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf> {
+    let asset = crispasr_asset().ok_or_else(|| anyhow!("这个系统暂不支持 Qwen3-ASR"))?;
+    let archive = data.join("bin").join(asset);
+    download(&format!("https://github.com/CrispStrobe/CrispASR/releases/download/{CRISPASR_VERSION}/{asset}"), &archive, cancel, progress).await?;
+    let dest = data.join("bin").join(format!("crispasr-{CRISPASR_VERSION}"));
+    let (a, d) = (archive.clone(), dest.clone());
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d)?;
+        let file = std::fs::File::open(&a)?;
+        if a.extension().is_some_and(|e| e == "zip") {
+            zip::ZipArchive::new(file)?.extract(&d)?;
+        } else {
+            tar::Archive::new(flate2::read::GzDecoder::new(file)).unpack(&d)?;
+        }
+        Ok(())
+    }).await??;
+    let _ = std::fs::remove_file(&archive);
+    let bin = find_crispasr(data).ok_or_else(|| anyhow!("识别程序安装不完整"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(bin)
+}
+
+/// Writes 16 kHz mono samples as a 16-bit PCM WAV file (what CrispASR reads most reliably).
+pub fn write_wav(path: &Path, samples: &[f32]) -> Result<()> {
+    use std::io::Write;
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let data_len = (samples.len() * 2) as u32;
+    f.write_all(b"RIFF")?; f.write_all(&(36 + data_len).to_le_bytes())?; f.write_all(b"WAVEfmt ")?;
+    f.write_all(&16u32.to_le_bytes())?; f.write_all(&1u16.to_le_bytes())?; f.write_all(&1u16.to_le_bytes())?;
+    f.write_all(&16000u32.to_le_bytes())?; f.write_all(&32000u32.to_le_bytes())?; f.write_all(&2u16.to_le_bytes())?; f.write_all(&16u16.to_le_bytes())?;
+    f.write_all(b"data")?; f.write_all(&data_len.to_le_bytes())?;
+    for s in samples { f.write_all(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())?; }
+    f.flush()?;
+    Ok(())
+}
+
+/// Runs Qwen3-ASR on a 16 kHz WAV. CrispASR transcribes in ~30 s slices; each slice is split into sentences.
+pub async fn run_crispasr(bin: &Path, model: &Path, wav: &Path, language: &str, prompt: &str, cancel: Arc<AtomicBool>, mut on_progress: impl FnMut(f64)) -> Result<Vec<Segment>> {
+    let out = wav.with_extension("");
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("-m").arg(model).arg("-f").arg(wav).args(["-oj", "-np", "-pp"]).arg("-of").arg(&out);
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
+    cmd.args(["-t", &threads.to_string()]);
+    if language == "auto" { cmd.args(["-l", "auto", "--lid-backend", "off"]); } else { cmd.args(["-l", language]); }
+    if !prompt.is_empty() { cmd.arg("--prompt").arg(prompt); }
+    cmd.kill_on_drop(true).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+    let mut child = cmd.spawn().context("无法启动 Qwen3-ASR 识别程序")?;
+    let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
+    let re = regex::Regex::new(r"progress\s*=\s*(\d+)%").unwrap();
+    let mut tail: Vec<String> = Vec::new();
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                let Some(line) = line? else { break };
+                if let Some(c) = re.captures(&line) { on_progress(c[1].parse::<f64>().unwrap_or(0.0) / 100.0); }
+                else if !line.starts_with("ggml_") { tail.push(line); if tail.len() > 6 { tail.remove(0); } }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {
+                if cancel.load(Ordering::Relaxed) { let _ = child.kill().await; return Err(anyhow!("已取消")); }
+            }
+        }
+    }
+    let status = child.wait().await?;
+    let json_path = out.with_extension("json");
+    if !status.success() || !json_path.is_file() {
+        return Err(anyhow!("Qwen3-ASR 识别失败：{}", tail.last().cloned().unwrap_or_default()));
+    }
+    let v: serde_json::Value = serde_json::from_str(&tokio::fs::read_to_string(&json_path).await?)?;
+    let mut segs = Vec::new();
+    for t in v["transcription"].as_array().into_iter().flatten() {
+        let start = t["offsets"]["from"].as_f64().unwrap_or(0.0) / 1000.0;
+        let end = t["offsets"]["to"].as_f64().unwrap_or(0.0) / 1000.0;
+        let text = t["text"].as_str().unwrap_or("").trim();
+        if !text.is_empty() { segs.extend(crate::transcript::split_timed(text, start, end)); }
+    }
+    Ok(segs)
 }
 
 // ---- running the worker ---------------------------------------------------------------------------

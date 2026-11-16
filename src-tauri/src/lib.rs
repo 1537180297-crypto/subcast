@@ -232,10 +232,31 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         let prompt = format!("{} — {}", ep.show_title.clone().unwrap_or_default(), ep.title).chars().take(200).collect::<String>();
         let app2 = app.clone();
         let id2 = episode_id.clone();
-        let out = asr::run_worker(&audio, &model_path, &language, &prompt, cancel.clone(), move |ev| match ev {
-            asr::WorkerEvent::Progress(p) => asr_emit(&app2, &id2, "transcribe", p, None, None),
-            asr::WorkerEvent::Segment(s) => asr_emit(&app2, &id2, "segment", 0.0, None, Some(s)),
-        }).await.map_err(e)?;
+        let out = if spec.engine == "qwen3" {
+            let bin = match asr::find_crispasr(&state.data) {
+                Some(p) => p,
+                None => {
+                    asr_emit(&app, &episode_id, "download", 0.0, Some("正在准备 Qwen3-ASR 识别程序".into()), None);
+                    let (a, i) = (app.clone(), episode_id.clone());
+                    asr::install_crispasr(&state.data, &cancel, move |got, total| {
+                        asr_emit(&a, &i, "download", total.map(|t| got as f64 / t as f64).unwrap_or(0.0), Some("正在准备 Qwen3-ASR 识别程序".into()), None);
+                    }).await.map_err(e)?
+                }
+            };
+            asr_emit(&app, &episode_id, "transcribe", 0.01, Some("正在解码音频".into()), None);
+            let (src, wav) = (audio.clone(), work.join("audio16k.wav"));
+            let wav2 = wav.clone();
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> { asr::write_wav(&wav2, &asr::decode_16k_mono(&src)?) }).await.map_err(e)?.map_err(e)?;
+            let segments = asr::run_crispasr(&bin, &model_path, &wav, &language, &prompt, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, None, None)).await.map_err(e)?;
+            let sample: String = segments.iter().take(5).map(|s| s.text.as_str()).collect();
+            let lang = if language != "auto" { language.clone() } else if sample.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) { "zh".into() } else { "auto".into() };
+            asr::WorkerResult { language: lang, segments }
+        } else {
+            asr::run_worker(&audio, &model_path, &language, &prompt, cancel.clone(), move |ev| match ev {
+                asr::WorkerEvent::Progress(p) => asr_emit(&app2, &id2, "transcribe", p, None, None),
+                asr::WorkerEvent::Segment(s) => asr_emit(&app2, &id2, "segment", 0.0, None, Some(s)),
+            }).await.map_err(e)?
+        };
         let segments = transcript::resegment(transcript::clean(out.segments));
         if segments.is_empty() { return Err("没有识别出文字（可能是纯音乐或静音）".to_string()); }
         let t = Transcript { episode_id: ep.id.clone(), source: "whisper".into(), language: out.language, segments };
@@ -389,5 +410,19 @@ mod live {
         let segs = transcript::resegment(transcript::clean(youtube::fetch_track(t).await.unwrap()));
         println!("{} lang={} auto={} {} blocks; {:?}", info.title, t.language, t.auto, segs.len(), &segs[..2]);
         assert!(segs.len() > 5);
+    }
+    #[tokio::test]
+    #[ignore]
+    async fn qwen3_pipeline() {
+        // SUBCAST_TEST_DIR holds clip.mp3 and qwen3-asr-0.6b-q8_0.gguf.
+        let dir = std::path::PathBuf::from(std::env::var("SUBCAST_TEST_DIR").unwrap());
+        let data = dir.join("data");
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let bin = match asr::find_crispasr(&data) { Some(b) => b, None => asr::install_crispasr(&data, &flag, |_, _| {}).await.unwrap() };
+        let wav = dir.join("t16k.wav");
+        asr::write_wav(&wav, &asr::decode_16k_mono(&dir.join("clip.mp3")).unwrap()).unwrap();
+        let segs = asr::run_crispasr(&bin, &dir.join("qwen3-asr-0.6b-q8_0.gguf"), &wav, "auto", "No Priors", flag, |p| println!("progress {p}")).await.unwrap();
+        for s in &segs { println!("[{:.1}-{:.1}] {}", s.start, s.end, s.text); }
+        assert!(segs.len() >= 5);
     }
 }

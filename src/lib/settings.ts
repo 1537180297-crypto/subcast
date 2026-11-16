@@ -30,7 +30,7 @@ export const DEFAULTS: Settings = {
   chatProvider: "deepseek",
   translateProvider: "deepseek",
   proxy: "",
-  asrModel: "large-v3-turbo",
+  asrModel: "qwen3-asr",
   asrLanguage: "auto",
   mirrorFirst: true,
   autoTranslate: true,

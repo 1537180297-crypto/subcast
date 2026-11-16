@@ -1,4 +1,15 @@
-import { useEffect, useState } from "react";
+import { Component, useEffect, useState, type ReactNode } from "react";
+
+class PanelBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(e: Error) { return { error: e.message }; }
+  render() {
+    return this.state.error ? (
+      <div className="panel-empty"><p className="lead">这里出了点问题</p><p className="muted small">{this.state.error}</p>
+        <button className="btn" onClick={() => this.setState({ error: null })}>重试</button></div>
+    ) : this.props.children;
+  }
+}
 import { ArrowLeft, Captions, ExternalLink, MessageCircle, Play, ScrollText } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
@@ -11,6 +22,29 @@ import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 
 type Tab = "transcript" | "chat" | "summary";
 
+/** Splits a long subtitle block into screen-sized pieces at word / punctuation boundaries. */
+export function pieces(text: string, cjk: boolean): string[] {
+  const max = cjk ? 30 : 84;
+  const parts = cjk ? text.split(/(?<=[，。！？；：、,.!?;])/) : text.split(/(?<=\s)/);
+  const out: string[] = [];
+  let cur = "";
+  for (const p of parts) {
+    if (cur && (cur + p).length > max) { out.push(cur.trim()); cur = ""; }
+    cur += p;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out.length ? out : [text];
+}
+
+/** The piece being spoken now, assuming speech is spread evenly over the block. */
+function pieceAt(text: string, cjk: boolean, progress: number): string {
+  const ps = pieces(text, cjk);
+  const total = ps.reduce((n, p) => n + p.length, 0);
+  let acc = 0;
+  for (const p of ps) { acc += p.length; if (acc / total >= progress) return p; }
+  return ps[ps.length - 1];
+}
+
 function SubtitleOverlay({ ep }: { ep: Episode }) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const items = useJobs((s) => s.translations[ep.id]?.items);
@@ -21,10 +55,12 @@ function SubtitleOverlay({ ep }: { ep: Episode }) {
   const seg = transcript.segments[i];
   if (!seg || time > seg.end + 1.5) return null;
   const zh = items?.[i];
+  const progress = Math.min(1, Math.max(0, (time - seg.start) / Math.max(0.5, seg.end - seg.start)));
+  const cjk = /[\u4e00-\u9fff]/.test(seg.text);
   return (
     <div className="subtitle-overlay">
-      {zh && mode !== "original" && <p className="sub-zh">{zh}</p>}
-      {(mode !== "translation" || !zh) && <p className="sub-orig">{seg.text}</p>}
+      {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
+      {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
     </div>
   );
 }
@@ -87,9 +123,11 @@ export function EpisodeView({ id }: { id: string }) {
             <button role="tab" aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /> 导读</button>
           </div>
           <div className="tab-body">
-            {tab === "transcript" && <TranscriptPanel ep={ep} />}
-            {tab === "chat" && <ChatPanel ep={ep} />}
-            {tab === "summary" && <SummaryPanel ep={ep} />}
+            <PanelBoundary key={tab}>
+              {tab === "transcript" && <TranscriptPanel ep={ep} />}
+              {tab === "chat" && <ChatPanel ep={ep} />}
+              {tab === "summary" && <SummaryPanel ep={ep} />}
+            </PanelBoundary>
           </div>
         </section>
       </div>

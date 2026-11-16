@@ -47,6 +47,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const userScrolled = useRef(0);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const segments = transcript?.segments ?? [];
   const active = isCurrent ? activeIndex(segments, time) : -1;
   const seek = (t: number) => { if (isCurrent) player?.seek(t); };
@@ -82,7 +83,6 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const total = segments.length;
   const done = translation?.items.filter((x) => x != null).length ?? 0;
   const wantsZh = needsTranslation(transcript);
-  const [startError, setStartError] = useState<string | null>(null);
   const startTranslate = () => { setStartError(null); translateEpisode(ep, transcript).catch((e) => setStartError(errorText(e))); };
   const barError = startError ?? translation?.error;
   const needsSetup = barError && /设置|API Key|模型/.test(barError);

@@ -175,6 +175,49 @@ pub fn resegment(segments: Vec<Segment>) -> Vec<Segment> {
     out
 }
 
+/// Splits a block of text with one time range into sentences, spreading the time by length
+/// (Qwen3-ASR gives text per ~30 s slice, not per sentence).
+pub fn split_timed(text: &str, start: f64, end: f64) -> Vec<Segment> {
+    // Raw sentences: break after 。？！； or after .?! that end a word (a closing quote stays with its sentence).
+    let chars: Vec<char> = text.chars().collect();
+    let mut raw: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        cur.push(c);
+        let next = chars.get(i + 1).copied();
+        let ends = match c {
+            '。' | '？' | '！' | '；' => !matches!(next, Some('”' | '"')),
+            '.' | '?' | '!' => next.is_none_or(char::is_whitespace),
+            '"' | '”' => i > 0 && matches!(chars[i - 1], '.' | '?' | '!' | '。' | '？' | '！'),
+            _ => false,
+        };
+        if ends { raw.push(cur.trim().to_string()); cur.clear(); }
+    }
+    if !cur.trim().is_empty() { raw.push(cur.trim().to_string()); }
+    // Fragments such as "Yes." or "Max." join the sentence before them.
+    // Chinese packs more into fewer characters than English.
+    let short = |t: &str| t.chars().count() < if t.chars().any(|c| c > '\u{2e80}') { 6 } else { 12 };
+    let mut parts: Vec<String> = Vec::new();
+    for r in raw.into_iter().filter(|r| !r.is_empty()) {
+        match parts.last_mut() {
+            Some(last) if short(&r) || short(last) => {
+                if !last.ends_with(|c: char| c > '\u{2e80}') { last.push(' '); }
+                last.push_str(&r);
+            }
+            _ => parts.push(r),
+        }
+    }
+    let total: usize = parts.iter().map(|p| p.chars().count()).sum::<usize>().max(1);
+    let span = (end - start).max(0.0);
+    let mut t = start;
+    parts.into_iter().map(|p| {
+        let d = span * p.chars().count() as f64 / total as f64;
+        let s = Segment { start: t, end: t + d, text: p };
+        t += d;
+        s
+    }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +234,13 @@ mod tests {
         assert_eq!(s.len(), 2);
         assert_eq!(s[1].text, "We're no");
         assert_eq!(clean(s).len(), 1);
+    }
+    #[test]
+    fn timed_split() {
+        let s = split_timed("This is the first sentence. And a second one here? Yes. 第三句中文内容在这里。", 10.0, 40.0);
+        assert_eq!(s.len(), 3);
+        assert_eq!(s[1].text, "And a second one here? Yes.");
+        assert!((s[0].start - 10.0).abs() < 1e-9 && (s[2].end - 40.0).abs() < 1e-6);
     }
     #[test]
     fn merge() {

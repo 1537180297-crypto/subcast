@@ -10,7 +10,7 @@ const showFatal = (msg: string) => {
   el.textContent = msg;
   document.body.appendChild(el);
 };
-window.addEventListener("error", (e) => showFatal(String(e.error?.stack ?? e.message)));
+window.addEventListener("error", (e) => showFatal(`${e.message}\n${String(e.error?.stack ?? "").split("\n").slice(0, 4).join("\n")}`));
 window.addEventListener("unhandledrejection", (e) => showFatal(String((e.reason as Error)?.stack ?? e.reason)));
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

@@ -77,6 +77,8 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
         events: {
           onReady: () => {
             playerRef.current = player;
+            // Our own subtitles replace YouTube's.
+            try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ }
             player.setPlaybackRate?.(useStore.getState().settings.playbackRate);
             useStore.getState().set({
               length: player.getDuration?.() || ep.duration || 0,
@@ -94,6 +96,7 @@ export function YouTubePlayer({ ep, overlay }: { ep: Episode; overlay?: React.Re
           },
           onStateChange: (e: any) => {
             useStore.getState().set({ playing: e.data === 1 });
+            if (e.data === 1) { try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ } }
             if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
           },
           onError: (e: any) => setError(e.data === 150 || e.data === 101 ? "视频作者不允许在其他应用中播放，可点「在 YouTube 打开」" : `视频无法播放（错误 ${e.data}）`),
