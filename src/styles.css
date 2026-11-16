@@ -1360,3 +1360,17 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 /* Mini player: aligned with the content's left edge, never over the subtitle panel */
 .mini { left: calc(var(--sidebar-w) + 30px); right: auto; margin: 0; width: min(520px, calc(100vw - var(--sidebar-w) - 30px - var(--mini-right, 24px))); max-width: none; }
 .page-head { justify-content: flex-start; }
+
+/* Poster dialog: the whole poster fits the preview area; nothing scrolls */
+.modal.wide:has(.poster-layout) { height: min(720px, calc(100vh - 48px)); }
+.modal-body:has(> .poster-layout) { display: flex; flex-direction: column; overflow: hidden; }
+.poster-layout { flex: 1; min-height: 0; }
+.poster-layout .poster-pv { height: 100%; min-height: 0; max-height: none; overflow: hidden; padding: 14px; }
+.poster-layout .poster-pv img { width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
+.poster-side { min-height: 0; overflow: hidden; }
+.poster-layout + .modal-foot { flex: none; }
+.poster-layout { grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) 236px; }
+.poster-layout .poster-pv { position: relative; display: block; }
+.poster-layout .poster-pv img { position: absolute; inset: 14px; width: calc(100% - 28px); height: calc(100% - 28px); max-width: none; max-height: none; object-fit: contain; box-shadow: none; border-radius: 0; filter: drop-shadow(0 8px 24px rgba(0,0,0,.14)); }
+.poster-layout .poster-wait, .poster-layout .poster-pv > .error-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.poster-theme span:last-child { white-space: nowrap; font-size: 11.5px; }
