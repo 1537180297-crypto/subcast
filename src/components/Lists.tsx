@@ -1,9 +1,9 @@
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useMemo, useState } from "react";
-import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, Link2, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Trash2, Youtube } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, Link2, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Search, Trash2, X, Youtube } from "lucide-react";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
-import { api, errorText, type Episode, type Show } from "../lib/api";
+import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
 import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, type Pick, type Topic } from "../lib/picks";
 import { isChineseUi, t } from "../lib/i18n";
@@ -27,8 +27,27 @@ function ShowName({ title }: { title?: string }) {
 
 /** One episode, built for scanning: who and when on a small first line, the title in full (up to two lines),
  *  the original title muted underneath, and status only when it means something. */
-function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
+/** The query's words marked in a piece of text. */
+function Marked({ text, query }: { text: string; query: string }) {
+  const words = query.split(/\s+/).filter(Boolean).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!words.length) return <>{text}</>;
+  const re = new RegExp(`(${words.join("|")})`, "gi");
+  return <>{text.split(re).map((part, i) => (i % 2 ? <mark key={i}>{part}</mark> : part))}</>;
+}
+
+/** Opens an episode and plays it from a subtitle match. */
+function openAt(ep: Episode, time: number) {
+  const s = useStore.getState();
+  const at = { ...ep, progress: Math.max(0, time - 1) };
+  void api.setProgress(ep.id, at.progress);
+  s.load(at);
+  s.openEpisode(at);
+  window.setTimeout(() => useStore.getState().player?.play(), 700);
+}
+
+function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boolean; hit?: ShowHit; query?: string }) {
   const openEpisode = useStore((s) => s.openEpisode);
+  const open = () => (hit?.time != null ? openAt(ep, hit.time) : openEpisode(ep));
   const current = useStore((s) => s.current);
   const zh = useZh(ep.title);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
@@ -36,7 +55,7 @@ function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
   const saved = useOffline((s) => !!s.saved[ep.id]);
   const loading = useOffline((s) => s.active[ep.id]);
   return (
-    <div className={`ep-item ${current?.id === ep.id ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
+    <div className={`ep-item ${current?.id === ep.id ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
       <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>
         {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" onError={(e) => {
@@ -52,8 +71,14 @@ function EpisodeRow({ ep, showShow }: { ep: Episode; showShow: boolean }) {
           <span>{date(ep.published)}</span>
           {ep.duration ? <span>{duration(ep.duration)}</span> : null}
         </p>
-        <p className="ep-title2">{zh ?? ep.title}</p>
-        {zh && zh !== ep.title && <p className="ep-orig">{ep.title}</p>}
+        <p className="ep-title2">{query ? <Marked text={zh ?? ep.title} query={query} /> : zh ?? ep.title}</p>
+        {zh && zh !== ep.title && <p className="ep-orig">{query ? <Marked text={ep.title} query={query} /> : ep.title}</p>}
+        {hit && hit.field !== "title" && (
+          <p className="ep-hit">
+            <span className="ep-hit-where">{hit.field === "transcript" ? <><Play size={10} /> {t("字幕")} {clockShort(hit.time ?? 0)}</> : t("简介")}</span>
+            <span className="ep-hit-text"><Marked text={hit.snippet} query={query ?? ""} /></span>
+          </p>
+        )}
         {(deep || ep.hasTranscript || ep.videoId || pct > 0 || saved || loading !== undefined) && (
           <p className="ep-tags">
             {saved && <span className="tag saved"><ArrowDownToLine size={11} />{t("已下载")}</span>}
@@ -343,6 +368,22 @@ export function ShowView({ id }: { id: string }) {
   const desc = (show?.description ?? "").replace(/<[^>]+>/g, "").trim().slice(0, 1500);
   const descZh = useZh(desc);
   useEffect(() => { setEps(null); api.listEpisodes(id).then(setEps); }, [id]);
+  // Search inside this show: titles (with their Chinese), show notes and subtitles, done by the backend.
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<ShowHit[] | null>(null);
+  const searchBox = useRef<HTMLInputElement>(null);
+  useEffect(() => { setQuery(""); setHits(null); }, [id]);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) { setHits(null); return; }
+    const timer = window.setTimeout(() => void api.searchShow(id, q).then(setHits).catch(() => setHits([])), 180);
+    return () => window.clearTimeout(timer);
+  }, [query, id]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") { e.preventDefault(); searchBox.current?.focus(); searchBox.current?.select(); } };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, []);
   const byFilter = useMemo(() => eps?.filter((e) => filter === "all" || (filter === "unplayed" ? e.progress < 5 : e.hasTranscript || e.transcriptUrl)) ?? null, [eps, filter]);
   const { month, setMonth, filtered: shown } = useMonthFilter(byFilter);
   // "Play all" follows the list as filtered, newest first, skipping finished and unplayable episodes.
@@ -396,15 +437,34 @@ export function ShowView({ id }: { id: string }) {
         </div>
       )}
       <div className="list-head">
-        <h2 className="section-title flush">{t("全部单集")}</h2>
-        <div className="seg-control">
-          {([["all", t("全部")], ["unplayed", t("未听")], ["subs", t("有字幕")]] as [Filter, string][]).map(([k, label]) => (
-            <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{label}</button>
-          ))}
-        </div>
+        <h2 className="section-title flush">{hits ? t("搜索结果") : t("全部单集")}</h2>
+        <label className={`show-search ${query ? "on" : ""}`}>
+          <Search size={14} />
+          <input ref={searchBox} value={query} spellCheck={false} placeholder={t("搜索本节目（⌘F）")} aria-label={t("搜索本节目的单集、简介和字幕")}
+            onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") { setQuery(""); e.currentTarget.blur(); } }} />
+          {query && <button className="icon-btn sm" onClick={() => { setQuery(""); searchBox.current?.focus(); }} aria-label={t("清除搜索")}><X size={13} /></button>}
+        </label>
+        {!hits && (
+          <div className="seg-control">
+            {([["all", t("全部")], ["unplayed", t("未听")], ["subs", t("有字幕")]] as [Filter, string][]).map(([k, label]) => (
+              <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{label}</button>
+            ))}
+          </div>
+        )}
       </div>
-      <MonthFilter episodes={byFilter} month={month} onChange={setMonth} />
-      <EpisodeList episodes={shown} showShow={false} />
+      {hits ? (
+        hits.length ? (
+          <>
+            <p className="muted small search-count">{t("找到 {n} 集", { n: hits.length })}{hits.some((h) => h.field === "transcript") ? ` · ${t("点字幕匹配会从那一句开始播放")}` : ""}</p>
+            <div className="ep-feed">{hits.map((h) => <EpisodeRow key={h.episode.id} ep={h.episode} showShow={false} hit={h} query={query.trim()} />)}</div>
+          </>
+        ) : <EmptyState art={<FlatLineArt />} title={t("没有找到「{q}」", { q: query.trim() })} note={t("搜索范围是标题、简介和已有字幕的单集")} />
+      ) : (
+        <>
+          <MonthFilter episodes={byFilter} month={month} onChange={setMonth} />
+          <EpisodeList episodes={shown} showShow={false} />
+        </>
+      )}
     </div>
   );
 }

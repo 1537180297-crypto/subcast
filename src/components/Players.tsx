@@ -1,6 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play, RotateCcw, RotateCw } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { ExternalLink, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
 import { api, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
@@ -88,21 +90,36 @@ export const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
 export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; overlay?: React.ReactNode; onUnplayable?: () => void }) {
   const [native, setNative] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [fallingBack, setFallingBack] = useState(false);
+  /** What the switch to the direct stream is waiting for; null when not switching. */
+  const [fallingBack, setFallingBack] = useState<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const fallback = async (why: string) => {
-    setFallingBack(true);
-    try { setNative(await api.youtubeStream(ep.videoId!)); setError(null); }
+    setFallingBack(t("{reason}，正在改用直连播放…", { reason: why }));
+    const off = listen<{ videoId: string; stage: string; progress: number }>("yt-stream", ({ payload: p }) => {
+      if (p.videoId !== ep.videoId) return;
+      setFallingBack(p.stage === "tool"
+        ? t("首次使用，正在下载 YouTube 播放组件 {pct}%", { pct: Math.round(p.progress * 100) })
+        : t("{reason}，正在获取视频地址…", { reason: why }));
+    });
+    const hls = document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
+    try { setNative(await api.youtubeStream(ep.videoId!, hls)); setError(null); }
     catch (e) { if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(String((e as any)?.message ?? e)) })); }
-    finally { setFallingBack(false); }
+    finally { setFallingBack(null); void off.then((f) => f()); }
   };
   useEffect(() => { setNative(null); setError(null); }, [ep.id]);
+  // Have yt-dlp ready before it is needed: a first fallback would otherwise start with a 35 MB download.
+  useEffect(() => { void api.prepareYoutube().catch(() => {}); }, []);
+  const watchOnYouTube = () => {
+    const s = Math.floor(useStore.getState().current?.id === ep.id ? useStore.getState().time : ep.progress ?? 0);
+    void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
+  };
+  const openBtn = <button className="link-btn video-open" onClick={watchOnYouTube}><ExternalLink size={13} /> {t("在 YouTube 打开")}</button>;
   const fullscreen = () => { const el = box.current; if (!el) return; document.fullscreenElement ? void document.exitFullscreen() : void el.requestFullscreen?.().catch(() => {}); };
   return (
     <div className="video" ref={box}>
       {native ? <NativeVideo ep={ep} src={native} onFullscreen={fullscreen} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
-      {fallingBack && <div className="video-note"><span className="spin-dot" /> {t("作者限制了嵌入播放，正在切换到直连播放…")}</div>}
-      {error && <div className="video-error">{error}</div>}
+      {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
+      {error && <div className="video-error">{error} {openBtn}</div>}
       {overlay}
     </div>
   );
@@ -162,7 +179,11 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             if (e.data === 0) { void api.setProgress(ep.id, player.getDuration?.() ?? player.getCurrentTime()); playNext(); }
           },
           onError: (e: any) => {
-            if ([100, 101, 150, 152, 153].includes(e.data)) onBlocked(e.data === 100 ? t("视频不存在或已设为私享") : t("视频作者不允许在其他应用中嵌入播放"));
+            // 101/150: the owner disallows embedding. 152/153 are player/referrer problems on this side, not the owner's choice.
+            console.warn("YouTube player error", e.data, ep.videoId);
+            if ([100, 101, 150, 152, 153].includes(e.data)) onBlocked(e.data === 100 ? t("视频不存在或已设为私享")
+              : e.data === 101 || e.data === 150 ? t("作者限制了嵌入播放")
+              : t("YouTube 播放器加载失败（错误 {code}）", { code: e.data }));
             else onError(t("视频无法播放（错误 {code}）", { code: e.data }));
           },
         },

@@ -5,7 +5,7 @@ import { api, errorText, type SearchResult } from "../lib/api";
 import { useStore, type View } from "../store";
 import { hasUpdate, useUpdate } from "../lib/updater";
 import { PICKS, deepPickFor, isSubscribed, pickName, showName } from "../lib/picks";
-import { isChineseUi, t, tk, tr, tx, useLang } from "../lib/i18n";
+import { isChineseUi, kbd, t, tk, tr, tx, useLang } from "../lib/i18n";
 import { useShowName } from "../lib/zh";
 import { useJobs } from "../lib/jobs";
 import { BiTitle, ZhText } from "./Bi";
@@ -120,7 +120,7 @@ export function TopBar() {
             onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
-          {busy || adding ? <Loader2 size={14} className="spin" /> : link ? <span className="kbd-hint">{t("回车订阅")}</span> : !open && !q && <kbd className="kbd-hint" title={t("按 ⌘L 搜索")}>⌘L</kbd>}
+          {busy || adding ? <Loader2 size={14} className="spin" /> : link ? <span className="kbd-hint">{t("回车订阅")}</span> : !open && !q && <kbd className="kbd-hint" title={t("按 ⌘L 搜索")}>{kbd("⌘L")}</kbd>}
         </div>
         {open && results && (
           <div className="search-drop">

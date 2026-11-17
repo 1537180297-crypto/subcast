@@ -230,6 +230,62 @@ fn list_episodes(state: State<'_, AppState>, show_id: Option<String>, limit: Opt
     db::list_episodes(&state.db.lock().unwrap(), show_id.as_deref(), limit.unwrap_or(300)).map_err(e)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowHit {
+    episode: Episode,
+    /// title | notes | transcript
+    field: &'static str,
+    snippet: String,
+    /// Where in the episode a subtitle hit is, in seconds.
+    time: Option<f64>,
+}
+
+/// Searches one show's episodes on this computer: titles (and their Chinese translations), show notes, and the
+/// subtitles of episodes that have them, original and Chinese. Every word must appear in the same field.
+#[tauri::command]
+fn search_show(state: State<'_, AppState>, show_id: String, query: String) -> Res<Vec<ShowHit>> {
+    search_episodes(&state.db.lock().unwrap(), &show_id, &query).map_err(e)
+}
+
+fn search_episodes(conn: &Connection, show_id: &str, query: &str) -> anyhow::Result<Vec<ShowHit>> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    if words.is_empty() { return Ok(vec![]); }
+    let eps = db::list_episodes(conn, Some(show_id), 5000)?;
+    let tags = regex::Regex::new(r"<[^>]+>").unwrap();
+    let has = |text: &str| { let l = text.to_lowercase(); words.iter().all(|w| l.contains(w)) };
+    let mut hits = Vec::new();
+    for ep in eps {
+        let zh_title = db::tr_get(conn, &short_hash(&format!("zh-CN|{}", ep.title), 24)).ok().flatten();
+        let title = match &zh_title { Some(z) => format!("{} {z}", ep.title), None => ep.title.clone() };
+        if has(&title) { hits.push(ShowHit { snippet: String::new(), field: "title", time: None, episode: ep }); continue; }
+        let notes = ep.notes.as_deref().map(|n| tags.replace_all(n, " ").to_string()).unwrap_or_default();
+        if has(&notes) { hits.push(ShowHit { snippet: snippet(&notes, &words[0]), field: "notes", time: None, episode: ep }); continue; }
+        if !ep.has_transcript { continue; }
+        let Some(t) = db::get_transcript(conn, &ep.id).ok().flatten() else { continue };
+        let zh: Vec<Option<String>> = db::get_blob(conn, &ep.id, "zh").ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        // A line matches with its translation; the first one that contains every word is shown.
+        let found = t.segments.iter().enumerate().find_map(|(i, s)| {
+            let line = match zh.get(i).cloned().flatten() { Some(z) => format!("{} {z}", s.text), None => s.text.clone() };
+            has(&line).then(|| (s.start, line))
+        });
+        if let Some((start, line)) = found { hits.push(ShowHit { snippet: snippet(&line, &words[0]), field: "transcript", time: Some(start), episode: ep }); }
+    }
+    // Titles first, then show notes, then subtitles; newest first within each (the list is already newest first).
+    hits.sort_by_key(|h| match h.field { "title" => 0, "notes" => 1, _ => 2 });
+    Ok(hits)
+}
+
+/// About 70 characters around the first match.
+fn snippet(text: &str, word: &str) -> String {
+    let chars: Vec<char> = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    let lower: String = chars.iter().collect::<String>().to_lowercase();
+    let at = lower.find(word).map(|b| lower[..b].chars().count()).unwrap_or(0);
+    let from = at.saturating_sub(25);
+    let to = (at + 45).min(chars.len());
+    format!("{}{}{}", if from > 0 { "…" } else { "" }, chars[from..to].iter().collect::<String>(), if to < chars.len() { "…" } else { "" })
+}
+
 #[tauri::command]
 fn recent_episodes(state: State<'_, AppState>) -> Res<Vec<Episode>> { db::recent_episodes(&state.db.lock().unwrap(), 60).map_err(e) }
 
@@ -254,18 +310,69 @@ fn load_transcript(state: State<'_, AppState>, episode_id: String) -> Res<Option
     db::get_transcript(&state.db.lock().unwrap(), &episode_id).map_err(e)
 }
 
+/// One YouTube caption track as a transcript. When the video is not in Chinese and the publisher uploaded
+/// Chinese subtitles, those become the translation (blob "zh", engine "youtube") instead of machine translation.
+async fn youtube_transcript(state: &AppState, ep: &Episode, info: &youtube::VideoInfo, track: &youtube::Track) -> anyhow::Result<Transcript> {
+    let segs = transcript::resegment(transcript::clean(youtube::fetch_track(track).await?));
+    let t = Transcript { episode_id: ep.id.clone(), source: if track.auto { "youtube-auto" } else { "youtube" }.into(), language: track.language.clone(), segments: segs };
+    if t.segments.is_empty() { return Ok(t); }
+    db::save_transcript(&state.db.lock().unwrap(), &t)?;
+    if let Some(zh) = youtube::official_chinese(&info.tracks, &track.language) {
+        if let Ok(lines) = youtube::fetch_track(zh).await {
+            let items = youtube::align(&t.segments, &transcript::clean(lines));
+            // Mostly covered, or the tracks are timed too differently to pair up; gaps get machine translation.
+            if items.iter().filter(|x| x.is_some()).count() * 10 >= items.len() * 6 {
+                let conn = state.db.lock().unwrap();
+                db::set_blob(&conn, &ep.id, "zh", &serde_json::to_string(&items)?)?;
+                db::set_blob(&conn, &ep.id, "zh-engine", "youtube")?;
+            }
+        }
+    }
+    Ok(t)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackChoice { language: String, auto: bool }
+
+/// The caption tracks a video offers, for switching the subtitle language. Auto tracks only in languages
+/// with no uploaded track (YouTube's automatic ones are worse when a human one exists).
+#[tauri::command]
+async fn youtube_tracks(state: State<'_, AppState>, episode_id: String) -> Res<Vec<TrackChoice>> {
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let Some(vid) = &ep.video_id else { return Ok(vec![]) };
+    let info = youtube::video_info(vid).await.map_err(e)?;
+    let mut out: Vec<TrackChoice> = Vec::new();
+    for t in info.tracks.iter().filter(|t| !t.auto).chain(info.tracks.iter().filter(|t| t.auto)) {
+        if !out.iter().any(|c| c.language == t.language) { out.push(TrackChoice { language: t.language.clone(), auto: t.auto }); }
+    }
+    Ok(out)
+}
+
+/// Replaces the transcript with another YouTube caption track.
+#[tauri::command]
+async fn use_youtube_track(state: State<'_, AppState>, episode_id: String, language: String, auto: bool) -> Res<Transcript> {
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let vid = ep.video_id.clone().ok_or("不是视频节目")?;
+    let info = youtube::video_info(&vid).await.map_err(e)?;
+    let track = info.tracks.iter().find(|t| t.language == language && t.auto == auto).ok_or("没有这个语言的字幕")?.clone();
+    let t = youtube_transcript(&state, &ep, &info, &track).await.map_err(e)?;
+    if t.segments.is_empty() { return Err("这条字幕是空的".into()); }
+    // The listener's own choice: never replaced by the automatic pick when the episode opens again.
+    db::set_blob(&state.db.lock().unwrap(), &episode_id, "track-picked", "1").map_err(e)?;
+    Ok(t)
+}
+
 /// The publisher's own subtitles: YouTube captions, or a feed's <podcast:transcript>. None when there are none.
 #[tauri::command]
 async fn fetch_official_transcript(state: State<'_, AppState>, episode_id: String) -> Res<Option<Transcript>> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
     let t = if let Some(vid) = &ep.video_id {
         let info = youtube::video_info(vid).await.map_err(e)?;
-        match youtube::choose(&info.tracks, info.original_language.as_deref()) {
-            Some(track) => {
-                let segs = transcript::clean(youtube::fetch_track(track).await.map_err(e)?);
-                let segs = transcript::resegment(segs);
-                Some(Transcript { episode_id: ep.id.clone(), source: if track.auto { "youtube-auto" } else { "youtube" }.into(), language: track.language.clone(), segments: segs })
-            }
+        let hint = youtube::script_hint(&info.title).or_else(|| youtube::script_hint(&ep.title));
+        match youtube::choose(&info.tracks, info.original_language.as_deref(), hint) {
+            // Saved inside, together with the publisher's Chinese when there is one.
+            Some(track) => { let t = youtube_transcript(&state, &ep, &info, track).await.map_err(e)?; return Ok((!t.segments.is_empty()).then_some(t)); }
             None => None,
         }
     } else if let Some(url) = ep.transcript_url.as_ref().filter(|_| ep.transcript_type.as_deref() != Some("podscribe")) {
@@ -349,9 +456,26 @@ async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res
     Ok(base64::engine::general_purpose::STANDARD.encode(wav))
 }
 
+/// The direct stream for a video the embedded player can't play. Emits `yt-stream` events ("tool" with the
+/// first-time yt-dlp download progress, then "resolve") so the player can say what it is waiting for.
 #[tauri::command]
-async fn youtube_stream(state: State<'_, AppState>, video_id: String) -> Res<String> {
-    asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v).await } }).await.map_err(e)
+async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, hls: Option<bool>) -> Res<String> {
+    let hls = hls.unwrap_or(cfg!(target_os = "macos"));
+    let emit = |stage: &str, progress: f64| { let _ = app.emit("yt-stream", json!({ "videoId": video_id, "stage": stage, "progress": progress })); };
+    let job = async {
+        asr::ytdlp_with(&state.data, |got, total| emit("tool", total.map_or(0.0, |t| got as f64 / t.max(1) as f64))).await?;
+        emit("resolve", 0.0);
+        asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls).await } }).await
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(180), job).await
+        .map_err(|_| "获取视频地址超时，请检查网络或代理".to_string())?
+        .map_err(e)
+}
+
+/// Gets yt-dlp ready in the background when a video page opens, so a fallback doesn't start with a download.
+#[tauri::command]
+async fn prepare_youtube(state: State<'_, AppState>) -> Res<()> {
+    asr::ytdlp(&state.data).await.map(|_| ()).map_err(e)
 }
 
 // ---- offline -------------------------------------------------------------------------------------------
@@ -709,6 +833,7 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data)?;
+            if let Ok(res) = app.path().resource_dir() { let _ = asr::VCRT_DIR.set(res.join("vcrt")); }
             let conn = db::open(&data.join("subcast.db"))?;
             conn.execute("INSERT OR IGNORE INTO shows(id,kind,title,feed_url,updated_at) VALUES('single','single','单独打开','',0)", [])?;
             if let Some(s) = db::get_setting(&conn, "app")?.and_then(|r| serde_json::from_str::<Value>(&r).ok()) {
@@ -745,8 +870,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
-            set_progress, search_podcasts, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())
@@ -849,6 +974,20 @@ mod live {
     }
     #[tokio::test]
     #[ignore]
+    async fn first_stream_reports_the_download() {
+        let data = std::env::temp_dir().join(format!("subcast-ytdlp-{}", uuid::Uuid::new_v4()));
+        let mut seen = 0.0f64;
+        let (a, b) = tokio::join!(asr::ytdlp_with(&data, |got, total| seen = total.map_or(0.0, |t| got as f64 / t as f64)), asr::ytdlp(&data));
+        assert_eq!(a.unwrap(), b.unwrap());
+        assert!(seen > 0.99, "progress reached {seen}");
+        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", true).await }).await.unwrap();
+        assert!(url.contains("m3u8") || url.contains("hls_"));
+        let mp4 = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", false).await }).await.unwrap();
+        assert!(mp4.contains("googlevideo.com/videoplayback"), "{mp4}");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+    #[tokio::test]
+    #[ignore]
     async fn ytdlp_stays_current() {
         let data = std::env::temp_dir().join(format!("subcast-ytdlp-{}", uuid::Uuid::new_v4()));
         let bin = asr::ytdlp(&data).await.unwrap();
@@ -858,15 +997,49 @@ mod live {
         assert!(!asr::update_ytdlp(&data, false).await.unwrap());
         // Checked just now: no second network call within the day.
         assert!(!asr::update_ytdlp(&data, false).await.unwrap());
-        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ").await }).await.unwrap();
+        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ", true).await }).await.unwrap();
         println!("stream: {}", &url[..url.len().min(80)]);
         let _ = std::fs::remove_dir_all(&data);
+    }
+    /// SUBCAST_DB: a copy of a real library.
+    #[test]
+    #[ignore]
+    fn search_inside_a_show() {
+        let conn = rusqlite::Connection::open(std::env::var("SUBCAST_DB").unwrap()).unwrap();
+        let shows: Vec<(String, String)> = conn.prepare("SELECT s.id, s.title FROM shows s WHERE EXISTS(SELECT 1 FROM transcripts t JOIN episodes e ON e.id=t.episode_id WHERE e.show_id=s.id)").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        for (id, title) in shows.iter().take(4) {
+            for q in ["AI", "黄仁勋", "agent model", "the"] {
+                let t0 = std::time::Instant::now();
+                let hits = super::search_episodes(&conn, id, q).unwrap();
+                let first = hits.first().map(|h| format!("{} [{}] {}", h.field, h.time.map(|t| t as i64).unwrap_or(-1), h.snippet)).unwrap_or_default();
+                println!("{title} / {q}: {} hits in {:?}; {first}", hits.len(), t0.elapsed());
+            }
+        }
+    }
+    #[tokio::test]
+    #[ignore]
+    async fn chinese_show_opens_in_chinese() {
+        let extra = std::env::var("YT_IDS").unwrap_or_default();
+        for id in ["tBMlXQIrYK4", "1NHPDzpfR6Y", "2hJkprFnzhY"].into_iter().chain(extra.split_whitespace()) {
+            let info = youtube::video_info(id).await.unwrap();
+            let Some(t) = youtube::choose(&info.tracks, info.original_language.as_deref(), youtube::script_hint(&info.title)) else { println!("{id}: no captions"); continue };
+            let zh = youtube::official_chinese(&info.tracks, &t.language).map(|z| z.language.clone());
+            let langs: Vec<String> = info.tracks.iter().map(|t| format!("{}{}", t.language, if t.auto { "*" } else { "" })).collect();
+            println!("{id} {} → {} official_zh={zh:?} tracks={langs:?}", info.title, t.language);
+            if id == "tBMlXQIrYK4" { assert!(t.language.starts_with("zh")); }
+            if let Some(z) = youtube::official_chinese(&info.tracks, &t.language) {
+                let orig = transcript::resegment(transcript::clean(youtube::fetch_track(t).await.unwrap()));
+                let items = youtube::align(&orig, &transcript::clean(youtube::fetch_track(z).await.unwrap()));
+                println!("  coverage {}/{}; {:?} / {:?}", items.iter().filter(|x| x.is_some()).count(), items.len(), orig[3].text, items[3]);
+            }
+        }
     }
     #[tokio::test]
     #[ignore]
     async fn captions() {
         let info = youtube::video_info("dQw4w9WgXcQ").await.unwrap();
-        let t = youtube::choose(&info.tracks, info.original_language.as_deref()).unwrap();
+        let t = youtube::choose(&info.tracks, info.original_language.as_deref(), youtube::script_hint(&info.title)).unwrap();
         let segs = transcript::resegment(transcript::clean(youtube::fetch_track(t).await.unwrap()));
         println!("{} lang={} auto={} {} blocks; {:?}", info.title, t.language, t.auto, segs.len(), &segs[..2]);
         assert!(segs.len() > 5);

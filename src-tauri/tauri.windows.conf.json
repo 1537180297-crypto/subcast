@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": { "windows/vcrt/": "vcrt/" },
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper" }
+    }
+  }
+}
