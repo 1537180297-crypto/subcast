@@ -50,7 +50,10 @@ export function pieces(text: string, cjk: boolean): string[] {
     if (cur && (cur + u).trim().length > hard) { out.push(cur.trim()); cur = ""; }
     cur += u;
     const t = cur.trim();
-    if (/[。！？.!?]["”')）]*$/.test(t) || (t.length >= soft && /[，；：,;:]$/.test(t))) { out.push(t); cur = ""; }
+    // Initials and titles end in a full stop without ending the sentence ("J.P.", "Mr.", "U.S.").
+    const last = u.trim();
+    const abbrev = !cjk && /^(?:[A-Z]\.)+(?:[A-Z]\.?)?$|^(?:Mr|Mrs|Ms|Dr|St|vs|etc|Inc|Co|Jr|Sr|No|Vol)\.$/.test(last);
+    if ((!abbrev && /[。！？.!?]["”')）]*$/.test(t)) || (t.length >= soft && /[，；：,;:]$/.test(t))) { out.push(t); cur = ""; }
   }
   if (cur.trim()) out.push(cur.trim());
   return out.length ? out : [text];

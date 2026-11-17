@@ -1552,19 +1552,20 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .video-dock.floating:hover .video-float-bar { opacity: 1; }
 .video-float-bar .icon-btn { background: rgba(0,0,0,.55); color: #fff; }
 .video-dock.theater-host { clip-path: none !important; z-index: 400; }
-/* Audio episodes: current line, and the next one waiting below it. */
-.asub { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 4px 8px; }
-.asub-line { display: flex; flex-direction: column; gap: 3px; max-width: 46em; animation: asub-in .32s var(--ease, ease) both; }
-.asub-line p { margin: 0; line-height: 1.5; }
-.asub-line.now .sub-zh { font-size: 20px; font-weight: 600; color: var(--text); }
-.asub-line.now .sub-orig { font-size: 15px; color: var(--text-2); }
-/* The next line: smaller and quiet; a small dot above marks it as coming up. */
-.asub-line.next { opacity: .42; transform-origin: top center; }
-.asub-line.next .sub-zh { font-size: 15px; font-weight: 500; color: var(--text); }
-.asub-line.next .sub-orig { font-size: 13px; color: var(--text-2); }
-.asub-line.next::before { content: ""; align-self: center; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .7; margin-bottom: 2px; }
-@keyframes asub-in { from { opacity: 0; transform: translateY(8px); } }
+/* Audio episodes: current line, and the next one waiting below it. Every line has a fixed box (two lines for
+   the one being spoken, one for the next, clamped), so the block never changes height as sentences change:
+   no layout shift. Changes are opacity/transform only. */
+.asub { --zh-now: 20px; --or-now: 15px; --zh-next: 15px; --or-next: 13px; --lh: 1.5;
+  display: grid; grid-template-rows: auto auto; row-gap: 12px; justify-items: center; text-align: center; padding: 4px 8px; width: 100%; }
+.asub-line { display: flex; flex-direction: column; gap: 3px; width: min(100%, 46em); animation: asub-in .28s var(--ease, ease) both; }
+.asub-line p { margin: 0; line-height: var(--lh); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; }
+.asub-line.now .sub-zh { font-size: var(--zh-now); font-weight: 600; color: var(--text); -webkit-line-clamp: 2; height: calc(var(--zh-now) * var(--lh) * 2); display: -webkit-box; align-content: end; }
+.asub-line.now .sub-orig { font-size: var(--or-now); color: var(--text-2); -webkit-line-clamp: 2; height: calc(var(--or-now) * var(--lh) * 2); }
+.asub-line.next { opacity: .4; }
+.asub-line.next .sub-zh { font-size: var(--zh-next); font-weight: 500; color: var(--text); -webkit-line-clamp: 1; height: calc(var(--zh-next) * var(--lh)); }
+.asub-line.next .sub-orig { font-size: var(--or-next); color: var(--text-2); -webkit-line-clamp: 1; height: calc(var(--or-next) * var(--lh)); }
+@keyframes asub-in { from { opacity: 0; transform: translateY(6px); } }
 .asub-line.next { animation-name: asub-next-in; }
-@keyframes asub-next-in { from { opacity: 0; transform: translateY(10px); } to { opacity: .42; transform: none; } }
+@keyframes asub-next-in { from { opacity: 0; transform: translateY(6px); } to { opacity: .4; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .asub-line { animation: none; } }
-.audio-sub { min-height: 150px; }
+.audio-sub { min-height: 0; }
