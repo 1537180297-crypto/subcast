@@ -931,13 +931,8 @@ const dict: Record<string, string> = {
   "填过豆包语音识别的可以留空": "Leave empty if you already added it for Doubao speech recognition",
   "自定义音色": "Custom voice",
   "朗读时文字会发送到豆包语音。": "Text is sent to Doubao Speech when read aloud.",
-  "没有字幕的节目": "Episodes without subtitles",
   "先查节目自带的和别人分享的字幕，都没有时才听写。": "The show's own and shared subtitles are checked first; speech is transcribed only when there are none.",
-  "本机识别：免费，音频不出本机。": "On this computer: free, audio never leaves it.",
   "其他模型": "Other models",
-  "改用云端识别": "Use a cloud service instead",
-  "用回本机": "Back to this computer",
-  "识别时音频会发送到 {name}。": "Audio is sent to {name} for recognition.",
   "{key} 随时查看": "{key} shows them anytime",
   "占用 {size}": "{size} used",
   "秒数": "Seconds",
@@ -950,6 +945,11 @@ const dict: Record<string, string> = {
   "查看快捷键": "Show shortcuts",
   "问答和翻译分别用不同模型": "Use different models for Q&A and translation",
   "视频地址失效，请稍后再试": "The video address stopped working. Try again later.",
+  "如果没有字幕时": "When there are no subtitles",
+  "本机模型": "On this computer",
+  "免费，音频不出本机": "Free; audio stays on this computer",
+  "云端服务": "Cloud service",
+  "更快，需要 Key，按量付费": "Faster; needs a key, paid per use",
 };
 
 export default dict;

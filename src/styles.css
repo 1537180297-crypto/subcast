@@ -1695,3 +1695,13 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .panel-menu-pop button { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; white-space: nowrap; }
 .panel-menu-pop button:hover { background: var(--soft); }
 .keys-help kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft); font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
+
+/* 半透明底: one box around both lines (not a box per line); 描边 and audio have none. */
+.subtitle-overlay .sub-box { display: flex; flex-direction: column; align-items: center; gap: 2px; max-width: 100%; padding: 4px 12px; border-radius: 8px; background: rgba(0,0,0,.58); backdrop-filter: blur(6px); }
+.subtitle-overlay .sub-box p { background: transparent !important; backdrop-filter: none !important; padding: 0 !important; border-radius: 0 !important; max-width: 100%; }
+.video .subtitle-overlay .sub-box { gap: .3cqh; padding: .8cqh 1.8cqh; border-radius: 1.2cqh; }
+.audio-sub .sub-box, :root[data-sub-look="outline"] .video .sub-box, .reading-preview.look-outline .sub-box { background: transparent; backdrop-filter: none; padding: 0; }
+/* Settings: room for the scrollbar; section titles big enough to tell the sections apart. */
+.settings-body { padding-right: 18px; }
+.settings-body .setup-title { font-size: 15.5px; font-weight: 650; margin-top: 6px; }
+.settings-body .setup-block + .setup-block, .settings-body .reading + .setup-block { margin-top: 18px; }

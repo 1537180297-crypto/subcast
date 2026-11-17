@@ -131,8 +131,10 @@ function SubtitleOverlay({ ep }: { ep: Episode }) {
   const cjk = /[\u4e00-\u9fff]/.test(seg.text);
   return (
     <div className="subtitle-overlay">
-      {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
-      {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
+      <div className="sub-box">
+        {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
+        {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
+      </div>
     </div>
   );
 }

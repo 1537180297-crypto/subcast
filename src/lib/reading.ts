@@ -14,10 +14,10 @@ export function useReadingSettings() {
     const root = document.documentElement.style;
     root.setProperty("--sub-scale", String(SUB_SCALE[s.subtitleSize ?? "m"]));
     root.setProperty("--chat-scale", s.chatSize === "l" ? "1.12" : "1");
-    const f = POSTER_FONTS.find((x) => x.id === SUB_FONTS[s.subtitleFont ?? "system"]);
+    const f = POSTER_FONTS.find((x) => x.id === SUB_FONTS[s.subtitleFont ?? "sans"]);
     if (f?.css) void loadCss(f.css).catch(() => {});
     root.setProperty("--sub-font", f ? `${f.family}, var(--font, system-ui)` : "inherit");
-    document.documentElement.dataset.subLook = s.subtitleLook ?? "box";
+    document.documentElement.dataset.subLook = s.subtitleLook ?? "outline";
     document.documentElement.dataset.nextLine = s.audioNextLine === false ? "off" : "on";
   }, [s.subtitleSize, s.subtitleFont, s.subtitleLook, s.chatSize, s.audioNextLine]);
 }

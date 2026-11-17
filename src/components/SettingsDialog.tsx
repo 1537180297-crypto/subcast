@@ -2,7 +2,7 @@ import { sizeMb } from "../lib/format";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
-import { BookOpen, Check, ChevronDown, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { ASR_SERVICES, CLOUD_ASR_MAIN } from "../lib/settings";
 import { stopSpeaking } from "../lib/tts";
@@ -122,7 +122,6 @@ export function SettingsDialog() {
   useEffect(() => { void refresh(); }, []);
   const updateWaiting = useUpdate(hasUpdate);
   const [moreLocal, setMoreLocal] = useState(false);
-  const [cloudOpen, setCloudOpen] = useState(settings.asrEngine !== "local");
   const [moreCloud, setMoreCloud] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
@@ -156,30 +155,37 @@ export function SettingsDialog() {
             <>
               <ReadingSettings />
               <section className="setup-block">
-                <p className="setup-title">{t("没有字幕的节目")}</p>
+                <p className="setup-title">{t("如果没有字幕时")}</p>
                 <p className="muted small">{t("先查节目自带的和别人分享的字幕，都没有时才听写。")}</p>
-                <div className="model-list">{models.filter((m) => m.id === "qwen3-asr").map(modelRow)}</div>
-                <p className="muted small">{t("本机识别：免费，音频不出本机。")}</p>
-                {elsewhere.length > 0 && !models.find((m) => m.id === "qwen3-asr")?.installed && (
-                  <p className="model-elsewhere small">{t("在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。", { where: [...new Set(elsewhere.map((e) => tr(e.app)))].join("、"), format: [...new Set(elsewhere.map((e) => tr(e.format)))].join(" / ") })}</p>
-                )}
-                <button className="adv-toggle" aria-expanded={moreLocal} onClick={() => setMoreLocal(!moreLocal)}><ChevronDown size={12} className={moreLocal ? "flip" : ""} /> {t("其他模型")}</button>
-                {moreLocal && (
+                <div className="engine-switch">
+                  <button className={`engine ${settings.asrEngine === "local" ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: "local" })}>
+                    <Cpu size={18} /><div><p>{t("本机模型")}</p><p className="muted small">{t("免费，音频不出本机")}</p></div>
+                  </button>
+                  <button className={`engine ${settings.asrEngine !== "local" ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: settings.asrEngine !== "local" ? settings.asrEngine : "doubao" })}>
+                    <Cloud size={18} /><div><p>{t("云端服务")}</p><p className="muted small">{t("更快，需要 Key，按量付费")}</p></div>
+                  </button>
+                </div>
+                {settings.asrEngine === "local" ? (
                   <>
-                    <div className="model-list">{models.filter((m) => m.id !== "qwen3-asr").map(modelRow)}</div>
-                    <button className="link-btn small" onClick={async () => { await api.rescanModels(); void refresh(); notify(t("已重新查找本机的识别模型")); }}><RefreshCw size={12} /> {t("重新查找本机已有的模型")}</button>
+                    <div className="model-list">{models.filter((m) => m.id === "qwen3-asr").map(modelRow)}</div>
+                    {elsewhere.length > 0 && !models.find((m) => m.id === "qwen3-asr")?.installed && (
+                      <p className="model-elsewhere small">{t("在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。", { where: [...new Set(elsewhere.map((e) => tr(e.app)))].join("、"), format: [...new Set(elsewhere.map((e) => tr(e.format)))].join(" / ") })}</p>
+                    )}
+                    <button className="adv-toggle" aria-expanded={moreLocal} onClick={() => setMoreLocal(!moreLocal)}><ChevronDown size={12} className={moreLocal ? "flip" : ""} /> {t("其他模型")}</button>
+                    {moreLocal && (
+                      <>
+                        <div className="model-list">{models.filter((m) => m.id !== "qwen3-asr").map(modelRow)}</div>
+                        <button className="link-btn small" onClick={async () => { await api.rescanModels(); void refresh(); notify(t("已重新查找本机的识别模型")); }}><RefreshCw size={12} /> {t("重新查找本机已有的模型")}</button>
+                      </>
+                    )}
                   </>
-                )}
-                <button className="adv-toggle" aria-expanded={cloudOpen} onClick={() => setCloudOpen(!cloudOpen)}><ChevronDown size={12} className={cloudOpen ? "flip" : ""} /> {t("改用云端识别")}{settings.asrEngine !== "local" && <span className="muted small"> · {t(settings.cloudAsr[settings.asrEngine]?.name ?? "")}</span>}</button>
-                {cloudOpen && (
+                ) : (
                   <>
                     <div className="provider-tabs">
                       {ASR_SERVICES.filter((a) => moreCloud || CLOUD_ASR_MAIN.includes(a.id) || settings.asrEngine === a.id).map((a) => <button key={a.id} className={`chip ${settings.asrEngine === a.id ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: a.id })}>{t(a.name)}</button>)}
                       {!moreCloud && <button className="chip" onClick={() => setMoreCloud(true)}>{t("更多")}</button>}
-                      {settings.asrEngine !== "local" && <button className="chip" onClick={() => saveSettings({ asrEngine: "local" })}>{t("用回本机")}</button>}
                     </div>
-                    {settings.asrEngine !== "local" && <p className="muted small">{t("识别时音频会发送到 {name}。", { name: t(settings.cloudAsr[settings.asrEngine]?.name ?? "") })}</p>}
-                    {settings.asrEngine !== "local" && settings.cloudAsr[settings.asrEngine] && <CloudAsrEditor key={settings.asrEngine} a={settings.cloudAsr[settings.asrEngine]} onChange={(na) => saveSettings({ cloudAsr: { ...settings.cloudAsr, [na.id]: na } })} />}
+                    {settings.cloudAsr[settings.asrEngine] && <CloudAsrEditor key={settings.asrEngine} a={settings.cloudAsr[settings.asrEngine]} onChange={(na) => saveSettings({ cloudAsr: { ...settings.cloudAsr, [na.id]: na } })} />}
                   </>
                 )}
               </section>
