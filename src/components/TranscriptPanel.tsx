@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { BookA, ChevronDown, Ellipsis, Languages, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { BookA, Check, ChevronDown, Ellipsis, Languages, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Modal } from "./Chrome";
 import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
@@ -73,9 +73,9 @@ export function useModelDownload(onDone: () => void) {
 }
 
 /** The one line under the tabs that says how this episode's subtitles stand, with the one action that applies. */
-function StatusLine({ left, text, spin, progress, action, right }: { left?: React.ReactNode; text: React.ReactNode; spin?: boolean; progress?: number; action?: React.ReactNode; right?: React.ReactNode }) {
+function StatusLine({ left, text, spin, progress, action, right, title }: { left?: React.ReactNode; text: React.ReactNode; spin?: boolean; progress?: number; action?: React.ReactNode; right?: React.ReactNode; title?: string }) {
   return (
-    <div className="status-line">
+    <div className="status-line" title={title}>
       {left}
       <span className="status-text" key={typeof text === "string" ? text : undefined}>{spin && <Loader2 size={13} className="spin" />}{text}</span>
       {progress != null && <div className="bar slim"><div style={{ width: `${Math.max(2, progress * 100)}%` }} /></div>}
@@ -164,7 +164,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   else if (error && /设置|API Key|模型/.test(error)) status = <StatusLine left={modeControl} text={tr(error)} action={<button className="btn primary sm" onClick={() => openSettings("model")}>{t("去设置")}</button>} right={searchBtn} />;
   else if (done < total && (error || translation?.failed)) status = <StatusLine left={modeControl} text={`${t("已翻译 {done}/{total}", { done, total })}${error ? ` · ${tr(error).slice(0, 40)}` : ""}`} action={<button className="btn primary sm" onClick={() => start()}>{t("重试")}</button>} right={searchBtn} />;
   else if (done < total) status = <StatusLine left={modeControl} text={done ? t("已翻译 {done}/{total}", { done, total }) : source} action={<button className="btn primary sm" onClick={() => start()}>{done ? t("继续翻译") : t("翻译成中文")}</button>} right={searchBtn} />;
-  else status = <StatusLine left={modeControl} text={`${source} · ${engineName}`} action={translation?.engine === "google" && canUpgrade ? <button className="btn ghost sm" onClick={() => start("llm")}>{t("用模型重译")}</button> : undefined} right={searchBtn} />;
+  else status = <StatusLine left={modeControl} text="" title={`${source} · ${engineName}`} action={translation?.engine === "google" && canUpgrade ? <button className="btn ghost sm" onClick={() => start("llm")}>{t("用模型重译")}</button> : undefined} right={searchBtn} />;
 
   const rows = matches ?? segments.map((_, i) => i);
   return (
@@ -278,7 +278,16 @@ const trackCache = new Map<string, { language: string; auto: boolean }[]>();
 function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; auto: boolean }) {
   const [tracks, setTracks] = useState(trackCache.get(ep.id) ?? null);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   useLang((s) => s.lang);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", h); document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("pointerdown", h); document.removeEventListener("keydown", k); };
+  }, [open]);
   useEffect(() => {
     if (tracks) return;
     void api.youtubeTracks(ep.id).then((list) => { trackCache.set(ep.id, list); setTracks(list); }).catch(() => {});
@@ -287,22 +296,31 @@ function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; au
   let names: Intl.DisplayNames | null = null;
   try { names = new Intl.DisplayNames([lang()], { type: "language" }); } catch { /* old WebView */ }
   const name = (l: string) => { try { return names?.of(l) ?? l; } catch { return l; } };
-  const value = `${auto ? "a" : "m"}:${language}`;
-  const pick = async (v: string) => {
-    const [kind, ...rest] = v.split(":");
+  const label = (x: { language: string; auto: boolean }) => `${name(x.language)}${x.auto ? ` · ${t("自动生成")}` : ""}`;
+  const pick = async (x: { language: string; auto: boolean }) => {
+    setOpen(false);
+    if (x.language === language && x.auto === auto) return;
     setBusy(true);
-    try { await switchYoutubeTrack(ep, rest.join(":"), kind === "a"); }
+    try { await switchYoutubeTrack(ep, x.language, x.auto); }
     catch (e) { useStore.getState().notify(t("切换字幕失败：{error}", { error: errorText(e) })); }
     finally { setBusy(false); }
   };
   return (
-    <label className="track-pick" title={t("字幕语言")}>
-      {busy ? <Loader2 size={13} className="spin" /> : <Languages size={14} />}
-      <select value={value} disabled={busy} onChange={(e) => void pick(e.target.value)} aria-label={t("字幕语言")}>
-        {tracks.map((x) => <option key={`${x.auto}:${x.language}`} value={`${x.auto ? "a" : "m"}:${x.language}`}>{name(x.language)}{x.auto ? ` · ${t("自动生成")}` : ""}</option>)}
-      </select>
-      <ChevronDown size={12} />
-    </label>
+    <div className="panel-menu" ref={box}>
+      <button className="track-pick" title={t("字幕语言")} aria-label={t("字幕语言")} aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen(!open)}>
+        {busy ? <Loader2 size={13} className="spin" /> : <Languages size={14} />}
+        <span>{label({ language, auto })}</span>
+        <ChevronDown size={12} className={open ? "flip" : ""} />
+      </button>
+      {open && (
+        <div className="panel-menu-pop" role="menu">
+          {tracks.map((x) => {
+            const on = x.language === language && x.auto === auto;
+            return <button key={`${x.auto}:${x.language}`} role="menuitemradio" aria-checked={on} className={on ? "on" : ""} onClick={() => void pick(x)}><Check size={14} className="pick-check" />{label(x)}</button>;
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

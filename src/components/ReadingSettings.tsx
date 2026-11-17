@@ -53,7 +53,7 @@ export function ReadingSettings() {
       </section>
 
       <section className="setup-block">
-        <p className="setup-title">{t("AI 问答与导读")}</p>
+        <p className="setup-title">{t("AI 问答与伴读")}</p>
         <div className="reading-row"><span>{t("字号")}</span>
           <Seg value={settings.chatSize ?? "m"} options={[["m", t("标准")], ["l", t("大")]]} onChange={(v) => save({ chatSize: v })} />
         </div>

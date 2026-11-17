@@ -1710,3 +1710,17 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .key-state { flex: 1; display: inline-flex; align-items: center; gap: 6px; color: var(--ok); font-weight: 600; font-size: 13px; min-width: 0; }
 .key-dots { margin-left: 4px; color: var(--text-2); font-weight: 400; letter-spacing: 1px; overflow: hidden; }
 .key-where { color: var(--text-2); white-space: nowrap; }
+/* Subtitle language: a button and our own menu (no native select and its focus ring). */
+button.track-pick { border: 0; background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+button.track-pick span { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.track-pick:focus { outline: none; box-shadow: none; }
+button.track-pick:focus-visible { background: var(--line); color: var(--text); }
+.panel-menu-pop .pick-check { visibility: hidden; color: var(--text-2); }
+.panel-menu-pop button.on .pick-check { visibility: visible; }
+.panel-menu-pop button.on { font-weight: 600; }
+/* No sideways scrolling in dialogs; the glossary gets a little more width instead of overflowing. */
+.modal-body { overflow-x: hidden; }
+.modal:has(.gloss) { width: min(640px, calc(100vw - 32px)); }
+.gloss { min-width: 0; }
+.gloss-list { overflow-x: hidden; overflow-y: auto; }
+.gloss-summary { overflow-wrap: anywhere; }
