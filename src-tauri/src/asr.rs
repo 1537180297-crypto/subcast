@@ -424,7 +424,8 @@ where F: Fn(PathBuf) -> Fut, Fut: std::future::Future<Output = Result<T>> {
     let bin = ytdlp(data).await?;
     match job(bin.clone()).await {
         Ok(v) => Ok(v),
-        Err(e) if e.to_string().contains("已取消") => Err(e),
+        // Cancelled or timed out: a newer yt-dlp wouldn't help, and updating would only double the wait.
+        Err(e) if e.to_string().contains("已取消") || e.to_string().contains("超时") => Err(e),
         Err(e) => match update_ytdlp(data, true).await {
             Ok(true) => job(data.join("bin").join(exe("yt-dlp"))).await,
             _ => Err(e),
@@ -446,7 +447,7 @@ pub fn ytdlp_command(ytdlp: &Path) -> tokio::process::Command {
     let proxy = net::effective_proxy();
     if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
     // A dead connection fails in seconds instead of hanging the player on "正在获取视频地址".
-    cmd.args(["--socket-timeout", "20"]);
+    cmd.args(["--socket-timeout", "15"]);
     #[cfg(windows)]
     { cmd.creation_flags(0x08000000); }
     cmd.kill_on_drop(true);
@@ -474,6 +475,13 @@ where F: Fn(Vec<String>) -> Fut, Fut: std::future::Future<Output = Result<T>> {
     }
 }
 
+/// Asks a yt-dlp once (off the async workers) which options it knows, so the first real job doesn't pay an
+/// extra cold start of the program inside a command. Call before `ytdlp_command` on an async path.
+pub async fn warm_ytdlp(ytdlp: &Path) {
+    let p = ytdlp.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || knows_js_runtimes(&p)).await;
+}
+
 fn knows_js_runtimes(ytdlp: &Path) -> bool {
     static SEEN: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<PathBuf, bool>>> = once_cell::sync::Lazy::new(Default::default);
     if let Some(v) = SEEN.lock().unwrap().get(ytdlp) { return *v; }
@@ -496,6 +504,7 @@ pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc
 async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>, extra: &[&str]) -> Result<PathBuf> {
     tokio::fs::create_dir_all(dir).await?;
     let template = dir.join(format!("{video_id}.%(ext)s"));
+    warm_ytdlp(ytdlp).await;
     let mut cmd = ytdlp_command(ytdlp);
     // m4a (AAC) decodes without ffmpeg; format 18 (mp4 with AAC audio) is the fallback every video has.
     cmd.args(["-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/18", "--no-playlist", "--no-part"]).args(extra).arg("-o").arg(&template);
@@ -593,10 +602,11 @@ pub mod streams {
 }
 
 async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) -> Result<String> {
+    warm_ytdlp(ytdlp).await;
     let mut cmd = ytdlp_command(ytdlp);
     cmd.args(["-j", "--no-playlist", "--no-warnings"]).args(extra);
     cmd.arg(format!("https://www.youtube.com/watch?v={video_id}"));
-    let out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await.map_err(|_| anyhow!("获取视频地址超时"))?.context("无法启动 yt-dlp")?;
+    let out = tokio::time::timeout(std::time::Duration::from_secs(45), cmd.output()).await.map_err(|_| anyhow!("获取视频地址超时"))?.context("无法启动 yt-dlp")?;
     let info: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
         anyhow!("无法获取视频地址：{}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("").chars().take(200).collect::<String>())
     })?;
@@ -731,6 +741,8 @@ pub async fn run_crispasr(bin: &Path, model: &Path, wav: &Path, language: &str, 
     let re = regex::Regex::new(r"progress\s*=\s*(\d+)%").unwrap();
     let mut tail: Vec<String> = Vec::new();
     loop {
+        // Checked every turn: with output arriving faster than the 300 ms tick, the tick branch would never run.
+        if cancel.load(Ordering::Relaxed) { let _ = child.kill().await; return Err(anyhow!("已取消")); }
         tokio::select! {
             line = lines.next_line() => {
                 let Some(line) = line? else { break };
@@ -790,6 +802,8 @@ pub async fn run_worker(audio: &Path, model: &Path, language: &str, prompt: &str
     let mut language_out = language.to_string();
     let mut error: Option<String> = None;
     loop {
+        // Checked every turn: with output arriving faster than the 300 ms tick, the tick branch would never run.
+        if cancel.load(Ordering::Relaxed) { let _ = child.kill().await; return Err(anyhow!("已取消")); }
         tokio::select! {
             line = lines.next_line() => {
                 let Some(line) = line? else { break };
@@ -838,8 +852,8 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
     let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL).ok_or_else(|| anyhow!("没有音轨"))?;
     let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|e| anyhow!("不支持的音频编码：{e}"))?;
-    let mut rate = track.codec_params.sample_rate.unwrap_or(44100);
-    let mut mono: Vec<f32> = Vec::new();
+    // Mixed down and resampled packet by packet: only the 16 kHz result is kept.
+    let mut resampler: Option<Resampler> = None;
     let mut buf: Option<SampleBuffer<f32>> = None;
     loop {
         let packet = match format.next_packet() {
@@ -855,7 +869,7 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
             Err(e) => return Err(anyhow!("解码失败：{e}")),
         };
         let spec = *decoded.spec();
-        rate = spec.rate;
+        let r = resampler.get_or_insert_with(|| Resampler::new(spec.rate, 16000));
         let channels = spec.channels.count().max(1);
         if buf.as_ref().is_none_or(|b| b.capacity() < decoded.capacity() * channels) {
             buf = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
@@ -863,36 +877,92 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
         let b = buf.as_mut().unwrap();
         b.copy_interleaved_ref(decoded);
         for frame in b.samples().chunks(channels) {
-            mono.push(frame.iter().sum::<f32>() / channels as f32);
+            r.push(frame.iter().sum::<f32>() / channels as f32);
         }
     }
-    Ok(resample(&mono, rate, 16000))
+    Ok(resampler.map(Resampler::finish).unwrap_or_default())
 }
 
 /// Box-filtered linear resampling: plenty for speech recognition.
 pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || input.is_empty() { return input.to_vec(); }
-    let ratio = from as f64 / to as f64;
-    let width = ratio.ceil().max(1.0) as usize;
-    let filtered: Vec<f32> = if width > 1 {
-        let mut acc = 0.0f32;
-        let mut out = Vec::with_capacity(input.len());
-        for i in 0..input.len() {
-            acc += input[i];
-            if i >= width { acc -= input[i - width]; }
-            out.push(acc / width.min(i + 1) as f32);
+    let mut r = Resampler::new(from, to);
+    for &x in input { r.push(x); }
+    r.finish()
+}
+
+/// `resample` one sample at a time, so a long episode never has to sit in memory at its original rate:
+/// only the 16 kHz output is kept (a 3-hour episode at 48 kHz was over 2 GB as intermediate buffers).
+pub struct Resampler { ratio: f64, width: usize, hist: std::collections::VecDeque<f32>, acc: f32, count: usize, prev: Option<f32>, next: usize, out: Vec<f32> }
+
+impl Resampler {
+    pub fn new(from: u32, to: u32) -> Self {
+        let ratio = from as f64 / to as f64;
+        let width = ratio.ceil().max(1.0) as usize;
+        Self { ratio, width, hist: std::collections::VecDeque::with_capacity(width + 1), acc: 0.0, count: 0, prev: None, next: 0, out: Vec::new() }
+    }
+    pub fn push(&mut self, x: f32) {
+        // Moving average over the last `width` inputs (fewer at the very start).
+        let f = if self.width > 1 {
+            self.acc += x;
+            self.hist.push_back(x);
+            if self.hist.len() > self.width { self.acc -= self.hist.pop_front().unwrap_or(0.0); }
+            self.acc / self.hist.len() as f32
+        } else { x };
+        let i = self.count;
+        self.count += 1;
+        // Every output that falls between the previous filtered sample and this one.
+        if let Some(p) = self.prev {
+            loop {
+                let pos = self.next as f64 * self.ratio;
+                let j = pos as usize;
+                if j + 1 != i { break; }
+                let frac = (pos - j as f64) as f32;
+                self.out.push(p + (f - p) * frac);
+                self.next += 1;
+            }
         }
-        out
-    } else { input.to_vec() };
-    let n = (input.len() as f64 / ratio) as usize;
-    (0..n).map(|i| {
-        let pos = i as f64 * ratio;
-        let j = pos as usize;
-        let frac = (pos - j as f64) as f32;
-        let a = filtered[j.min(filtered.len() - 1)];
-        let b = filtered[(j + 1).min(filtered.len() - 1)];
-        a + (b - a) * frac
-    }).collect()
+        self.prev = Some(f);
+    }
+    pub fn finish(mut self) -> Vec<f32> {
+        let n = (self.count as f64 / self.ratio) as usize;
+        if let Some(p) = self.prev { while self.next < n { self.out.push(p); self.next += 1; } }
+        self.out.truncate(n);
+        self.out
+    }
+}
+
+#[cfg(test)]
+mod resample_tests {
+    /// The previous all-in-memory version, kept to check the streaming one against.
+    fn batch(input: &[f32], from: u32, to: u32) -> Vec<f32> {
+        if from == to || input.is_empty() { return input.to_vec(); }
+        let ratio = from as f64 / to as f64;
+        let width = ratio.ceil().max(1.0) as usize;
+        let filtered: Vec<f32> = if width > 1 {
+            let mut acc = 0.0f32;
+            let mut out = Vec::with_capacity(input.len());
+            for i in 0..input.len() { acc += input[i]; if i >= width { acc -= input[i - width]; } out.push(acc / width.min(i + 1) as f32); }
+            out
+        } else { input.to_vec() };
+        let n = (input.len() as f64 / ratio) as usize;
+        (0..n).map(|i| {
+            let pos = i as f64 * ratio; let j = pos as usize; let frac = (pos - j as f64) as f32;
+            let a = filtered[j.min(filtered.len() - 1)]; let b = filtered[(j + 1).min(filtered.len() - 1)];
+            a + (b - a) * frac
+        }).collect()
+    }
+    #[test]
+    fn streaming_matches_batch() {
+        let input: Vec<f32> = (0..100_003).map(|i| ((i as f32) * 0.013).sin() * 0.7 + ((i * 7919 % 1000) as f32 / 1000.0 - 0.5) * 0.2).collect();
+        for (from, to) in [(48_000, 16_000), (44_100, 16_000), (22_050, 16_000), (8_000, 16_000), (16_000, 16_000)] {
+            let a = batch(&input, from, to);
+            let b = super::resample(&input, from, to);
+            assert_eq!(a.len(), b.len(), "{from}->{to} length");
+            let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+            assert!(worst < 1e-4, "{from}->{to} differs by {worst}");
+        }
+    }
 }
 
 pub fn worker_main(args: &[String]) -> i32 {

@@ -45,7 +45,14 @@ impl AppState {
         self.jobs.lock().unwrap().insert(id.to_string(), flag.clone());
         flag
     }
-    fn done(&self, id: &str) { self.jobs.lock().unwrap().remove(id); }
+    /// Ends a job: only its own entry, so a job that was cancelled and then started again isn't forgotten
+    /// (and can still be cancelled) when the old run finishes.
+    fn done_with(&self, id: &str, flag: &Arc<AtomicBool>) {
+        let mut jobs = self.jobs.lock().unwrap();
+        if jobs.get(id).is_some_and(|f| Arc::ptr_eq(f, flag)) { jobs.remove(id); }
+    }
+    /// Whether a job with this id is running and not cancelled.
+    fn running(&self, id: &str) -> bool { self.jobs.lock().unwrap().get(id).is_some_and(|f| !f.load(Ordering::Relaxed)) }
 }
 
 type Res<T> = Result<T, String>;
@@ -73,7 +80,11 @@ async fn fetch_any(state: &AppState, feed_url: &str, kind: &str) -> anyhow::Resu
             qiaomu::channel(&id).await?
         };
         let conn = state.db.lock().unwrap();
-        for (orig, zh) in &ch.zh_titles { let _ = db::tr_put(&conn, &short_hash(&format!("zh-CN|{orig}"), 24), zh); }
+        // One transaction for the few hundred titles, not one commit each.
+        if let Ok(tx) = conn.unchecked_transaction() {
+            for (orig, zh) in &ch.zh_titles { let _ = db::tr_put(&tx, &short_hash(&format!("zh-CN|{orig}"), 24), zh); }
+            let _ = tx.commit();
+        }
         return Ok((ch.show, ch.episodes));
     }
     feeds::fetch_show(feed_url, kind).await
@@ -210,10 +221,19 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
     let r = async {
         let shows: Vec<Show> = db::list_shows(&state.db.lock().unwrap()).map_err(e)?.into_iter().filter(|s| s.kind != "single").collect();
         let (mut ok, mut fresh_eps) = (0, 0);
-        for chunk in shows.chunks(6) {
-            let results = futures_util::future::join_all(chunk.iter().map(|s| fetch_any(&state, &s.feed_url, &s.kind))).await;
-            for (s, r) in chunk.iter().zip(results) {
-                let Ok((fresh, eps)) = r else { continue };
+        // Six at a time, each starting as soon as a slot frees up (not in batches that wait for their slowest),
+        // and at most 30 s per feed.
+        let slots = tokio::sync::Semaphore::new(6);
+        let results = futures_util::future::join_all(shows.iter().map(|s| {
+            let (st, slots) = (&state, &slots);
+            async move {
+                let _slot = slots.acquire().await;
+                (s, tokio::time::timeout(std::time::Duration::from_secs(30), fetch_any(st, &s.feed_url, &s.kind)).await)
+            }
+        })).await;
+        for (s, r) in results {
+            {
+                let Ok(Ok((fresh, eps))) = r else { continue };
                 let known = {
                     let conn = state.db.lock().unwrap();
                     eps.iter().filter(|x| conn.query_row("SELECT 1 FROM episodes WHERE id=?1", [&x.id], |_| Ok(())).is_ok()).count()
@@ -228,10 +248,12 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
     r
 }
 
-#[tauri::command]
+// Off the main thread: the window keeps drawing while it runs.
+#[tauri::command(async)]
 fn list_shows(state: State<'_, AppState>) -> Res<Vec<Show>> { db::list_shows(&state.db.lock().unwrap()).map_err(e) }
 
-#[tauri::command]
+// Off the main thread: the window keeps drawing while it runs.
+#[tauri::command(async)]
 fn list_episodes(state: State<'_, AppState>, show_id: Option<String>, limit: Option<i64>) -> Res<Vec<Episode>> {
     db::list_episodes(&state.db.lock().unwrap(), show_id.as_deref(), limit.unwrap_or(300)).map_err(e)
 }
@@ -249,23 +271,32 @@ struct ShowHit {
 
 /// Searches one show's episodes on this computer: titles (and their Chinese translations), show notes, and the
 /// subtitles of episodes that have them, original and Chinese. Every word must appear in the same field.
+/// Runs off the main thread on its own read-only connection, so typing in the search box never holds up playback
+/// progress, settings or anything else that needs the database.
 #[tauri::command]
-fn search_show(state: State<'_, AppState>, show_id: String, query: String) -> Res<Vec<ShowHit>> {
-    search_episodes(&state.db.lock().unwrap(), &show_id, &query).map_err(e)
+async fn search_show(state: State<'_, AppState>, show_id: String, query: String) -> Res<Vec<ShowHit>> {
+    let path = state.data.join("subcast.db");
+    tokio::task::spawn_blocking(move || {
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        search_episodes(&conn, &show_id, &query)
+    }).await.map_err(e)?.map_err(e)
 }
 
 fn search_episodes(conn: &Connection, show_id: &str, query: &str) -> anyhow::Result<Vec<ShowHit>> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     if words.is_empty() { return Ok(vec![]); }
     let eps = db::list_episodes(conn, Some(show_id), 5000)?;
-    let tags = regex::Regex::new(r"<[^>]+>").unwrap();
+    // The list leaves notes out; search needs them.
+    let all_notes = db::show_notes(conn, show_id)?;
+    static TAGS: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| regex::Regex::new(r"<[^>]+>").unwrap());
+    let tags = &*TAGS;
     let has = |text: &str| { let l = text.to_lowercase(); words.iter().all(|w| l.contains(w)) };
     let mut hits = Vec::new();
     for ep in eps {
         let zh_title = db::tr_get(conn, &short_hash(&format!("zh-CN|{}", ep.title), 24)).ok().flatten();
         let title = match &zh_title { Some(z) => format!("{} {z}", ep.title), None => ep.title.clone() };
         if has(&title) { hits.push(ShowHit { snippet: String::new(), field: "title", time: None, episode: ep }); continue; }
-        let notes = ep.notes.as_deref().map(|n| tags.replace_all(n, " ").to_string()).unwrap_or_default();
+        let notes = all_notes.get(&ep.id).map(|n| tags.replace_all(n, " ").to_string()).unwrap_or_default();
         if has(&notes) { hits.push(ShowHit { snippet: snippet(&notes, &words[0]), field: "notes", time: None, episode: ep }); continue; }
         if !ep.has_transcript { continue; }
         let Some(t) = db::get_transcript(conn, &ep.id).ok().flatten() else { continue };
@@ -292,10 +323,12 @@ fn snippet(text: &str, word: &str) -> String {
     format!("{}{}{}", if from > 0 { "…" } else { "" }, chars[from..to].iter().collect::<String>(), if to < chars.len() { "…" } else { "" })
 }
 
-#[tauri::command]
+// Off the main thread: the window keeps drawing while it runs.
+#[tauri::command(async)]
 fn recent_episodes(state: State<'_, AppState>) -> Res<Vec<Episode>> { db::recent_episodes(&state.db.lock().unwrap(), 60).map_err(e) }
 
-#[tauri::command]
+// Off the main thread: the window keeps drawing while it runs.
+#[tauri::command(async)]
 fn get_episode(state: State<'_, AppState>, id: String) -> Res<Option<Episode>> { db::get_episode(&state.db.lock().unwrap(), &id).map_err(e) }
 
 #[tauri::command]
@@ -541,12 +574,11 @@ async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: St
     let mode = mode.unwrap_or_else(|| if cfg!(target_os = "macos") { "native-hls".into() } else { "proxy-hls".into() });
     let hls = mode != "mp4";
     let emit = |stage: &str, progress: f64| { let _ = app.emit("yt-stream", json!({ "videoId": video_id, "stage": stage, "progress": progress })); };
-    let job = async {
-        asr::ytdlp_with(&state.data, |got, total| emit("tool", total.map_or(0.0, |t| got as f64 / t.max(1) as f64))).await?;
-        emit("resolve", 0.0);
-        asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls, fresh).await } }).await
-    };
-    let url = tokio::time::timeout(std::time::Duration::from_secs(180), job).await
+    // The first-time download of yt-dlp has its own progress and limits; the clock starts after it.
+    asr::ytdlp_with(&state.data, |got, total| emit("tool", total.map_or(0.0, |t| got as f64 / t.max(1) as f64))).await.map_err(e)?;
+    emit("resolve", 0.0);
+    let job = asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls, fresh).await } });
+    let url = tokio::time::timeout(std::time::Duration::from_secs(120), job).await
         .map_err(|_| "获取视频地址超时，请检查网络或代理".to_string())?
         .map_err(e)?;
     // yt-dlp falls back to an MP4 when a video has no HLS.
@@ -558,7 +590,9 @@ async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: St
 /// Gets yt-dlp ready in the background when a video page opens, so a fallback doesn't start with a download.
 #[tauri::command]
 async fn prepare_youtube(state: State<'_, AppState>) -> Res<()> {
-    asr::ytdlp(&state.data).await.map(|_| ()).map_err(e)
+    let bin = asr::ytdlp(&state.data).await.map_err(e)?;
+    asr::warm_ytdlp(&bin).await;
+    Ok(())
 }
 
 // ---- offline -------------------------------------------------------------------------------------------
@@ -570,8 +604,8 @@ async fn download_episode(app: AppHandle, state: State<'_, AppState>, episode_id
     let job = format!("dl:{episode_id}");
     let cancel = state.job(&job);
     let id = episode_id.clone();
-    let result = offline::download(&state.data, &ep, cancel, |p| { let _ = app.emit("offline", json!({ "episodeId": id, "progress": p })); }).await.map_err(e);
-    state.done(&job);
+    let result = offline::download(&state.data, &ep, cancel.clone(), |p| { let _ = app.emit("offline", json!({ "episodeId": id, "progress": p })); }).await.map_err(e);
+    state.done_with(&job, &cancel);
     result
 }
 
@@ -581,7 +615,8 @@ fn list_downloads(state: State<'_, AppState>) -> Vec<offline::Saved> { offline::
 #[tauri::command]
 fn delete_download(state: State<'_, AppState>, episode_id: String) -> Res<()> { offline::remove(&state.data, &episode_id).map_err(e) }
 
-#[tauri::command]
+// Off the main thread: the window keeps drawing while it runs.
+#[tauri::command(async)]
 fn clear_downloads(state: State<'_, AppState>) -> Res<()> { offline::clear(&state.data).map_err(e) }
 
 fn dir_bytes(p: &std::path::Path) -> u64 {
@@ -619,7 +654,8 @@ async fn full_notes(state: State<'_, AppState>, episode_id: String) -> Res<Optio
 }
 
 /// What SubCast keeps on disk, for the storage section of Settings.
-#[tauri::command]
+// Off the main thread: the window keeps drawing while it runs.
+#[tauri::command(async)]
 fn storage_info(state: State<'_, AppState>) -> serde_json::Value {
     let d = &state.data;
     let library: u64 = ["subcast.db", "subcast.db-wal", "subcast.db-shm"].iter().map(|f| std::fs::metadata(d.join(f)).map(|m| m.len()).unwrap_or(0)).sum();
@@ -649,7 +685,8 @@ fn reveal_download(app: AppHandle, state: State<'_, AppState>, episode_id: Strin
 }
 
 /// Removes leftovers of interrupted transcriptions.
-#[tauri::command]
+// Off the main thread: the window keeps drawing while it runs.
+#[tauri::command(async)]
 fn clear_temp(state: State<'_, AppState>) -> Res<()> {
     let dir = state.data.join("work");
     if dir.exists() { std::fs::remove_dir_all(&dir).map_err(e)?; }
@@ -705,8 +742,11 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
     let spec = asr::resolve(&state.data, &model).ok_or("未知模型")?;
     let model_path = spec.path.clone();
     if cloud.is_none() && !model_path.is_file() { return Err("请先下载识别模型".into()); }
+    // One transcription per episode at a time (a second start while one runs would fight over its files).
+    if state.running(&episode_id) { return Err("这一集正在转写".into()); }
     let cancel = state.job(&episode_id);
-    let work = state.data.join("work").join(&episode_id);
+    // A folder per run: a cancelled run still finishing its cleanup can't delete a new run's audio.
+    let work = state.data.join("work").join(format!("{episode_id}-{}", uuid::Uuid::new_v4().simple()));
     let result = async {
         let _ = tokio::fs::create_dir_all(&work).await;
         asr_emit(&app, &episode_id, "download", 0.0, None, None);
@@ -797,7 +837,7 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         Ok(t)
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
-    state.done(&episode_id);
+    state.done_with(&episode_id, &cancel);
     // Share what we just made, so the next person listening to this episode skips transcribing.
     if let (Ok(t), false) = (&result, share_keys.is_empty()) {
         let (share_on, install) = {
@@ -932,7 +972,7 @@ async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String, 
     let r = asr::download_model(&state.data, &id, &cancel, mirror_first, move |got, total| {
         let _ = app2.emit("model-download", json!({"id": id2, "received": got, "total": total}));
     }).await;
-    state.done(&job);
+    state.done_with(&job, &cancel);
     r.map_err(e)
 }
 
@@ -989,7 +1029,8 @@ fn set_settings(state: State<'_, AppState>, settings: Value) -> Res<()> {
 #[tauri::command]
 fn set_api_key(provider: String, key: String) -> Res<()> { llm::set_key(&provider, key.trim()).map_err(e) }
 
-#[tauri::command]
+// Off the main thread: the window keeps drawing while it runs.
+#[tauri::command(async)]
 fn has_api_key(provider: String) -> bool { llm::get_key(&provider).is_some_and(|k| !k.is_empty()) }
 
 #[tauri::command]
@@ -1009,7 +1050,7 @@ async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String
             let _ = app.emit("llm", json!({"requestId": rid, "delta": d}));
         }).await
     };
-    state.done(&request_id);
+    state.done_with(&request_id, &cancel);
     r.map_err(e)
 }
 
@@ -1081,9 +1122,11 @@ async fn translate_texts(state: State<'_, AppState>, texts: Vec<String>, target:
         let lines: Vec<String> = missing.iter().map(|&i| texts[i].clone()).collect();
         let done = translate::translate_lines(&lines, &tl).await.map_err(e)?;
         let conn = state.db.lock().unwrap();
+        let tx = conn.unchecked_transaction().map_err(e)?;
         for (j, &i) in missing.iter().enumerate() {
-            if let Some(t) = done.get(j) { let _ = db::tr_put(&conn, &keys[i], t); out[i] = Some(t.clone()); }
+            if let Some(t) = done.get(j) { let _ = db::tr_put(&tx, &keys[i], t); out[i] = Some(t.clone()); }
         }
+        tx.commit().map_err(e)?;
     }
     Ok(out.into_iter().map(Option::unwrap_or_default).collect())
 }
