@@ -793,6 +793,7 @@ const dict: Record<string, string> = {
   "还没有术语。翻译开始时会自动整理，也可以自己添加。": "No terms yet. They're collected when translation starts; you can add your own.",
   "保存并重新翻译": "Save and retranslate",
   "没有字幕": "No subtitles",
+  "连不上 {host}：连接被拒绝。如果开着代理软件（如 Clash），请确认它在运行，或在 设置 › 通用 里填写代理地址": "Can't reach {host}: connection refused. If you use a proxy app (such as Clash), make sure it is running, or set the proxy in Settings › General",
 };
 
 export default dict;
