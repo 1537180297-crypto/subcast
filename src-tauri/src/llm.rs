@@ -106,14 +106,13 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
         return Err(api_error(status.as_u16(), &body));
     }
     let mut stream = res.bytes_stream();
-    let mut buf = String::new();
+    let mut lines = LineBuf::default();
     let mut full = String::new();
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) { return Err(anyhow!("已停止")); }
-        buf.push_str(&String::from_utf8_lossy(&chunk.map_err(|e| anyhow!("连接中断：{e}"))?));
-        while let Some(pos) = buf.find('\n') {
-            let line = buf[..pos].trim().to_string();
-            buf.drain(..=pos);
+        lines.push(&chunk.map_err(|e| anyhow!("连接中断：{e}"))?);
+        while let Some(line) = lines.next_line() {
+            let line = line.trim().to_string();
             let Some(data) = line.strip_prefix("data:") else { continue };
             let data = data.trim();
             if data == "[DONE]" { return Ok(full); }
@@ -136,4 +135,36 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
     }
     if full.is_empty() { return Err(anyhow!("模型没有返回内容")); }
     Ok(full)
+}
+
+/// Bytes from a stream, handed out as whole lines. Decoding per network chunk would split a Chinese
+/// character (3 bytes in UTF-8) that straddles two chunks into "��"; a line is only decoded once complete.
+#[derive(Default)]
+struct LineBuf { bytes: Vec<u8> }
+
+impl LineBuf {
+    fn push(&mut self, chunk: &[u8]) { self.bytes.extend_from_slice(chunk); }
+    fn next_line(&mut self) -> Option<String> {
+        let pos = self.bytes.iter().position(|&b| b == b'\n')?;
+        let line: Vec<u8> = self.bytes.drain(..=pos).collect();
+        Some(String::from_utf8_lossy(&line[..pos]).into_owned())
+    }
+}
+
+#[cfg(test)]
+mod line_buf_tests {
+    use super::LineBuf;
+    #[test]
+    fn a_character_split_across_chunks_stays_whole() {
+        let text = "data: 黄仁勋能\n\ndata: [DONE]\n".as_bytes();
+        let mut b = LineBuf::default();
+        let mut got = Vec::new();
+        // Split inside 仁 (bytes 9..12) and again inside 勋.
+        for part in [&text[..10], &text[10..14], &text[14..]] {
+            b.push(part);
+            while let Some(l) = b.next_line() { got.push(l); }
+        }
+        assert_eq!(got, ["data: 黄仁勋能", "", "data: [DONE]"]);
+        assert!(!got.concat().contains('\u{FFFD}'));
+    }
 }

@@ -258,9 +258,8 @@ function KeyRow({ has, value, onValue, onSave, onDelete, placeholder }: { has: b
   const [editing, setEditing] = useState(false);
   if (has && !editing) {
     return (
-      <div className="key-row key-saved">
-        <span className="key-state"><Check size={14} /> {t("已保存")}<span className="key-dots" aria-hidden>••••••••••••</span></span>
-        <span className="key-where small">{t("存于系统钥匙串")}</span>
+      <div className="key-row key-saved" title={t("存于系统钥匙串")}>
+        <span className="key-state"><Check size={14} /><span>{t("已保存")}</span><span className="key-dots" aria-hidden>••••••••</span></span>
         <button className="btn sm" onClick={() => setEditing(true)}>{t("更换")}</button>
         <button className="icon-btn" title={t("删除 Key")} aria-label={t("删除 Key")} onClick={() => void onDelete()}><Trash2 size={14} /></button>
       </div>

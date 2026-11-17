@@ -49,7 +49,7 @@ export function ReadingSettings() {
         <div className="reading-row"><span>{t("视频上的字幕")}</span>
           <Seg value={settings.subtitleLook ?? "outline"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => save({ subtitleLook: v })} />
         </div>
-        <label className="check"><input type="checkbox" checked={settings.audioNextLine !== false} onChange={(e) => save({ audioNextLine: e.target.checked })} /> {t("音频节目提前显示下一句")}</label>
+        <label className="check"><input type="checkbox" checked={settings.audioNextLine === true} onChange={(e) => save({ audioNextLine: e.target.checked })} /> {t("音频节目提前显示下一句")}</label>
       </section>
 
       <section className="setup-block">

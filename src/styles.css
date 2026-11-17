@@ -1724,3 +1724,8 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .gloss { min-width: 0; }
 .gloss-list { overflow-x: hidden; overflow-y: auto; }
 .gloss-summary { overflow-wrap: anywhere; }
+/* The saved-key row never wraps "已保存" into a column when the panel is narrow. */
+.key-saved .key-state { white-space: nowrap; overflow: hidden; }
+.key-saved .key-state > span:first-of-type { flex: none; }
+.key-saved .key-dots { min-width: 0; text-overflow: clip; }
+.key-saved .btn, .key-saved .icon-btn { flex: none; }

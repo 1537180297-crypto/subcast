@@ -18,6 +18,6 @@ export function useReadingSettings() {
     if (f?.css) void loadCss(f.css).catch(() => {});
     root.setProperty("--sub-font", f ? `${f.family}, var(--font, system-ui)` : "inherit");
     document.documentElement.dataset.subLook = s.subtitleLook ?? "outline";
-    document.documentElement.dataset.nextLine = s.audioNextLine === false ? "off" : "on";
+    document.documentElement.dataset.nextLine = s.audioNextLine ? "on" : "off";
   }, [s.subtitleSize, s.subtitleFont, s.subtitleLook, s.chatSize, s.audioNextLine]);
 }
