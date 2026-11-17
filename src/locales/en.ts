@@ -203,7 +203,6 @@ const dict: Record<string, string> = {
   "接口地址": "Base URL",
   "模型": "Model",
   "模型名": "Model name",
-  "已保存（存于系统钥匙串）": "Saved (in your Keychain)",
   "粘贴 API Key": "Paste API Key",
   "保存": "Save",
   "删除 Key": "Delete key",
@@ -950,6 +949,8 @@ const dict: Record<string, string> = {
   "免费，音频不出本机": "Free; audio stays on this computer",
   "云端服务": "Cloud service",
   "更快，需要 Key，按量付费": "Faster; needs a key, paid per use",
+  "存于系统钥匙串": "in the system keychain",
+  "更换": "Replace",
 };
 
 export default dict;

@@ -63,14 +63,10 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
       {p.needsKey && (
         <div className="setup-block">
           <div className="setup-head">
-            <p className="setup-title">API Key{hasKey && <span className="ok-text small"> · {t("已保存")}</span>}</p>
+            <p className="setup-title">API Key</p>
             {p.keyUrl && <button className="link-btn" onClick={() => openUrl(p.keyUrl!)}>{t("去官网申请")} <ExternalLink size={11} /></button>}
           </div>
-          <div className="key-row">
-            <input {...NO_AUTO} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={hasKey ? t("已保存（存于系统钥匙串）") : t("粘贴 API Key")} />
-            <button className="btn sm" onClick={saveKey} disabled={!key.trim()}>{t("保存")}</button>
-            {hasKey && <button className="icon-btn" title={t("删除 Key")} onClick={async () => { await api.setApiKey(p.id, ""); setHasKey(false); }}><Trash2 size={14} /></button>}
-          </div>
+          <KeyRow key={p.id} has={hasKey} value={key} onValue={setKey} onSave={saveKey} onDelete={async () => { await api.setApiKey(p.id, ""); setHasKey(false); }} />
         </div>
       )}
       <div className="setup-block">
@@ -251,11 +247,30 @@ export function KeyField({ account, placeholder }: { account: string; placeholde
   const [key, setKey] = useState("");
   const [has, setHas] = useState(false);
   useEffect(() => { setKey(""); api.hasApiKey(account).then(setHas); }, [account]);
+  return <KeyRow key={account} has={has} value={key} onValue={setKey} placeholder={placeholder}
+    onSave={async () => { await api.setApiKey(account, key); setHas(!!key.trim()); setKey(""); }}
+    onDelete={async () => { await api.setApiKey(account, ""); setHas(false); }} />;
+}
+
+/** A saved key reads as saved (a tinted row with a check and masked dots), not as an empty field;
+ *  「更换」 opens the field again. */
+function KeyRow({ has, value, onValue, onSave, onDelete, placeholder }: { has: boolean; value: string; onValue: (v: string) => void; onSave: () => Promise<void>; onDelete: () => Promise<void>; placeholder?: string }) {
+  const [editing, setEditing] = useState(false);
+  if (has && !editing) {
+    return (
+      <div className="key-row key-saved">
+        <span className="key-state"><Check size={14} /> {t("已保存")}<span className="key-dots" aria-hidden>••••••••••••</span></span>
+        <span className="key-where small">{t("存于系统钥匙串")}</span>
+        <button className="btn sm" onClick={() => setEditing(true)}>{t("更换")}</button>
+        <button className="icon-btn" title={t("删除 Key")} aria-label={t("删除 Key")} onClick={() => void onDelete()}><Trash2 size={14} /></button>
+      </div>
+    );
+  }
   return (
     <div className="key-row">
-      <input {...NO_AUTO} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={has ? t("已保存（存于系统钥匙串）") : placeholder ?? t("粘贴 API Key")} />
-      <button className="btn sm" onClick={async () => { await api.setApiKey(account, key); setHas(!!key.trim()); setKey(""); }} disabled={!key.trim()}>{t("保存")}</button>
-      {has && <button className="icon-btn" title={t("删除 Key")} onClick={async () => { await api.setApiKey(account, ""); setHas(false); }}><Trash2 size={14} /></button>}
+      <input {...NO_AUTO} type="password" autoFocus={editing} value={value} onChange={(e) => onValue(e.target.value)} placeholder={placeholder ?? t("粘贴 API Key")} />
+      <button className="btn sm" onClick={async () => { await onSave(); setEditing(false); }} disabled={!value.trim()}>{t("保存")}</button>
+      {has && <button className="btn ghost sm" onClick={() => { onValue(""); setEditing(false); }}>{t("取消")}</button>}
     </div>
   );
 }
