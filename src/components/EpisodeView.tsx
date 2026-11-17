@@ -28,7 +28,7 @@ import { isZh, useZh, useZhParagraphs } from "../lib/zh";
 import { autoTranslate, loadTranscript, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 import { ChatPanel, SummaryPanel } from "./AiPanels";
-import { Controls } from "./Players";
+import { Controls, playSoon } from "./Players";
 import { VideoSlot } from "./VideoDock";
 import { bytes, cancelDownload, downloadEpisode, isSaved, removeDownload, useOffline } from "../lib/offline";
 import { showLinks } from "../lib/showLinks";
@@ -306,7 +306,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   useEffect(() => { if (transcript) autoTranslate(ep); }, [transcript, autoOn]);
   const coverToggle = () => {
     if (isCurrent) { useStore.getState().player?.toggle(); return; }
-    load(ep); window.setTimeout(() => useStore.getState().player?.play(), 400);
+    load(ep); playSoon(ep.id);
   };
   // When the player controls scroll out of view, a copy docks at the bottom of the column.
   const leftRef = useRef<HTMLElement>(null);
@@ -387,7 +387,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             </div>
           )}
           {isCurrent ? <div className="controls-slot" ref={controlsRef}><Controls /></div> : (
-            <button className="btn primary" onClick={() => { load(ep); setTimeout(() => useStore.getState().player?.play(), 400); }}><Play size={14} /> {t("播放这一集")}</button>
+            <button className="btn primary" onClick={() => { load(ep); playSoon(ep.id); }}><Play size={14} /> {t("播放这一集")}</button>
           )}
           {ytPromo && ytChannel && <YtVideoStrip channel={ytChannel} name={showName(epShow?.title ?? "")} cover={epShow?.cover} />}
           {notes && <Notes ep={ep} text={notes} />}

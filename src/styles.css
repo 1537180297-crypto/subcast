@@ -1615,3 +1615,6 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .hg[data-on="true"] { background: var(--accent); }
 .stats-foot { margin-top: 16px; }
 @container stats (max-width: 760px) { .stat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stats-grid { grid-template-columns: 1fr; } }
+/* Waiting for sound after pressing play */
+.controls { position: relative; }
+.play-btn.loading { opacity: .85; }

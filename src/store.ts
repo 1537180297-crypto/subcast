@@ -37,6 +37,10 @@ interface State {
   length: number;
   playing: boolean;
   player: PlayerHandle | null;
+  /** Since when playback has been asked for but no sound has come yet (connecting, buffering); null when not waiting. */
+  loadingSince?: number | null;
+  /** Play as soon as the player for `current` is ready (it may take a few seconds to appear). */
+  playWhenReady?: string | null;
   /** The video fills the window (and the window the screen), subtitles on it. */
   theater?: boolean;
   /** Which tab the add dialog opens on. */

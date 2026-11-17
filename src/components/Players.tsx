@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Minimize2, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
+import { ExternalLink, Loader2, Minimize2, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
@@ -13,6 +13,24 @@ import { audioSrc, useOffline } from "../lib/offline";
 import { playNext } from "../lib/library";
 
 const SAVE_EVERY = 10;
+/** Starts an episode as soon as its player exists: right away when it does, or when it appears (a YouTube
+ *  player takes a moment to load). Replaces "wait 400 ms and hope". */
+export function playSoon(id: string) {
+  const s = useStore.getState();
+  waiting(true);
+  if (s.current?.id === id && s.player) { s.player.play(); return; }
+  s.set({ playWhenReady: id });
+}
+useStore.subscribe((s, prev) => {
+  if (s.player && s.player !== prev.player && s.playWhenReady && s.current?.id === s.playWhenReady) {
+    const p = s.player;
+    useStore.setState({ playWhenReady: null });
+    window.setTimeout(() => p.play(), 0);
+  }
+});
+
+/** Playback asked for, sound not there yet: the controls show it, and say more if it takes long. */
+export const waiting = (on: boolean) => { const s = useStore.getState(); if (on ? !s.loadingSince : s.loadingSince) s.set({ loadingSince: on ? Date.now() : null }); };
 let lastSaved = 0;
 // Listening time: wall-clock time while playing, at most 2 s per tick (a seek or a sleeping laptop adds
 // nothing), flushed every 20 s and on pause.
@@ -83,14 +101,17 @@ export function AudioEngine() {
         track(audio, el.currentTime, el.duration);
       }}
       onTimeUpdate={(e) => track(audio, e.currentTarget.currentTime)}
-      onPlay={() => useStore.getState().set({ playing: true })}
+      onPlay={() => { useStore.getState().set({ playing: true }); if (ref.current && ref.current.readyState < 3) waiting(true); }}
+      onWaiting={() => waiting(true)}
+      onPlaying={() => waiting(false)}
       onPause={(e) => {
+        waiting(false);
         useStore.getState().set({ playing: false });
         void api.setProgress(audio.id, e.currentTarget.currentTime);
         if (saved && src !== audioSrc(audio)) setSrc(audioSrc(audio));
       }}
       onEnded={(e) => { void api.setProgress(audio.id, e.currentTarget.duration || e.currentTarget.currentTime); playNext(); }}
-      onError={() => useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效"))}
+      onError={() => { waiting(false); useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效")); }}
     />
   );
 }
@@ -212,8 +233,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
               length: player.getDuration?.() || ep.duration || 0,
               player: {
                 seek: (t: number) => { player.seekTo(t, true); player.playVideo(); },
-                toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo()),
-                play: () => player.playVideo(),
+                toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : (waiting(true), player.playVideo())),
+                play: () => { waiting(true); player.playVideo(); },
                 setRate: (r: number) => player.setPlaybackRate(r),
                 toggleMute: () => { if (player.isMuted?.()) { player.unMute(); return false; } player.mute(); return true; },
               },
@@ -225,6 +246,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
           },
           onStateChange: (e: any) => {
             setState(e.data);
+            // 3 = buffering; -1/5 after a play request = still starting. 1 = playing.
+            if (e.data === 3) waiting(true); else if (e.data === 1 || e.data === 2 || e.data === 0) waiting(false);
             useStore.getState().set({ playing: e.data === 1 });
             if (e.data === 1) hideYouTubeCaptions(player);
             if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
@@ -300,8 +323,10 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
       <video ref={ref} className="video-native" playsInline preload="auto"
         onLoadedMetadata={(e) => { const el = e.currentTarget; el.playbackRate = rate; if (ep.progress > 5 && ep.progress < el.duration - 10) el.currentTime = ep.progress; track(ep, el.currentTime, el.duration); }}
         onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
-        onPlay={() => { setStarted(true); useStore.getState().set({ playing: true }); }}
-        onPause={(e) => { useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }}
+        onPlay={(e) => { setStarted(true); useStore.getState().set({ playing: true }); if (e.currentTarget.readyState < 3) waiting(true); }}
+        onWaiting={() => waiting(true)}
+        onPlaying={() => waiting(false)}
+        onPause={(e) => { waiting(false); useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }}
         onEnded={(e) => { void api.setProgress(ep.id, e.currentTarget.duration); playNext(); }} />
       <div className="video-shield" onClick={() => useStore.getState().player?.toggle()} onDoubleClick={onFullscreen} />
       <PlayHint ep={ep} show={!started} onClick={() => useStore.getState().player?.toggle()} />
@@ -310,15 +335,16 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
 }
 
 export function Controls({ compact = false }: { compact?: boolean }) {
-  const { time, length, playing, player, settings } = useStore(useShallow((s) => ({ time: s.time, length: s.length, playing: s.playing, player: s.player, settings: s.settings })));
+  const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: s.time, length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
   const [drag, setDrag] = useState<number | null>(null);
+
   const shown = drag ?? time;
   const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
       <button className="icon-btn" title={t("后退 15 秒（←）")} onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
-      <button className="play-btn" title={playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player}>
-        {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+      <button className={`play-btn ${loadingSince ? "loading" : ""}`} title={loadingSince ? t("正在加载…") : playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loadingSince}>
+        {loadingSince ? <Loader2 size={20} className="spin" /> : playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
       <button className="icon-btn" title={t("前进 30 秒（→）")} onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
       <span className="time">{clock(shown)}</span>

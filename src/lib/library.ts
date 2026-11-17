@@ -1,3 +1,4 @@
+import { playSoon } from "../components/Players";
 // Saved episodes (favorites) and the play queue. Favorites live in the library database (blob "_app"/"favorites"),
 // so they survive restarts like subscriptions do; the queue is for this session only.
 import { create } from "zustand";
@@ -35,7 +36,7 @@ function start(ep: Episode) {
   const s = useStore.getState();
   s.load(ep);
   s.openEpisode(ep);
-  window.setTimeout(() => useStore.getState().player?.play(), 700);
+  playSoon(ep.id);
 }
 
 /** Plays the list in order, starting with the first. */

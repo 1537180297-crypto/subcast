@@ -1,3 +1,4 @@
+import { playSoon } from "./Players";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -42,7 +43,7 @@ function openAt(ep: Episode, time: number) {
   void api.setProgress(ep.id, at.progress);
   s.load(at);
   s.openEpisode(at);
-  window.setTimeout(() => useStore.getState().player?.play(), 700);
+  playSoon(ep.id);
 }
 
 function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boolean; hit?: ShowHit; query?: string }) {
@@ -139,7 +140,7 @@ function ContinueHero({ ep }: { ep: Episode }) {
   const pct = ep.duration ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const left = ep.duration ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
   // The whole card resumes: open the episode and start playing where it stopped.
-  const resume = () => { openEpisode(ep); window.setTimeout(() => useStore.getState().player?.play(), 600); };
+  const resume = () => { openEpisode(ep); playSoon(ep.id); };
   return (
     <div className="hero" role="button" tabIndex={0} title={t("继续播放")} onClick={resume} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), resume())}>
       {ep.cover ? <img className={ep.videoId ? "wide" : ""} src={ep.cover} alt="" /> : <div className="cover-fallback" />}

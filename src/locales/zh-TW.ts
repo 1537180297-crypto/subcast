@@ -1029,6 +1029,7 @@ const dict: Record<string, string> = {
   "多": "多",
   "近 7 天": "近 7 天",
   "近 30 天": "近 30 天",
+  "正在加载…": "正在載入…",
 };
 
 export default dict;
