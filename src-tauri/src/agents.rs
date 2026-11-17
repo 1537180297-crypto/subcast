@@ -23,15 +23,15 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Kind { Claude, Codex, Gemini, Qwen, Kimi, Opencode }
+pub enum Kind { Claude, Codex, Antigravity, Gemini, Qwen, Kimi, Opencode }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [Kind::Claude, Kind::Codex, Kind::Gemini, Kind::Qwen, Kind::Kimi, Kind::Opencode];
+    pub const ALL: [Kind; 7] = [Kind::Claude, Kind::Codex, Kind::Antigravity, Kind::Gemini, Kind::Qwen, Kind::Kimi, Kind::Opencode];
     pub fn parse(s: &str) -> Option<Kind> { Kind::ALL.into_iter().find(|k| k.id() == s) }
     pub fn id(self) -> &'static str {
-        match self { Kind::Claude => "claude", Kind::Codex => "codex", Kind::Gemini => "gemini", Kind::Qwen => "qwen", Kind::Kimi => "kimi", Kind::Opencode => "opencode" }
+        match self { Kind::Claude => "claude", Kind::Codex => "codex", Kind::Antigravity => "antigravity", Kind::Gemini => "gemini", Kind::Qwen => "qwen", Kind::Kimi => "kimi", Kind::Opencode => "opencode" }
     }
-    fn exe(self) -> &'static str { self.id() }
+    fn exe(self) -> &'static str { if self == Kind::Antigravity { "agy" } else { self.id() } }
     /// Most parallel requests worth running: each is a process (or a session in one) on the user's subscription.
     pub fn max_parallel(self) -> usize { match self { Kind::Codex => 2, _ => 2 } }
 }
@@ -131,7 +131,17 @@ async fn login(kind: Kind, path: &Path) -> &'static str {
             let dir = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| h.join(".codex"));
             if dir.join("auth.json").is_file() { "ready" } else { "needsLogin" }
         }
-        Kind::Gemini => if h.join(".gemini/oauth_creds.json").is_file() || std::env::var_os("GEMINI_API_KEY").is_some() { "ready" } else { "unknown" },
+        // agy keeps its Google login in the keychain (service "gemini", account "antigravity"). Checked without
+        // reading it (no -w: no keychain prompt). Not starting agy unless logged in matters: a logged-out agy
+        // opens a browser on every start.
+        Kind::Antigravity => {
+            if cfg!(target_os = "macos") {
+                let ok = Command::new("/usr/bin/security").args(["find-generic-password", "-s", "gemini", "-a", "antigravity"]).stdout(Stdio::null()).stderr(Stdio::null()).status().await.is_ok_and(|s| s.success());
+                if ok { "ready" } else { "needsLogin" }
+            } else { "unknown" }
+        }
+        // Gemini CLI: Google no longer serves personal accounts here (they go to Antigravity); an API key works.
+        Kind::Gemini => if std::env::var_os("GEMINI_API_KEY").is_some() { "ready" } else if h.join(".gemini/oauth_creds.json").is_file() || std::env::var_os("GEMINI_API_KEY").is_some() { "ready" } else { "unknown" },
         Kind::Kimi => if h.join(".kimi/credentials").exists() { "ready" } else { "unknown" },
         Kind::Qwen | Kind::Opencode => "unknown",
     }
@@ -150,7 +160,7 @@ pub async fn detect() -> Vec<Found> {
 /// Starts an agent's session once to see whether it answers (no model call): ready, needsLogin or an error.
 pub async fn probe(kind: Kind, path: &Path) -> Result<&'static str> {
     match kind {
-        Kind::Claude | Kind::Codex => Ok(login(kind, path).await),
+        Kind::Claude | Kind::Codex | Kind::Antigravity => Ok(login(kind, path).await),
         _ => {
             let conn = Acp::start(kind, path).await?;
             let r = conn.new_session().await;
@@ -190,18 +200,21 @@ fn friendly(kind: Kind, e: anyhow::Error) -> anyhow::Error {
     let name = display(kind);
     let l = m.to_lowercase();
     if l.contains("no longer supported") || l.contains("migrate to") {
-        anyhow!("{name} 已不再支持个人账号使用（服务方的变化）：{}", m.chars().take(160).collect::<String>())
+        anyhow!("Google 已不再让个人账号使用 {name}。个人 Google 账号请改用 Antigravity CLI（agy）；{name} 只适用于 API Key 或企业版账号")
     } else if l.contains("model is unavailable") || l.contains("model not found") || l.contains("unknown model") {
         anyhow!("{name} 的默认模型不可用，请在 SubCast 里为它选一个模型")
     } else if l.contains("not logged in") || l.contains("login") || l.contains("unauthor") || l.contains("auth_required") || l.contains("authentication") {
         anyhow!("{name} 需要登录：在终端运行 {} 完成登录后，回到 SubCast 点「重新检测」", kind.exe())
+    } else if kind == Kind::Antigravity && (l.contains("resource exhausted") || l.contains("429")) {
+        // agy answers some prompts with a "Resource exhausted" that has nothing to do with quota.
+        anyhow!("{name} 暂时拒绝了这次请求（不一定是额度用完），稍后再试：{}", m.chars().take(160).collect::<String>())
     } else if l.contains("rate limit") || l.contains("usage limit") || l.contains("quota") || l.contains("429") || l.contains("limit reached") {
         anyhow!("{name} 的订阅额度暂时用完了（请求太频繁或额度不足）：{}", m.chars().take(160).collect::<String>())
     } else { e }
 }
 
 pub fn display(kind: Kind) -> &'static str {
-    match kind { Kind::Claude => "Claude Code", Kind::Codex => "Codex", Kind::Gemini => "Gemini CLI", Kind::Qwen => "Qwen Code", Kind::Kimi => "Kimi Code", Kind::Opencode => "OpenCode" }
+    match kind { Kind::Claude => "Claude Code", Kind::Codex => "Codex", Kind::Antigravity => "Antigravity CLI", Kind::Gemini => "Gemini CLI", Kind::Qwen => "Qwen Code", Kind::Kimi => "Kimi Code", Kind::Opencode => "OpenCode" }
 }
 
 // ---- the pool of warm processes ----------------------------------------------------------------------------
@@ -504,11 +517,21 @@ impl Codex {
 struct Acp { rpc: Rpc }
 
 fn acp_args(kind: Kind) -> &'static [&'static str] {
-    match kind { Kind::Gemini => &["--acp"], Kind::Qwen => &["--acp"], Kind::Kimi => &["acp"], Kind::Opencode => &["acp"], _ => &[] }
+    match kind {
+        // Its own agent definition (written into the work folder): no tools, none of the user's MCP servers,
+        // skills or customisations.
+        Kind::Antigravity => &["acp", "--agent", "subcast", "--include-default-customizations=false", "--disable-telemetry"],
+        Kind::Gemini => &["--acp"], Kind::Qwen => &["--acp"], Kind::Kimi => &["acp"], Kind::Opencode => &["acp"], _ => &[]
+    }
 }
 
 impl Acp {
     async fn start(kind: Kind, path: &Path) -> Result<Acp> {
+        if kind == Kind::Antigravity {
+            let dir = work_dir()?.join(".agents/agents/subcast");
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("agent.md"), "---\nname: subcast\ndescription: Answers in text only\nmainAgent: true\nsubagent: false\ntools: []\ninheritMcp: false\ninheritCustomizations: false\nexcludeDefaultComponents: true\n---\nAnswer in text only. You have no tools.\n")?;
+        }
         let rpc = Rpc::spawn(path, acp_args(kind)).await?;
         // No file system and no terminal for the agent.
         rpc.request("initialize", json!({ "protocolVersion": 1, "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
@@ -525,7 +548,10 @@ impl Acp {
         // A session per request (cheap in a running agent), so one answer never sees another's text.
         let session = self.new_session().await?;
         if let Some(m) = req.model.filter(|m| !m.is_empty()) {
-            let _ = self.rpc.request("session/set_model", json!({ "sessionId": session, "modelId": m }), 15).await;
+            // Newer agents take the model as a config option; older ones have set_model.
+            if self.rpc.request("session/set_config_option", json!({ "sessionId": session, "configId": "model", "value": m }), 15).await.is_err() {
+                let _ = self.rpc.request("session/set_model", json!({ "sessionId": session, "modelId": m }), 15).await;
+            }
         }
         // ACP has no system prompt: it goes first in the message.
         let prompt = if req.system.is_empty() { req.user.to_string() } else { format!("{}\n\n---\n\n{}", req.system, req.user) };
