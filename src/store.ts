@@ -41,6 +41,9 @@ interface State {
   loadingSince?: number | null;
   /** Play as soon as the player for `current` is ready (it may take a few seconds to appear). */
   playWhenReady?: string | null;
+  /** First run: show the welcome card; shows are being subscribed in the background. */
+  welcome?: boolean;
+  settingUp?: boolean;
   /** The video fills the window (and the window the screen), subtitles on it. */
   theater?: boolean;
   /** Which tab the add dialog opens on. */

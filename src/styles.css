@@ -1618,3 +1618,9 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 /* Waiting for sound after pressing play */
 .controls { position: relative; }
 .play-btn.loading { opacity: .85; }
+/* First run */
+.welcome-card { position: relative; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px 44px 16px 18px; margin-bottom: 18px; border-radius: 14px; background: var(--accent-soft); }
+.welcome-text { flex: 1; min-width: 240px; }
+.welcome-text p { margin: 0; }
+.welcome-title { font-size: 15px; font-weight: 650; margin-bottom: 4px !important; }
+.welcome-close { position: absolute; top: 10px; right: 10px; }

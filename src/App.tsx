@@ -10,7 +10,7 @@ import { detectAgents } from "./lib/agents";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
-import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelView } from "./components/Lists";
+import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelView, firstRunSetup } from "./components/Lists";
 import { startOffline } from "./lib/offline";
 import { loadFavorites } from "./lib/library";
 import { startUpdateChecks } from "./lib/updater";
@@ -38,7 +38,7 @@ export default function App() {
     const offPlaying = useStore.subscribe((s, prev) => { if (prev.playing && !s.playing && s.current) noteListening(s.current, false); });
     window.addEventListener("beforeunload", () => { const c = useStore.getState().current; if (c) noteListening(c, false); });
     // Local AI agents (Claude Code and the like): found once settings are loaded, put to work if nothing else is set up.
-    void init().then(() => detectAgents());
+    void init().then(() => { void firstRunSetup(); void detectAgents(); });
     // Rendered: tells the app a hot-updated interface works (otherwise it falls back on its own; see ota.rs).
     void api.uiReady().then((info) => useStore.setState({ uiBuild: info.build })).catch(() => {});
     // Shortcuts come from one registry (lib/shortcuts.ts), so Settings › 快捷键 can change them.
