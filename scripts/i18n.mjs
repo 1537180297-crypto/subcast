@@ -40,7 +40,7 @@ for (const file of front) {
 }
 
 // Rust messages that reach the screen. Tests, SQL, regexes and proper names stay out.
-const RUST_SKIP = /INSERT |\(\?i\)|感谢观看|谢谢观看|请不吝点赞|字幕by|字幕由|^ · 文稿$/;
+const RUST_SKIP = /INSERT |^章节：\{\}$|^\[\\w|\(\?i\)|感谢观看|谢谢观看|请不吝点赞|字幕by|字幕由|^ · 文稿$/;
 for (const file of walk(join(root, "src-tauri/src")).filter((f) => f.endsWith(".rs"))) {
   const src = readFileSync(file, "utf8").split("#[cfg(test)]")[0];
   for (const line of src.split("\n")) {

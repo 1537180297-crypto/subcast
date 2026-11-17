@@ -779,6 +779,21 @@ const dict: Record<string, string> = {
   "界面更新包缺少 index.html": "The interface update has no index.html",
   "公钥无效：{e}": "Invalid public key: {e}",
   "签名格式无效：{e}": "Invalid signature format: {e}",
+  "用模型翻译时": "With a model",
+  "快速": "Fast",
+  "精翻": "Best",
+  "多一遍润色，读起来更像中文口语；花费约为两倍": "A second pass makes it read like spoken Chinese; about twice the cost",
+  "一遍翻译，最快出字幕": "One pass: subtitles appear fastest",
+  "把标题和节目简介里的人名、公司和术语告诉识别与翻译模型，名字更少写错": "Tells recognition and translation the names, companies and terms in the title and show notes, so names come out right",
+  "用节目简介辅助识别和翻译": "Use show notes to help recognition and translation",
+  "共享译文": "Shared translation",
+  "本集术语表": "Episode glossary",
+  "翻译每一句时都会照这里的译法，保证人名和术语前后一致。改动会保留。": "Every line is translated with these renderings, so names and terms stay consistent. Your edits are kept.",
+  "译为": "Translate as",
+  "还没有术语。翻译开始时会自动整理，也可以自己添加。": "No terms yet. They're collected when translation starts; you can add your own.",
+  "保存并重新翻译": "Save and retranslate",
+  "没有字幕": "No subtitles",
+  "连不上 {host}：连接被拒绝。如果开着代理软件（如 Clash），请确认它在运行，或在 设置 › 通用 里填写代理地址": "Can't reach {host}: connection refused. If you use a proxy app (such as Clash), make sure it is running, or set the proxy in Settings › General",
 };
 
 export default dict;

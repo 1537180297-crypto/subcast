@@ -8,9 +8,11 @@ use std::time::Duration;
 pub const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) SubCast/0.1";
 
 static CLIENT: Lazy<RwLock<(String, reqwest::Client)>> = Lazy::new(|| RwLock::new((String::new(), build("").unwrap())));
+/// Ignores every proxy: the fallback when the system proxy (Clash and the like, on 127.0.0.1) isn't running.
+static DIRECT: Lazy<reqwest::Client> = Lazy::new(|| base().no_proxy().build().unwrap());
 
-fn build(proxy: &str) -> Result<reqwest::Client> {
-    let mut b = reqwest::Client::builder()
+fn base() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
         .user_agent(UA)
         .connect_timeout(Duration::from_secs(20))
         .read_timeout(Duration::from_secs(120))
@@ -19,7 +21,11 @@ fn build(proxy: &str) -> Result<reqwest::Client> {
         .pool_idle_timeout(Duration::from_secs(20))
         .tcp_keepalive(Duration::from_secs(30))
         .gzip(true)
-        .brotli(true);
+        .brotli(true)
+}
+
+fn build(proxy: &str) -> Result<reqwest::Client> {
+    let mut b = base();
     if !proxy.trim().is_empty() {
         b = b.proxy(reqwest::Proxy::all(proxy.trim()).map_err(|e| anyhow!("代理地址无效：{e}"))?);
     }
@@ -55,6 +61,13 @@ pub async fn get(url: &str) -> Result<reqwest::Response> {
             Err(e) => return Err(describe(e)),
         }
     }
+    // With no proxy set in SubCast, requests follow the system proxy. A local proxy app that is restarting or
+    // switching refuses the connection ("os error 61") although the site is fine: try once without any proxy.
+    if proxy().is_empty() && last.as_ref().is_some_and(|e| refused(&e.to_string())) {
+        if let Ok(res) = DIRECT.get(url).send().await {
+            if res.status().is_success() { return Ok(res); }
+        }
+    }
     Err(last.unwrap_or_else(|| anyhow!("请求失败：{url}")))
 }
 
@@ -64,7 +77,8 @@ pub fn describe(e: reqwest::Error) -> anyhow::Error {
     while let Some(next) = cause.source() { cause = next; }
     let host = e.url().and_then(|u| u.host_str()).unwrap_or("").to_string();
     let why = cause.to_string();
-    if e.is_timeout() { anyhow!("连接 {host} 超时，请检查网络或代理") }
+    if refused(&why) { anyhow!("连不上 {host}：连接被拒绝。如果开着代理软件（如 Clash），请确认它在运行，或在 设置 › 通用 里填写代理地址") }
+    else if e.is_timeout() { anyhow!("连接 {host} 超时，请检查网络或代理") }
     else if e.is_connect() { anyhow!("连不上 {host}：{why}。请检查网络或代理设置") }
     else if why != e.to_string() { anyhow!("网络请求失败（{host}）：{why}") }
     else { anyhow!("网络请求失败（{host}）") }
@@ -76,4 +90,21 @@ pub async fn get_text(url: &str) -> Result<String> {
 
 pub async fn get_json(url: &str) -> Result<serde_json::Value> {
     Ok(get(url).await?.json().await?)
+}
+
+/// "Connection refused" in any of the forms the OS reports it.
+fn refused(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("refused") || m.contains("os error 61") || m.contains("os error 111") || m.contains("os error 10061") || m.contains("连接被拒绝") }
+
+
+#[cfg(test)]
+mod tests {
+    /// Run with HTTPS_PROXY=http://127.0.0.1:9 (nothing listening): the request still gets through directly.
+    #[tokio::test]
+    #[ignore]
+    async fn a_dead_system_proxy_falls_back_to_direct() {
+        let res = super::get("https://42zhangjing.qiaomu.ai/data/episodes.json").await.unwrap();
+        assert!(res.status().is_success());
+        let err = super::client().get("https://42zhangjing.qiaomu.ai/").send().await.unwrap_err();
+        println!("{}", super::describe(err));
+    }
 }

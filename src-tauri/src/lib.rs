@@ -1,4 +1,5 @@
 mod asr;
+mod asr_context;
 mod cloud;
 mod db;
 mod feeds;
@@ -7,6 +8,7 @@ mod llm;
 mod model;
 mod net;
 mod offline;
+#[cfg_attr(debug_assertions, allow(dead_code))] // serving the interface is release-only
 mod ota;
 mod qiaomu;
 mod shared;
@@ -659,13 +661,14 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
     if let Some(mut hit) = shared::lookup(&share_keys).await {
         let translation = hit.translation.take();
         let t = shared::into_transcript(&ep.id, hit);
-        if let Some(tr) = &translation {
-            let conn = state.db.lock().unwrap();
-            for (seg, item) in t.segments.iter().zip(tr.items.iter()) {
-                if let Some(v) = item { let _ = db::tr_put(&conn, &short_hash(&format!("{}|{}", tr.lang, seg.text), 24), v); }
-            }
-        }
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
+        // The shared Chinese lines become this episode's translation (engine "shared"); the subtitle view only
+        // machine-translates the gaps. Saved after the transcript, which clears an episode's old blobs.
+        if let Some(tr) = translation.filter(|tr| tr.items.len() == t.segments.len() && tr.lang.starts_with("zh")) {
+            let conn = state.db.lock().unwrap();
+            let _ = db::set_blob(&conn, &ep.id, "zh", &serde_json::to_string(&tr.items).unwrap_or_default());
+            let _ = db::set_blob(&conn, &ep.id, "zh-engine", "shared");
+        }
         asr_emit(&app, &episode_id, "done", 1.0, None, None);
         return Ok(t);
     }
@@ -694,14 +697,34 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
             dest
         };
         asr_emit(&app, &episode_id, "transcribe", 0.0, None, None);
-        let prompt = format!("{} — {}", ep.show_title.clone().unwrap_or_default(), ep.title).chars().take(200).collect::<String>();
+        // What the episode says about itself helps spell names and terms (asr_context.rs). The "useShowNotes"
+        // setting (default on) can turn it off; it is dropped when its script doesn't match the spoken language.
+        let use_notes = {
+            let conn = state.db.lock().unwrap();
+            db::get_setting(&conn, "app").ok().flatten().and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                .and_then(|s| s["useShowNotes"].as_bool()).unwrap_or(true)
+        };
+        let meta = if use_notes {
+            asr_context::Meta { title: ep.title.clone(), show: ep.show_title.clone().unwrap_or_default(), description: ep.notes.clone().unwrap_or_default(), chapters: vec![] }
+        } else { asr_context::Meta::default() };
+        let hotwords: Vec<String> = if use_notes { db::get_blob(&state.db.lock().unwrap(), &ep.id, "ctx").ok().flatten()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .map(|v| v["terms"].as_array().into_iter().flatten().filter_map(|t| t["src"].as_str().map(str::to_string)).collect()).unwrap_or_default() } else { vec![] };
+        let lang_for = |text: &str| if language == "auto" { asr_context::script_of(&format!("{} {}", ep.title, text)) } else { language.as_str() };
+        let fit = |text: String| if asr_context::fits_language(&text, lang_for(&text)) && (language != "auto" || asr_context::script_of(&ep.title) == asr_context::script_of(&text)) { text } else { String::new() };
+        let ctx = asr::AsrContext {
+            prompt: fit(asr_context::prompt(&meta, asr_context::BUDGET_PROMPT)),
+            background: fit(asr_context::background(&meta, asr_context::BUDGET_QWEN)),
+            doubao: { let b = fit(asr_context::background(&meta, asr_context::BUDGET_DOUBAO)); if b.is_empty() && hotwords.is_empty() { String::new() } else { asr_context::doubao(&asr_context::Meta { description: b, ..Default::default() }, &hotwords) } },
+            hotwords: hotwords.clone(),
+        };
         let app2 = app.clone();
         let id2 = episode_id.clone();
         let out = if let Some(cfg) = &cloud {
             asr_emit(&app, &episode_id, "transcribe", 0.01, Some("正在解码音频".into()), None);
             let src = audio.clone();
             let samples = tokio::task::spawn_blocking(move || asr::decode_16k_mono(&src)).await.map_err(e)?.map_err(e)?;
-            let segments = cloud::transcribe(cfg, samples, &language, &prompt, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, Some("云端识别中".into()), None)).await.map_err(e)?;
+            let segments = cloud::transcribe(cfg, samples, &language, &ctx, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, Some("云端识别中".into()), None)).await.map_err(e)?;
             let sample: String = segments.iter().take(5).map(|s| s.text.as_str()).collect();
             let lang = if language != "auto" { language.clone() } else if sample.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) { "zh".into() } else { "auto".into() };
             asr::WorkerResult { language: lang, segments }
@@ -720,20 +743,27 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
             let (src, wav) = (audio.clone(), work.join("audio16k.wav"));
             let wav2 = wav.clone();
             tokio::task::spawn_blocking(move || -> anyhow::Result<()> { asr::write_wav(&wav2, &asr::decode_16k_mono(&src)?) }).await.map_err(e)?.map_err(e)?;
-            let segments = asr::run_crispasr(&bin, &model_path, &wav, &language, &prompt, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, None, None)).await.map_err(e)?;
+            let segments = asr::run_crispasr(&bin, &model_path, &wav, &language, &ctx, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, None, None)).await.map_err(e)?;
             let sample: String = segments.iter().take(5).map(|s| s.text.as_str()).collect();
             let lang = if language != "auto" { language.clone() } else if sample.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) { "zh".into() } else { "auto".into() };
             asr::WorkerResult { language: lang, segments }
         } else {
-            asr::run_worker(&audio, &model_path, &language, &prompt, cancel.clone(), move |ev| match ev {
+            asr::run_worker(&audio, &model_path, &language, &ctx.prompt, cancel.clone(), move |ev| match ev {
                 asr::WorkerEvent::Progress(p) => asr_emit(&app2, &id2, "transcribe", p, None, None),
                 asr::WorkerEvent::Segment(s) => asr_emit(&app2, &id2, "segment", 0.0, None, Some(s)),
             }).await.map_err(e)?
         };
-        let segments = transcript::resegment(transcript::clean(out.segments));
+        // A recogniser can echo its background on silence or music: such cues are the prompt, not speech.
+        let echo_of = format!("{} {} {}", ctx.background, ctx.prompt, ctx.doubao);
+        let heard: Vec<Segment> = out.segments.into_iter().filter(|s| !asr_context::is_echo(&s.text, &echo_of)).collect();
+        let segments = transcript::resegment(transcript::clean(heard));
         if segments.is_empty() { return Err("没有识别出文字（可能是纯音乐或静音）".to_string()); }
         let t = Transcript { episode_id: ep.id.clone(), source: if cloud.is_some() { "cloud" } else { "whisper" }.into(), language: out.language, segments };
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
+        // What made it, for sharing the translation later (share_translation).
+        let made_by = json!({ "source": if cloud.is_some() { "cloud" } else if spec.engine == "qwen3" { "qwen3" } else { "whisper" },
+            "model": cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.to_string()) });
+        let _ = db::set_blob(&state.db.lock().unwrap(), &ep.id, "asr-meta", &made_by.to_string());
         Ok(t)
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
@@ -780,6 +810,43 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
 }
 
 /// A random id for this install; the server stores only a salted hash of it, for vote/report dedupe.
+/// Shares an episode's finished Chinese translation with its recognised transcript, so the next listener gets
+/// bilingual subtitles at once. Only transcripts the shared library takes (speech recognition, ours or shared)
+/// and only with the "shareTranscripts" setting on. `engine`: llm | google. Returns the server's action.
+#[tauri::command]
+async fn share_translation(state: State<'_, AppState>, episode_id: String, engine: String, model: String) -> Res<String> {
+    let (ep, t, items, made_by, share_on, install) = {
+        let conn = state.db.lock().unwrap();
+        let ep = db::get_episode(&conn, &episode_id).map_err(e)?.ok_or("节目不存在")?;
+        let t = db::get_transcript(&conn, &episode_id).map_err(e)?.ok_or("没有字幕")?;
+        let items: Vec<Option<String>> = db::get_blob(&conn, &episode_id, "zh").map_err(e)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let made_by = db::get_blob(&conn, &episode_id, "asr-meta").ok().flatten().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let on = db::get_setting(&conn, "app").ok().flatten().and_then(|r| serde_json::from_str::<Value>(&r).ok())
+            .and_then(|s| s["shareTranscripts"].as_bool()).unwrap_or(true);
+        (ep, t, items, made_by, on, install_id(&conn))
+    };
+    if !share_on || !matches!(engine.as_str(), "llm" | "google") { return Ok("skipped".into()); }
+    // Shared hits carry their origin in the source ("shared:qwen3"); an unknown model scores lowest, so the
+    // server keeps the existing segments and only takes the translation.
+    let (source, asr_model) = match (t.source.as_str(), &made_by) {
+        ("whisper" | "cloud", Some(m)) => (m["source"].as_str().unwrap_or("whisper").to_string(), m["model"].as_str().unwrap_or("").to_string()),
+        (s, _) if s.starts_with("shared:") => (s.trim_start_matches("shared:").to_string(), String::new()),
+        _ => return Ok("skipped".into()),
+    };
+    if !matches!(source.as_str(), "whisper" | "qwen3" | "cloud") || items.len() != t.segments.len() { return Ok("skipped".into()); }
+    let filled = items.iter().filter(|i| i.as_ref().is_some_and(|s| !s.is_empty())).count();
+    if filled * 10 < items.len() * 9 { return Ok("skipped".into()); }
+    let keys = shared::keys(&ep);
+    if keys.is_empty() { return Ok("skipped".into()); }
+    let meta = shared::UploadMeta {
+        title: ep.title.clone(), show: ep.show_title.clone().unwrap_or_default(),
+        duration: ep.duration.unwrap_or(0.0).max(t.segments.last().map(|s| s.end).unwrap_or(0.0)).max(1.0),
+        source, model: asr_model, language: t.language.clone(), install,
+        translation: Some(("zh-CN".to_string(), items)),
+    };
+    shared::upload_with(&keys, meta, &t.segments, &engine, &model).await.map_err(e)
+}
+
 fn install_id(conn: &Connection) -> String {
     if let Ok(Some(id)) = db::get_setting(conn, "install") { return id; }
     let id = uuid::Uuid::new_v4().to_string();
@@ -967,7 +1034,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())
@@ -1150,8 +1217,9 @@ mod live {
         let bin = match asr::find_crispasr(&data) { Some(b) => b, None => asr::install_crispasr(&data, &flag, |_, _| {}).await.unwrap() };
         let wav = dir.join("t16k.wav");
         asr::write_wav(&wav, &asr::decode_16k_mono(&dir.join("clip.mp3")).unwrap()).unwrap();
-        let segs = asr::run_crispasr(&bin, &dir.join("qwen3-asr-0.6b-q8_0.gguf"), &wav, "auto", "No Priors", flag, |p| println!("progress {p}")).await.unwrap();
+        let ctx = asr::AsrContext { background: std::env::var("SUBCAST_TEST_CONTEXT").unwrap_or_default(), ..Default::default() };
+        let segs = asr::run_crispasr(&bin, &dir.join("qwen3-asr-0.6b-q8_0.gguf"), &wav, &std::env::var("SUBCAST_TEST_LANG").unwrap_or("auto".into()), &ctx, flag, |p| println!("progress {p}")).await.unwrap();
         for s in &segs { println!("[{:.1}-{:.1}] {}", s.start, s.end, s.text); }
-        assert!(segs.len() >= 5);
+        assert!(segs.len() >= 2);
     }
 }

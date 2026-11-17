@@ -2,7 +2,9 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, Languages, Loader2, Search, X } from "lucide-react";
+import { BookA, ChevronDown, Languages, Loader2, Search, X } from "lucide-react";
+import { Modal } from "./Chrome";
+import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { bytes } from "../lib/offline";
 import { api, errorText, rawErrorText, type Episode, type ModelInfo, type Segment } from "../lib/api";
@@ -130,7 +132,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const done = Math.min(total, translation?.items.slice(0, total).filter((x) => x != null).length ?? 0);
   const running = !!translation?.running;
   const providerName = providerFor(settings, "translate")?.name;
-  const engineName = translation?.engine === "youtube" ? t("节目方中文字幕") : translation?.engine === "google" ? t("谷歌翻译") : t("{name}翻译", { name: providerName ? t(providerName) : t("模型") });
+  const engineName = translation?.engine === "shared" ? t("共享译文") : translation?.engine === "youtube" ? t("节目方中文字幕") : translation?.engine === "google" ? t("谷歌翻译") : t("{name}翻译", { name: providerName ? t(providerName) : t("模型") });
   const error = startError ?? translation?.error;
   const pending = wantsZh && (running || (settings.autoTranslate && !error && done < total));
   const start = (force?: "llm" | "google") => { setStartError(null); translateEpisode(ep, transcript, force).catch((e) => setStartError(rawErrorText(e))); };
@@ -145,6 +147,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     </div>
   );
   const searchBtn = <>
+    {wantsZh && canUpgrade && <GlossaryButton ep={ep} onRetranslate={() => start("llm")} />}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
   </>;
@@ -186,6 +189,56 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** The episode's names and terms (made before translating), editable; edits are kept when it is remade. */
+function GlossaryButton({ ep, onRetranslate }: { ep: Episode; onRetranslate: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [ctx, setCtx] = useState<EpisodeContext | null>(null);
+  const [rows, setRows] = useState<{ src: string; zh: string; user?: boolean }[]>([]);
+  useLang((s) => s.lang);
+  const load = async () => {
+    let c: EpisodeContext | null = null;
+    try { const raw = await api.getBlob(ep.id, "ctx"); c = raw ? JSON.parse(raw) : null; } catch { c = null; }
+    setCtx(c); setRows(c?.terms ?? []); setOpen(true);
+  };
+  const save = async (andRetranslate: boolean) => {
+    const terms = rows.map((r) => ({ src: r.src.trim(), zh: r.zh.trim(), user: true })).filter((r) => r.src && r.zh);
+    const next: EpisodeContext = { summary: ctx?.summary ?? "", speakers: ctx?.speakers ?? [], terms, basis: ctx?.basis };
+    await api.setBlob(ep.id, "ctx", JSON.stringify(next));
+    setOpen(false);
+    if (andRetranslate) onRetranslate();
+  };
+  return (
+    <>
+      <button className="icon-btn" title={t("本集术语表")} aria-label={t("本集术语表")} onClick={() => void load()}><BookA size={15} /></button>
+      {open && (
+        <Modal title={t("本集术语表")} onClose={() => setOpen(false)}>
+          <div className="gloss">
+            <p className="muted small">{t("翻译每一句时都会照这里的译法，保证人名和术语前后一致。改动会保留。")}</p>
+            {ctx?.summary && <p className="gloss-summary">{ctx.summary}</p>}
+            <div className="gloss-list">
+              {rows.map((r, i) => (
+                <div className="gloss-row" key={i}>
+                  <input value={r.src} placeholder={t("原文")} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, src: e.target.value } : x)))} />
+                  <span className="arrow">→</span>
+                  <input value={r.zh} placeholder={t("译为")} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, zh: e.target.value } : x)))} />
+                  <button className="icon-btn sm" aria-label={t("删除")} onClick={() => setRows(rows.filter((_, j) => j !== i))}><X size={13} /></button>
+                </div>
+              ))}
+              {!rows.length && <p className="muted small">{t("还没有术语。翻译开始时会自动整理，也可以自己添加。")}</p>}
+            </div>
+            <div className="gloss-foot">
+              <button className="btn sm" onClick={() => setRows([...rows, { src: "", zh: "" }])}>{t("添加")}</button>
+              <span className="spacer" />
+              <button className="btn sm" onClick={() => void save(false)}>{t("保存")}</button>
+              <button className="btn sm primary" onClick={() => void save(true)}>{t("保存并重新翻译")}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 

@@ -13,6 +13,10 @@ export interface Settings {
   asrLanguage: string;
   mirrorFirst: boolean;
   autoTranslate: boolean;
+  /** fast: one pass. best: a second pass that makes each line read naturally (about twice the model cost). */
+  translateQuality: "fast" | "best";
+  /** Give recognition and translation the episode's title and show notes (names and terms come out right). */
+  useShowNotes: boolean;
   subtitleMode: "bilingual" | "original" | "translation";
   playbackRate: number;
   /** "local", or the id of a cloud transcription service. */
@@ -139,6 +143,8 @@ export const DEFAULTS: Settings = {
   asrLanguage: "auto",
   mirrorFirst: true,
   autoTranslate: true,
+  translateQuality: "fast",
+  useShowNotes: true,
   subtitleMode: "bilingual",
   playbackRate: 1,
   asrEngine: "local",

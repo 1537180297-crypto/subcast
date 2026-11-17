@@ -36,6 +36,7 @@
     "allow-translate-texts",
     "allow-youtube-stream",
     "allow-ui-ready",
+    "allow-share-translation",
     "allow-ui-check",
     "allow-refresh-config",
     "allow-prepare-youtube",
