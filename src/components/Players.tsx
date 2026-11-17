@@ -4,11 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ExternalLink, Loader2, Minimize2, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, type Episode } from "../lib/api";
+import { api, isBotCheck, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
 import { useStore } from "../store";
-import { t, tr } from "../lib/i18n";
+import { IS_MAC, t, tr } from "../lib/i18n";
 import { audioSrc, useOffline } from "../lib/offline";
 import { playNext } from "../lib/library";
 
@@ -144,8 +144,21 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     // HLS where the WebView plays it (macOS); elsewhere HLS through the app's loopback proxy (hls.js), for HD.
     const nativeHls = document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
     try { setNative(await api.youtubeStream(ep.videoId!, nativeHls ? "native-hls" : "proxy-hls")); setError(null); }
-    catch (e) { if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(String((e as any)?.message ?? e)) })); }
+    catch (e) {
+      const msg = typeof e === "string" ? e : String((e as any)?.message ?? e);
+      // YouTube wants a signed-in browser: ask once, here, instead of failing or silently falling back to audio.
+      if (isBotCheck(msg)) { setBotCheck(why); return; }
+      if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(msg) }));
+    }
     finally { setFallingBack(null); void off.then((f) => f()); }
+  };
+  const [botCheck, setBotCheck] = useState<string | null>(null);
+  const [browser, setBrowser] = useState(useStore.getState().settings.ytCookiesBrowser || "chrome");
+  const retryWithBrowser = async () => {
+    const why = botCheck ?? "";
+    setBotCheck(null);
+    await useStore.getState().saveSettings({ ytCookiesBrowser: browser });
+    void fallback(why);
   };
   useEffect(() => { setNative(null); setError(null); }, [ep.id]);
   // Have yt-dlp ready before it is needed: a first fallback would otherwise start with a 35 MB download.
@@ -174,6 +187,19 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     <div className={`video ${theater ? "theater" : ""} ${theater && idle ? "idle" : ""}`} ref={box}>
       {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={native.kind === "hls" ? () => void api.youtubeStream(ep.videoId!, "mp4").then(setNative).catch((e) => setError(tr(String(e?.message ?? e)))) : undefined} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
       {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
+      {botCheck && (
+        <div className="video-error bot-check">
+          <p>{t("YouTube 要求验证「不是机器人」才能播放这个视频。")}</p>
+          <p className="small">{t("选一个已经登录 YouTube 的浏览器，SubCast 借用它的登录再试一次（只在本机读取，不保存）。")}</p>
+          <div className="row-actions">
+            <select value={browser} onChange={(e) => setBrowser(e.target.value)} aria-label={t("浏览器")}>
+              {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{b[0].toUpperCase() + b.slice(1)}</option>)}
+            </select>
+            <button className="btn primary sm" onClick={() => void retryWithBrowser()}>{t("借用登录再试")}</button>
+            {openBtn}
+          </div>
+        </div>
+      )}
       {error && <div className="video-error">{error} {openBtn}</div>}
       {overlay}
       {theater && (

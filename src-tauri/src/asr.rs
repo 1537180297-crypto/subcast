@@ -435,21 +435,34 @@ where F: Fn(PathBuf) -> Fut, Fut: std::future::Future<Output = Result<T>> {
 /// 通用; empty = never). Read from the browser each time, never stored by SubCast.
 pub static YT_BROWSER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
-fn bot_check(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("confirm you") && m.contains("bot") || m.contains("sign in to confirm") }
+/// A yt-dlp command with what YouTube needs today: a JavaScript runtime for its signature challenges (deno, node
+/// or bun, whichever this computer has; an app opened from the Dock doesn't see the terminal's PATH, so the usual
+/// install folders are added) and the app's proxy.
+pub fn ytdlp_command(ytdlp: &Path) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(ytdlp);
+    cmd.env("PATH", crate::agents::child_path());
+    // Older copies (a system-wide yt-dlp used as a fallback) don't know the option and would refuse to run.
+    if knows_js_runtimes(ytdlp) { cmd.args(["--js-runtimes", "deno", "--js-runtimes", "node", "--js-runtimes", "bun"]); }
+    let proxy = net::proxy();
+    if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+    cmd.kill_on_drop(true);
+    cmd
+}
 
-/// Downloads a video's audio. When YouTube answers with its bot check, tries other YouTube clients, then (if the
-/// listener allowed it) their browser's sign-in.
-pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>) -> Result<PathBuf> {
-    match youtube_audio_with(ytdlp, video_id, dir, cancel.clone(), &[]).await {
+/// Runs a yt-dlp job and, when YouTube answers with its "confirm you're not a bot" check, tries other YouTube
+/// clients, then the listener's browser sign-in if they allowed one (Settings › 通用).
+pub async fn with_bot_fallback<T, F, Fut>(job: F) -> Result<T>
+where F: Fn(Vec<String>) -> Fut, Fut: std::future::Future<Output = Result<T>> {
+    match job(vec![]).await {
         Err(e) if bot_check(&e.to_string()) => {
-            let alt = ["--extractor-args", "youtube:player_client=tv,web_safari,mweb"];
-            match youtube_audio_with(ytdlp, video_id, dir, cancel.clone(), &alt).await {
+            let alt = vec!["--extractor-args".to_string(), "youtube:player_client=tv,web_safari,mweb".to_string()];
+            match job(alt).await {
                 Err(e2) if bot_check(&e2.to_string()) => {
                     let browser = YT_BROWSER.read().unwrap().clone();
-                    if browser.is_empty() {
-                        return Err(anyhow!("YouTube 要求验证「不是机器人」才能下载这个视频的音频。可以在 设置 › 通用 里选择一个已登录 YouTube 的浏览器，SubCast 会借用它的登录再试；也可以直接看视频版"));
-                    }
-                    youtube_audio_with(ytdlp, video_id, dir, cancel, &["--cookies-from-browser", &browser]).await
+                    if browser.is_empty() { return Err(anyhow!("YouTube 要求验证「不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 借用它的登录再试")); }
+                    job(vec!["--cookies-from-browser".into(), browser.clone()]).await
                         .map_err(|e3| if bot_check(&e3.to_string()) { anyhow!("YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试") } else { e3 })
                 }
                 other => other,
@@ -459,17 +472,32 @@ pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc
     }
 }
 
+fn knows_js_runtimes(ytdlp: &Path) -> bool {
+    static SEEN: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<PathBuf, bool>>> = once_cell::sync::Lazy::new(Default::default);
+    if let Some(v) = SEEN.lock().unwrap().get(ytdlp) { return *v; }
+    let mut c = std::process::Command::new(ytdlp);
+    c.arg("--help");
+    #[cfg(windows)]
+    { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
+    let ok = c.output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--js-runtimes")).unwrap_or(false);
+    SEEN.lock().unwrap().insert(ytdlp.to_path_buf(), ok);
+    ok
+}
+
+fn bot_check(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("confirm you") && m.contains("bot") || m.contains("sign in to confirm") }
+
+/// Downloads a video's audio (with the bot-check fallbacks).
+pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>) -> Result<PathBuf> {
+    with_bot_fallback(|extra| { let c = cancel.clone(); async move { let x: Vec<&str> = extra.iter().map(String::as_str).collect(); youtube_audio_with(ytdlp, video_id, dir, c, &x).await } }).await
+}
+
 async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>, extra: &[&str]) -> Result<PathBuf> {
     tokio::fs::create_dir_all(dir).await?;
     let template = dir.join(format!("{video_id}.%(ext)s"));
-    let mut cmd = tokio::process::Command::new(ytdlp);
+    let mut cmd = ytdlp_command(ytdlp);
     // m4a (AAC) decodes without ffmpeg; format 18 (mp4 with AAC audio) is the fallback every video has.
     cmd.args(["-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/18", "--no-playlist", "--no-part"]).args(extra).arg("-o").arg(&template);
-    let proxy = net::proxy();
-    if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
-    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).kill_on_drop(true).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
-    #[cfg(windows)]
-    { cmd.creation_flags(0x08000000); }
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().context("无法启动 yt-dlp")?;
     let stderr = child.stderr.take();
     let tail = tokio::spawn(async move {
@@ -501,13 +529,20 @@ async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Ar
 /// (WebView2, most WebKitGTK) only a progressive MP4 works: YouTube's HLS manifests send no CORS header, so
 /// hls.js can't load them.
 pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str, hls: bool) -> Result<String> {
-    let mut cmd = tokio::process::Command::new(ytdlp);
-    cmd.args(["-j", "--no-playlist", "--no-warnings"]);
-    let proxy = net::proxy();
-    if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
-    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).kill_on_drop(true);
-    #[cfg(windows)]
-    { cmd.creation_flags(0x08000000); }
+    // Addresses stay valid for hours: reopening a video doesn't ask YouTube again.
+    let key = format!("{video_id}|{hls}");
+    if let Some((url, at)) = STREAMS.lock().unwrap().get(&key).cloned() { if at.elapsed().as_secs() < 4 * 3600 { return Ok(url); } }
+    let url = with_bot_fallback(|extra| async move { stream_once(ytdlp, video_id, hls, &extra).await }).await?;
+    STREAMS.lock().unwrap().insert(key, (url.clone(), std::time::Instant::now()));
+    Ok(url)
+}
+
+static STREAMS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant)>>> = once_cell::sync::Lazy::new(Default::default);
+
+async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) -> Result<String> {
+    let mut cmd = ytdlp_command(ytdlp);
+    cmd.args(["-j", "--no-playlist", "--no-warnings"]).args(extra);
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}"));
     let out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await.map_err(|_| anyhow!("获取视频地址超时"))?.context("无法启动 yt-dlp")?;
     let info: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
         anyhow!("无法获取视频地址：{}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("").chars().take(200).collect::<String>())

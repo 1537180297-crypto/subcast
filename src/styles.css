@@ -1648,3 +1648,6 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .subtitle-overlay p { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; text-overflow: clip; }
 .reading-preview { height: auto; min-height: 130px; padding: 18px 0; }
 .reading-preview .subtitle-overlay { position: static; margin: 0 6%; }
+.video-error.bot-check { gap: 8px; }
+.video-error.bot-check p { margin: 0; max-width: 34em; }
+.video-error.bot-check select { height: 30px; border-radius: 8px; border: 0; padding: 0 8px; font: inherit; font-size: 13px; }

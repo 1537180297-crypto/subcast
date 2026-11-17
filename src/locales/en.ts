@@ -927,7 +927,6 @@ const dict: Record<string, string> = {
   "下载音频或生成字幕时，YouTube 有时会要求「确认不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 会在那时借用它的登录，只在本机读取，不保存。": "YouTube sometimes asks you to confirm you're not a bot when downloading audio or making subtitles. Pick a browser signed in to YouTube and SubCast will use its sign-in then, read on this computer only, never stored.",
   "回到这一集": "Back to this episode",
   "停止播放并关闭": "Stop and close",
-  "YouTube 要求验证「不是机器人」才能下载这个视频的音频。可以在 设置 › 通用 里选择一个已登录 YouTube 的浏览器，SubCast 会借用它的登录再试；也可以直接看视频版": "YouTube wants to confirm you're not a bot before this video's audio can be downloaded. In Settings › General, pick a browser signed in to YouTube and SubCast will try again with its sign-in, or watch the video instead",
   "YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试": "YouTube still asks to verify. Open youtube.com in {browser}, make sure you're signed in, then try again",
   "我的收听": "My listening",
   "{n} 秒": "{n} s",
@@ -986,6 +985,10 @@ const dict: Record<string, string> = {
   "前进": "Forward",
   "播完一集，自动接着播同一节目的下一集": "When an episode ends, play the next one of the same show",
   "阅读与字幕": "Reading & subtitles",
+  "YouTube 要求验证「不是机器人」才能播放这个视频。": "YouTube wants to confirm you're not a bot before this video can play.",
+  "选一个已经登录 YouTube 的浏览器，SubCast 借用它的登录再试一次（只在本机读取，不保存）。": "Pick a browser signed in to YouTube and SubCast will try again with its sign-in (read on this computer only, never stored).",
+  "借用登录再试": "Try again with its sign-in",
+  "YouTube 要求验证「不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 借用它的登录再试": "YouTube wants to confirm you're not a bot. Pick a browser signed in to YouTube and SubCast will try again with its sign-in",
 };
 
 export default dict;
