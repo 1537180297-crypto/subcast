@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Compass, Download, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import } from "lucide-react";
+import { ChevronLeft, Compass, Download, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { ImportPanel } from "./ImportPanel";
 import { useStore, type View } from "../store";
@@ -45,8 +45,9 @@ export function Sidebar() {
       </div>
       <nav>
         {nav({ kind: "latest" }, <Inbox size={16} />, t("首页"))}
-        {nav({ kind: "recent" }, <History size={16} />, t("继续收听"))}
         {nav({ kind: "discover" }, <Compass size={16} />, t("发现"))}
+        {nav({ kind: "recent" }, <History size={16} />, t("继续收听"))}
+        {nav({ kind: "stats" }, <ChartColumn size={16} />, t("收听统计"))}
         {(hasDownloads || view.kind === "downloads") && nav({ kind: "downloads" }, <Download size={16} />, t("已下载"))}
       </nav>
       <div className="side-sep" />
@@ -168,6 +169,7 @@ function TaskChip() {
 }
 
 export function MiniPlayer() {
+  const loading = useStore((s) => s.loadingSince);
   const { current, view, playing, player, time, length, openEpisode } = useStore(useShallow((s) => ({ current: s.current, view: s.view, playing: s.playing, player: s.player, time: s.time, length: s.length, openEpisode: s.openEpisode })));
   const { panel, panelOpen } = useLayout();
   if (!current || current.videoId || (view.kind === "episode" && view.id === current.id)) return null;
@@ -175,7 +177,7 @@ export function MiniPlayer() {
   const right = view.kind === "episode" && panelOpen ? panel + 24 : 24;
   return (
     <div className="mini" style={{ "--mini-right": `${right}px` } as React.CSSProperties}>
-      <button className="play-btn sm" onClick={() => player?.toggle()} disabled={!player}>{playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>
+      <button className="play-btn sm" onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loading}>{loading ? <Loader2 size={16} className="spin" /> : playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>
       {current.cover && <img className="mini-cover" src={current.cover} alt="" />}
       <div className="mini-meta" role="button" tabIndex={0} onClick={() => openEpisode(current)}>
         <p className="ep-name"><ZhText text={current.title} /></p>

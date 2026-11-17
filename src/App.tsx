@@ -7,17 +7,19 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
 import { detectAgents } from "./lib/agents";
+import { useReadingSettings } from "./lib/reading";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
-import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelView } from "./components/Lists";
+import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelView, firstRunSetup } from "./components/Lists";
 import { startOffline } from "./lib/offline";
 import { loadFavorites } from "./lib/library";
 import { startUpdateChecks } from "./lib/updater";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { EpisodeView } from "./components/EpisodeView";
+import { StatsView } from "./components/StatsView";
 import { VideoDock } from "./components/VideoDock";
-import { AudioEngine, cycleMode, stepRate, toggleTheater } from "./components/Players";
+import { AudioEngine, cycleMode, noteListening, stepRate, toggleTheater } from "./components/Players";
 import { actionFor, comboOf, isPlain, type ActionId } from "./lib/shortcuts";
 import { useJobs } from "./lib/jobs";
 import { activeIndex } from "./components/TranscriptPanel";
@@ -26,6 +28,7 @@ import { t, useLang } from "./lib/i18n";
 import { EqBars } from "./components/Illustrations";
 
 export default function App() {
+  useReadingSettings();
   const { ready, view, settingsOpen, addOpen, init } = useStore(useShallow((s) => ({ ready: s.ready, view: s.view, settingsOpen: s.settingsOpen, addOpen: s.addOpen, init: s.init })));
 
   useEffect(() => {
@@ -33,8 +36,11 @@ export default function App() {
     void startOffline();
     void loadFavorites();
     startUpdateChecks();
+    // Listening time is flushed when playback stops, not only every 20 s.
+    const offPlaying = useStore.subscribe((s, prev) => { if (prev.playing && !s.playing && s.current) noteListening(s.current, false); });
+    window.addEventListener("beforeunload", () => { const c = useStore.getState().current; if (c) noteListening(c, false); });
     // Local AI agents (Claude Code and the like): found once settings are loaded, put to work if nothing else is set up.
-    void init().then(() => detectAgents());
+    void init().then(() => { void firstRunSetup(); void detectAgents(); });
     // Rendered: tells the app a hot-updated interface works (otherwise it falls back on its own; see ota.rs).
     void api.uiReady().then((info) => useStore.setState({ uiBuild: info.build })).catch(() => {});
     // Shortcuts come from one registry (lib/shortcuts.ts), so Settings › 快捷键 can change them.
@@ -58,8 +64,8 @@ export default function App() {
       };
       const run: Record<ActionId, () => boolean | void> = {
         playPause: () => player?.toggle(),
-        back: () => player?.seek(Math.max(0, time - 15)),
-        forward: () => player?.seek(time + 30),
+        back: () => player?.seek(Math.max(0, time - (settings.skipBack ?? 15))),
+        forward: () => player?.seek(time + (settings.skipForward ?? 30)),
         backShort: () => player?.seek(Math.max(0, time - 5)),
         forwardShort: () => player?.seek(time + 5),
         prevLine: () => lineSeek(-1),
@@ -93,7 +99,7 @@ export default function App() {
       localStorage.setItem("sharedNoticeShown", "1");
       useStore.getState().notify(t("你的字幕已匿名分享给其他听友（设置 › 通用 可关闭）"));
     });
-    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("scroll", onScroll, { capture: true }); void offMenu.then((f) => f()); void offShared.then((f) => f()); };
+    return () => { offPlaying(); window.removeEventListener("keydown", onKey); document.removeEventListener("scroll", onScroll, { capture: true }); void offMenu.then((f) => f()); void offShared.then((f) => f()); };
   }, []);
 
   const { sidebar, sideOpen, put: putLayout } = useLayout();
@@ -107,6 +113,7 @@ export default function App() {
         {view.kind !== "episode" && <TopBar />}
         {view.kind === "latest" && <LatestView />}
         {view.kind === "recent" && <RecentView />}
+        {view.kind === "stats" && <StatsView />}
         {view.kind === "discover" && <DiscoverView />}
         {view.kind === "downloads" && <DownloadsView />}
         {view.kind === "show" && <ShowView key={view.id} id={view.id} />}

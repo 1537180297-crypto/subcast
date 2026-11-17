@@ -86,7 +86,7 @@ pub async fn youtube_subscriptions(ytdlp: &Path, browser: &str) -> Result<Vec<Ch
         cmd.args(["--cookies-from-browser", browser, "--cookies"]).arg(&jar)
             .args(["--skip-download", "--flat-playlist", "--no-warnings", "--playlist-items", "0", "https://www.youtube.com/feed/channels"])
             .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
-        let proxy = net::proxy();
+        let proxy = net::effective_proxy();
         if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
         #[cfg(windows)]
         { cmd.creation_flags(0x08000000); }

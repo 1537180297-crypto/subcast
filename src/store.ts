@@ -6,6 +6,7 @@ import { setLang, t } from "./lib/i18n";
 export type View =
   | { kind: "latest" }
   | { kind: "recent" }
+  | { kind: "stats" }
   | { kind: "discover" }
   | { kind: "downloads" }
   | { kind: "show"; id: string }
@@ -19,6 +20,8 @@ export interface PlayerHandle {
   setRate(rate: number): void;
   /** Mutes or unmutes; returns whether it is muted now. */
   toggleMute?(): boolean;
+  /** The episode this player plays. A video's player can be ready before the episode becomes current. */
+  episodeId?: string;
 }
 
 interface State {
@@ -36,13 +39,20 @@ interface State {
   length: number;
   playing: boolean;
   player: PlayerHandle | null;
+  /** Since when playback has been asked for but no sound has come yet (connecting, buffering); null when not waiting. */
+  loadingSince?: number | null;
+  /** Play as soon as the player for `current` is ready (it may take a few seconds to appear). */
+  playWhenReady?: string | null;
+  /** First run: show the welcome card; shows are being subscribed in the background. */
+  welcome?: boolean;
+  settingUp?: boolean;
   /** The video fills the window (and the window the screen), subtitles on it. */
   theater?: boolean;
   /** Which tab the add dialog opens on. */
   addTab?: "search" | "link" | "import";
   toast: string | null;
   settingsOpen: boolean;
-  settingsSection?: "model" | "asr" | "tts" | "shortcuts" | "general" | "storage" | "about";
+  settingsSection?: "model" | "asr" | "reading" | "tts" | "shortcuts" | "general" | "storage" | "about";
   addOpen: boolean;
   init(): Promise<void>;
   go(view: View): void;
@@ -122,7 +132,8 @@ export const useStore = create<State>((set, get) => ({
     get().go({ kind: "episode", id: ep.id });
   },
   load(ep) {
-    if (get().current?.id !== ep.id) set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: null });
+    // Keep a player that already belongs to this episode (a video ready before "play" was pressed).
+    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : null }); }
   },
   notify(text) {
     set({ toast: text });

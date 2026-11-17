@@ -1559,8 +1559,11 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
   display: grid; grid-template-rows: auto auto; row-gap: 12px; justify-items: center; text-align: center; padding: 4px 8px; width: 100%; }
 .asub-line { display: flex; flex-direction: column; gap: 3px; width: min(100%, 46em); animation: asub-in .28s var(--ease, ease) both; }
 .asub-line p { margin: 0; line-height: var(--lh); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; }
-.asub-line.now .sub-zh { font-size: var(--zh-now); font-weight: 600; color: var(--text); -webkit-line-clamp: 2; height: calc(var(--zh-now) * var(--lh) * 2); display: -webkit-box; align-content: end; }
-.asub-line.now .sub-orig { font-size: var(--or-now); color: var(--text-2); -webkit-line-clamp: 2; height: calc(var(--or-now) * var(--lh) * 2); }
+/* The sentence being spoken: its block keeps one fixed height (room for two lines of each language) and the
+   lines sit together in the middle of it, so a one-line translation doesn't leave a gap above the original. */
+.asub-line.now { height: calc((var(--zh-now) + var(--or-now)) * var(--lh) * 2 + 3px); justify-content: center; }
+.asub-line.now .sub-zh { font-size: var(--zh-now); font-weight: 600; color: var(--text); -webkit-line-clamp: 2; }
+.asub-line.now .sub-orig { font-size: var(--or-now); color: var(--text-2); -webkit-line-clamp: 2; }
 .asub-line.next { opacity: .4; }
 .asub-line.next .sub-zh { font-size: var(--zh-next); font-weight: 500; color: var(--text); -webkit-line-clamp: 1; height: calc(var(--zh-next) * var(--lh)); }
 .asub-line.next .sub-orig { font-size: var(--or-next); color: var(--text-2); -webkit-line-clamp: 1; height: calc(var(--or-next) * var(--lh)); }
@@ -1569,3 +1572,97 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 @keyframes asub-next-in { from { opacity: 0; transform: translateY(6px); } to { opacity: .4; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .asub-line { animation: none; } }
 .audio-sub { min-height: 0; }
+/* 我的收听 */
+.stats { max-width: 1040px; container: stats / inline-size; }
+.stats-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.stats-head .page-title { margin: 0; }
+.stat-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat-tile { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
+.stat-tile b { font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
+.stats-card { padding: 16px 18px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); min-width: 0; }
+.stats-card-h { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.stats-card-h.sub { margin-top: 20px; }
+.stats-card-h h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.stats-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+.heatmap-wrap { overflow-x: auto; }
+.heatmap-months, .heatmap { display: grid; grid-auto-flow: column; gap: 3px; min-width: 640px; }
+.heatmap { grid-template-rows: repeat(7, 1fr); }
+.heatmap-months { margin-bottom: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.hm { display: block; aspect-ratio: 1; border-radius: 3px; background: var(--line); }
+.hm.l1 { background: color-mix(in srgb, var(--accent) 28%, var(--line)); }
+.hm.l2 { background: color-mix(in srgb, var(--accent) 52%, var(--line)); }
+.hm.l3 { background: color-mix(in srgb, var(--accent) 76%, var(--line)); }
+.hm.l4 { background: var(--accent); }
+.hm.future { visibility: hidden; }
+.heatmap-legend { display: flex; align-items: center; gap: 4px; justify-content: flex-end; margin-top: 8px; }
+.heatmap-legend .hm { width: 11px; }
+.top-shows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.top-shows li { display: grid; grid-template-columns: 18px 36px 1fr auto; align-items: center; gap: 10px; cursor: pointer; border-radius: 8px; }
+.top-shows li:hover .top-name > span:first-child { text-decoration: underline; text-underline-offset: 2px; }
+.top-rank { color: var(--muted); font-size: 12px; text-align: right; }
+.top-shows img, .top-ph { width: 36px; height: 36px; border-radius: 8px; object-fit: cover; background: var(--line); }
+.top-name { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 13.5px; }
+.top-bar { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.top-bar span { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.kind-bar { display: flex; height: 10px; border-radius: 99px; overflow: hidden; gap: 2px; }
+.kind-seg { display: block; min-width: 4px; }
+.kind-legend { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.kind-legend li { display: flex; align-items: center; gap: 8px; }
+.kind-legend .muted { margin-left: auto; }
+.kind-dot { width: 8px; height: 8px; border-radius: 50%; }
+.k-video { background: #e5484d; } .k-podcast { background: var(--accent); } .k-xiaoyuzhou { background: #5b8def; }
+.hourgrid { display: flex; flex-direction: column; gap: 3px; }
+.hourgrid-row { display: grid; grid-template-columns: 18px repeat(24, 1fr); gap: 3px; align-items: center; }
+.hourgrid-row.axis span { font-size: 10.5px; }
+.hg { display: block; height: 12px; border-radius: 3px; background: var(--line); }
+.hg[data-on="true"] { background: var(--accent); }
+.stats-foot { margin-top: 16px; }
+@container stats (max-width: 760px) { .stat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stats-grid { grid-template-columns: 1fr; } }
+/* Waiting for sound after pressing play */
+.controls { position: relative; }
+.play-btn.loading { opacity: .85; }
+/* First run */
+.welcome-card { position: relative; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px 44px 16px 18px; margin-bottom: 18px; border-radius: 14px; background: var(--accent-soft); }
+.welcome-text { flex: 1; min-width: 240px; }
+.welcome-text p { margin: 0; }
+.welcome-title { font-size: 15px; font-weight: 650; margin-bottom: 4px !important; }
+.welcome-close { position: absolute; top: 10px; right: 10px; }
+.model-elsewhere { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--text-2); line-height: 1.6; }
+/* Settings › 阅读与字幕 */
+.subtitle-overlay p, .asub-line p, .lines .line-text p { font-family: var(--sub-font, inherit); }
+.subtitle-overlay .sub-zh { font-size: calc(clamp(15px, 1.7vw, 22px) * var(--sub-scale, 1)); }
+.subtitle-overlay .sub-orig { font-size: calc(clamp(12px, 1.25vw, 16px) * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay .sub-zh { font-size: calc(clamp(22px, 2.6vw, 40px) * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(16px, 1.8vw, 28px) * var(--sub-scale, 1)); }
+.asub { --zh-now: calc(20px * var(--sub-scale, 1)); --or-now: calc(15px * var(--sub-scale, 1)); --zh-next: calc(15px * var(--sub-scale, 1)); --or-next: calc(13px * var(--sub-scale, 1)); }
+:root[data-next-line="off"] .asub-line.next { display: none; }
+:root[data-sub-look="outline"] .video .subtitle-overlay p { background: transparent !important; backdrop-filter: none !important;
+  text-shadow: 0 0 2px #000, 0 0 2px #000, 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
+.chat .msg, .msg.assistant, .msg.user { font-size: calc(14px * var(--chat-scale, 1)); }
+/* Settings › 阅读与字幕 */
+.reading { display: flex; flex-direction: column; gap: 14px; }
+.reading-preview { position: relative; height: 130px; border-radius: 12px; overflow: hidden; background: linear-gradient(135deg, #2c3442, #121418); display: flex; align-items: flex-end; justify-content: center; }
+.reading-preview .subtitle-overlay { position: absolute; left: 6%; right: 6%; bottom: 14px; }
+.reading-preview.look-outline .subtitle-overlay p { background: transparent !important; backdrop-filter: none !important; text-shadow: 0 0 2px #000, 0 0 2px #000, 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
+.reading-preview .subtitle-overlay .sub-zh { font-size: calc(18px * var(--sub-scale, 1)); }
+.reading-preview .subtitle-overlay .sub-orig { font-size: calc(13px * var(--sub-scale, 1)); }
+.reading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 4px 0; font-size: 13.5px; }
+/* Bigger subtitle sizes wrap to a second line instead of being cut off with "…". */
+.subtitle-overlay p { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; text-overflow: clip; }
+.reading-preview { height: auto; min-height: 130px; padding: 18px 0; }
+.reading-preview .subtitle-overlay { position: static; margin: 0 6%; }
+.video-error.bot-check { gap: 8px; }
+.video-error.bot-check p { margin: 0; max-width: 34em; }
+.video-error.bot-check select { height: 30px; border-radius: 8px; border: 0; padding: 0 8px; font: inherit; font-size: 13px; }
+/* Subtitles on video are sized from the video's own height (BBC: line height ~8% of the picture; Chinese line a
+   little larger than the original), so a small player, the floating window and full screen all keep the same
+   proportions. `--sub-scale` (Settings › 阅读与字幕) multiplies it. */
+.video { container: vid / size; }
+.video .subtitle-overlay { bottom: 6cqh; gap: .6cqh; }
+.video .subtitle-overlay .sub-zh { font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); line-height: 1.38; }
+.video .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-scale, 1)); line-height: 1.38; }
+.video .subtitle-overlay p { padding: .25em .55em; border-radius: .3em; }
+.video.theater .subtitle-overlay .sub-zh { font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay { bottom: 9cqh; left: 10%; right: 10%; }
+.video.theater:not(.idle) .subtitle-overlay { bottom: calc(9cqh + 56px); }

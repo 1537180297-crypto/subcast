@@ -2,21 +2,56 @@ import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Minimize2, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
+import { ExternalLink, Loader2, Minimize2, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, type Episode } from "../lib/api";
+import { api, isBotCheck, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
 import { useStore } from "../store";
-import { t, tr } from "../lib/i18n";
+import { IS_MAC, t, tr } from "../lib/i18n";
 import { audioSrc, useOffline } from "../lib/offline";
 import { playNext } from "../lib/library";
 
 const SAVE_EVERY = 10;
+/** Starts an episode as soon as its player exists: right away when it does, or when it appears (a YouTube
+ *  player takes a moment to load). Replaces "wait 400 ms and hope". */
+export function playSoon(id: string) {
+  const s = useStore.getState();
+  waiting(true);
+  if (s.current?.id === id && s.player) { s.player.play(); return; }
+  s.set({ playWhenReady: id });
+}
+useStore.subscribe((s, prev) => {
+  if (s.player && s.player !== prev.player && s.playWhenReady && s.current?.id === s.playWhenReady) {
+    const p = s.player;
+    useStore.setState({ playWhenReady: null });
+    window.setTimeout(() => p.play(), 0);
+  }
+});
+
+/** Playback asked for, sound not there yet: the controls show it, and say more if it takes long. */
+export const waiting = (on: boolean) => { const s = useStore.getState(); if (on ? !s.loadingSince : s.loadingSince) s.set({ loadingSince: on ? Date.now() : null }); };
 let lastSaved = 0;
+// Listening time: wall-clock time while playing, at most 2 s per tick (a seek or a sleeping laptop adds
+// nothing), flushed every 20 s and on pause.
+let heard = { id: "", show: "", secs: 0, at: 0, translated: false };
+function flushHeard() {
+  if (heard.secs >= 1) void api.logListen(heard.id, heard.show, heard.secs, heard.translated).catch(() => {});
+  heard.secs = 0;
+}
+export function noteListening(ep: Episode, playing: boolean) {
+  const now = performance.now();
+  if (heard.id !== ep.id) { flushHeard(); heard = { id: ep.id, show: ep.showId, secs: 0, at: now, translated: false }; }
+  if (playing && heard.at) heard.secs += Math.min(2, (now - heard.at) / 1000);
+  heard.at = playing ? now : 0;
+  heard.translated ||= useStore.getState().settings.subtitleMode !== "original";
+  if (heard.secs >= 20 || (!playing && heard.secs > 0)) flushHeard();
+}
+
 function track(ep: Episode, time: number, length?: number) {
   const s = useStore.getState();
   if (s.current?.id !== ep.id) return;
+  noteListening(ep, s.playing);
   s.set({ time, ...(length ? { length } : {}) });
   if (Math.abs(time - lastSaved) > SAVE_EVERY) { lastSaved = time; void api.setProgress(ep.id, time); }
 }
@@ -44,6 +79,7 @@ export function AudioEngine() {
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
       toggleMute: () => { el.muted = !el.muted; return el.muted; },
+      episodeId: audio.id,
     };
     useStore.getState().set({ player: handle });
     return () => { if (useStore.getState().player === handle) useStore.getState().set({ player: null }); };
@@ -66,14 +102,17 @@ export function AudioEngine() {
         track(audio, el.currentTime, el.duration);
       }}
       onTimeUpdate={(e) => track(audio, e.currentTarget.currentTime)}
-      onPlay={() => useStore.getState().set({ playing: true })}
+      onPlay={() => { useStore.getState().set({ playing: true }); if (ref.current && ref.current.readyState < 3) waiting(true); }}
+      onWaiting={() => waiting(true)}
+      onPlaying={() => waiting(false)}
       onPause={(e) => {
+        waiting(false);
         useStore.getState().set({ playing: false });
         void api.setProgress(audio.id, e.currentTarget.currentTime);
         if (saved && src !== audioSrc(audio)) setSrc(audioSrc(audio));
       }}
       onEnded={(e) => { void api.setProgress(audio.id, e.currentTarget.duration || e.currentTarget.currentTime); playNext(); }}
-      onError={() => useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效"))}
+      onError={() => { waiting(false); useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效")); }}
     />
   );
 }
@@ -106,8 +145,21 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     // HLS where the WebView plays it (macOS); elsewhere HLS through the app's loopback proxy (hls.js), for HD.
     const nativeHls = document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
     try { setNative(await api.youtubeStream(ep.videoId!, nativeHls ? "native-hls" : "proxy-hls")); setError(null); }
-    catch (e) { if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(String((e as any)?.message ?? e)) })); }
+    catch (e) {
+      const msg = typeof e === "string" ? e : String((e as any)?.message ?? e);
+      // YouTube wants a signed-in browser: ask once, here, instead of failing or silently falling back to audio.
+      if (isBotCheck(msg)) { setBotCheck(why); return; }
+      if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(msg) }));
+    }
     finally { setFallingBack(null); void off.then((f) => f()); }
+  };
+  const [botCheck, setBotCheck] = useState<string | null>(null);
+  const [browser, setBrowser] = useState(useStore.getState().settings.ytCookiesBrowser || "chrome");
+  const retryWithBrowser = async () => {
+    const why = botCheck ?? "";
+    setBotCheck(null);
+    await useStore.getState().saveSettings({ ytCookiesBrowser: browser });
+    void fallback(why);
   };
   useEffect(() => { setNative(null); setError(null); }, [ep.id]);
   // Have yt-dlp ready before it is needed: a first fallback would otherwise start with a 35 MB download.
@@ -136,6 +188,19 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     <div className={`video ${theater ? "theater" : ""} ${theater && idle ? "idle" : ""}`} ref={box}>
       {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={native.kind === "hls" ? () => void api.youtubeStream(ep.videoId!, "mp4").then(setNative).catch((e) => setError(tr(String(e?.message ?? e)))) : undefined} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
       {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
+      {botCheck && (
+        <div className="video-error bot-check">
+          <p>{t("YouTube 要求验证「不是机器人」才能播放这个视频。")}</p>
+          <p className="small">{t("选一个已经登录 YouTube 的浏览器，SubCast 借用它的登录再试一次（只在本机读取，不保存）。")}</p>
+          <div className="row-actions">
+            <select value={browser} onChange={(e) => setBrowser(e.target.value)} aria-label={t("浏览器")}>
+              {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{b[0].toUpperCase() + b.slice(1)}</option>)}
+            </select>
+            <button className="btn primary sm" onClick={() => void retryWithBrowser()}>{t("借用登录再试")}</button>
+            {openBtn}
+          </div>
+        </div>
+      )}
       {error && <div className="video-error">{error} {openBtn}</div>}
       {overlay}
       {theater && (
@@ -194,9 +259,10 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             useStore.getState().set({
               length: player.getDuration?.() || ep.duration || 0,
               player: {
+                episodeId: ep.id,
                 seek: (t: number) => { player.seekTo(t, true); player.playVideo(); },
-                toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo()),
-                play: () => player.playVideo(),
+                toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : (waiting(true), player.playVideo())),
+                play: () => { waiting(true); player.playVideo(); },
                 setRate: (r: number) => player.setPlaybackRate(r),
                 toggleMute: () => { if (player.isMuted?.()) { player.unMute(); return false; } player.mute(); return true; },
               },
@@ -208,6 +274,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
           },
           onStateChange: (e: any) => {
             setState(e.data);
+            // 3 = buffering; -1/5 after a play request = still starting. 1 = playing.
+            if (e.data === 3) waiting(true); else if (e.data === 1 || e.data === 2 || e.data === 0) waiting(false);
             useStore.getState().set({ playing: e.data === 1 });
             if (e.data === 1) hideYouTubeCaptions(player);
             if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
@@ -268,6 +336,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
       toggleMute: () => { el.muted = !el.muted; return el.muted; },
+      episodeId: ep.id,
     };
     useStore.getState().set({ player: handle });
     return () => {
@@ -283,8 +352,10 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
       <video ref={ref} className="video-native" playsInline preload="auto"
         onLoadedMetadata={(e) => { const el = e.currentTarget; el.playbackRate = rate; if (ep.progress > 5 && ep.progress < el.duration - 10) el.currentTime = ep.progress; track(ep, el.currentTime, el.duration); }}
         onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
-        onPlay={() => { setStarted(true); useStore.getState().set({ playing: true }); }}
-        onPause={(e) => { useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }}
+        onPlay={(e) => { setStarted(true); useStore.getState().set({ playing: true }); if (e.currentTarget.readyState < 3) waiting(true); }}
+        onWaiting={() => waiting(true)}
+        onPlaying={() => waiting(false)}
+        onPause={(e) => { waiting(false); useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }}
         onEnded={(e) => { void api.setProgress(ep.id, e.currentTarget.duration); playNext(); }} />
       <div className="video-shield" onClick={() => useStore.getState().player?.toggle()} onDoubleClick={onFullscreen} />
       <PlayHint ep={ep} show={!started} onClick={() => useStore.getState().player?.toggle()} />
@@ -293,17 +364,18 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
 }
 
 export function Controls({ compact = false }: { compact?: boolean }) {
-  const { time, length, playing, player, settings } = useStore(useShallow((s) => ({ time: s.time, length: s.length, playing: s.playing, player: s.player, settings: s.settings })));
+  const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: s.time, length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
   const [drag, setDrag] = useState<number | null>(null);
+
   const shown = drag ?? time;
   const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
-      <button className="icon-btn" title={t("后退 15 秒（←）")} onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
-      <button className="play-btn" title={playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player}>
-        {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+      <button className="icon-btn" title={t("后退 {n} 秒（←）", { n: settings.skipBack ?? 15 })} onClick={() => player?.seek(Math.max(0, time - (settings.skipBack ?? 15)))} disabled={!player}><RotateCcw size={18} /></button>
+      <button className={`play-btn ${loadingSince ? "loading" : ""}`} title={loadingSince ? t("正在加载…") : playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loadingSince}>
+        {loadingSince ? <Loader2 size={20} className="spin" /> : playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
-      <button className="icon-btn" title={t("前进 30 秒（→）")} onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
+      <button className="icon-btn" title={t("前进 {n} 秒（→）", { n: settings.skipForward ?? 30 })} onClick={() => player?.seek(time + (settings.skipForward ?? 30))} disabled={!player}><RotateCw size={18} /></button>
       <span className="time">{clock(shown)}</span>
       <input
         className="seek"

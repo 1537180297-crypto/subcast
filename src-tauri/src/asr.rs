@@ -150,6 +150,47 @@ fn model_roots() -> Vec<(PathBuf, usize)> {
 
 /// Links usable model files found elsewhere on this computer into our models folder (nothing is copied or
 /// downloaded; deleting the link here never touches the original). Runs at most once a minute.
+static OTHER_FORMATS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+static SEEN_ELSEWHERE: std::sync::Mutex<Vec<Elsewhere>> = std::sync::Mutex::new(Vec::new());
+
+/// A Qwen3-ASR copy another app has, in a format SubCast can't run.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Elsewhere { pub app: String, pub format: String }
+
+/// Which app a folder belongs to, from its path.
+fn app_of(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    if s.contains("huggingface") { return "Hugging Face 缓存".into(); }
+    for marker in ["Application Support/", "Containers/", "Group Containers/"] {
+        if let Some(i) = s.find(marker) { if let Some(n) = s[i + marker.len()..].split('/').next() { return n.to_string(); } }
+    }
+    p.parent().and_then(|x| x.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+}
+
+fn describe_other(dirs: Vec<PathBuf>) -> Vec<Elsewhere> {
+    let mut out: Vec<Elsewhere> = Vec::new();
+    for d in dirs {
+        let files: Vec<String> = walkdir_names(&d, 3);
+        if !files.iter().any(|f| f.ends_with(".safetensors")) { continue; }
+        let mlx = d.to_string_lossy().to_lowercase().contains("mlx") || files.iter().any(|f| f.contains("mlx"));
+        let e = Elsewhere { app: app_of(&d), format: if mlx { "MLX".into() } else { "safetensors".into() } };
+        if !out.contains(&e) { out.push(e); }
+    }
+    out
+}
+
+fn walkdir_names(d: &Path, depth: usize) -> Vec<String> {
+    let mut v = Vec::new();
+    for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() && depth > 0 { v.extend(walkdir_names(&p, depth - 1)); } else { v.push(e.file_name().to_string_lossy().to_lowercase()); }
+    }
+    v
+}
+
+/// Qwen3-ASR copies found in other apps that SubCast can't use (format), from the last scan.
+pub fn elsewhere() -> Vec<Elsewhere> { SEEN_ELSEWHERE.lock().unwrap().clone() }
+
 /// Looks again on the next list (Settings › 重新查找).
 pub fn rescan() { *SCANNED.lock().unwrap() = None; }
 static SCANNED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
@@ -177,7 +218,10 @@ fn adopt_found(data: &Path) {
             if ft.is_symlink() && !path.to_string_lossy().contains("huggingface") { continue; }
             if path.starts_with(own) { continue; }
             let name = e.file_name().to_string_lossy().to_string();
-            if (ft.is_file() || ft.is_symlink()) && engine_of(&name).is_some() { out.push(path); }
+            if (ft.is_file() || ft.is_symlink()) && engine_of(&name).is_some() { out.push(path.clone()); }
+            // Qwen3-ASR in formats CrispASR can't read (Hugging Face / MLX safetensors folders), noted for the
+            // settings page so the listener knows why it isn't used.
+            if ft.is_dir() && name.to_lowercase().replace(['_', '-'], "").contains("qwen3asr") { OTHER_FORMATS.lock().unwrap().push(path.clone()); }
             else if ft.is_dir() && depth > 0 && !name.starts_with('.') || (ft.is_dir() && depth > 0 && (name == ".cache" || name.starts_with("models--"))) {
                 if matches!(name.as_str(), "node_modules" | "Caches" | "Logs" | "CrashReporter" | "Photos" | "MobileSync") { continue; }
                 walk(&path, depth - 1, own, out, budget);
@@ -186,6 +230,7 @@ fn adopt_found(data: &Path) {
     }
     let mut budget = 60_000;
     for (root, depth) in model_roots() { walk(&root, depth, &own, &mut found, &mut budget); }
+    *SEEN_ELSEWHERE.lock().unwrap() = describe_other(std::mem::take(&mut *OTHER_FORMATS.lock().unwrap()));
     for src in found {
         let Some(name) = src.file_name().map(|n| n.to_string_lossy().to_string()) else { continue };
         let Some(engine) = engine_of(&name) else { continue };
@@ -194,7 +239,10 @@ fn adopt_found(data: &Path) {
         if dest.exists() || !looks_like_model(&real, engine) { continue; }
         // llama.cpp-style Qwen3-ASR comes as two files (the audio encoder in an mmproj file); CrispASR needs the
         // single-file GGUF, so those (Cap's, for one) can't be used.
-        if engine == "qwen3" && real.parent().and_then(|d| std::fs::read_dir(d).ok()).is_some_and(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().to_lowercase().starts_with("mmproj"))) { continue; }
+        if engine == "qwen3" && real.parent().and_then(|d| std::fs::read_dir(d).ok()).is_some_and(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().to_lowercase().starts_with("mmproj"))) {
+            if let Some(d) = real.parent() { SEEN_ELSEWHERE.lock().unwrap().push(Elsewhere { app: app_of(d), format: "GGUF（llama.cpp 分体）".into() }); }
+            continue;
+        }
         #[cfg(unix)]
         let _ = std::os::unix::fs::symlink(&real, &dest);
         #[cfg(windows)]
@@ -387,21 +435,36 @@ where F: Fn(PathBuf) -> Fut, Fut: std::future::Future<Output = Result<T>> {
 /// 通用; empty = never). Read from the browser each time, never stored by SubCast.
 pub static YT_BROWSER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
-fn bot_check(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("confirm you") && m.contains("bot") || m.contains("sign in to confirm") }
+/// A yt-dlp command with what YouTube needs today: a JavaScript runtime for its signature challenges (deno, node
+/// or bun, whichever this computer has; an app opened from the Dock doesn't see the terminal's PATH, so the usual
+/// install folders are added) and the app's proxy.
+pub fn ytdlp_command(ytdlp: &Path) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(ytdlp);
+    cmd.env("PATH", crate::agents::child_path());
+    // Older copies (a system-wide yt-dlp used as a fallback) don't know the option and would refuse to run.
+    if knows_js_runtimes(ytdlp) { cmd.args(["--js-runtimes", "deno", "--js-runtimes", "node", "--js-runtimes", "bun"]); }
+    let proxy = net::effective_proxy();
+    if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
+    // A dead connection fails in seconds instead of hanging the player on "正在获取视频地址".
+    cmd.args(["--socket-timeout", "20"]);
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+    cmd.kill_on_drop(true);
+    cmd
+}
 
-/// Downloads a video's audio. When YouTube answers with its bot check, tries other YouTube clients, then (if the
-/// listener allowed it) their browser's sign-in.
-pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>) -> Result<PathBuf> {
-    match youtube_audio_with(ytdlp, video_id, dir, cancel.clone(), &[]).await {
+/// Runs a yt-dlp job and, when YouTube answers with its "confirm you're not a bot" check, tries other YouTube
+/// clients, then the listener's browser sign-in if they allowed one (Settings › 通用).
+pub async fn with_bot_fallback<T, F, Fut>(job: F) -> Result<T>
+where F: Fn(Vec<String>) -> Fut, Fut: std::future::Future<Output = Result<T>> {
+    match job(vec![]).await {
         Err(e) if bot_check(&e.to_string()) => {
-            let alt = ["--extractor-args", "youtube:player_client=tv,web_safari,mweb"];
-            match youtube_audio_with(ytdlp, video_id, dir, cancel.clone(), &alt).await {
+            let alt = vec!["--extractor-args".to_string(), "youtube:player_client=tv,web_safari,mweb".to_string()];
+            match job(alt).await {
                 Err(e2) if bot_check(&e2.to_string()) => {
                     let browser = YT_BROWSER.read().unwrap().clone();
-                    if browser.is_empty() {
-                        return Err(anyhow!("YouTube 要求验证「不是机器人」才能下载这个视频的音频。可以在 设置 › 通用 里选择一个已登录 YouTube 的浏览器，SubCast 会借用它的登录再试；也可以直接看视频版"));
-                    }
-                    youtube_audio_with(ytdlp, video_id, dir, cancel, &["--cookies-from-browser", &browser]).await
+                    if browser.is_empty() { return Err(anyhow!("YouTube 要求验证「不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 借用它的登录再试")); }
+                    job(vec!["--cookies-from-browser".into(), browser.clone()]).await
                         .map_err(|e3| if bot_check(&e3.to_string()) { anyhow!("YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试") } else { e3 })
                 }
                 other => other,
@@ -411,17 +474,32 @@ pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc
     }
 }
 
+fn knows_js_runtimes(ytdlp: &Path) -> bool {
+    static SEEN: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<PathBuf, bool>>> = once_cell::sync::Lazy::new(Default::default);
+    if let Some(v) = SEEN.lock().unwrap().get(ytdlp) { return *v; }
+    let mut c = std::process::Command::new(ytdlp);
+    c.arg("--help");
+    #[cfg(windows)]
+    { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
+    let ok = c.output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--js-runtimes")).unwrap_or(false);
+    SEEN.lock().unwrap().insert(ytdlp.to_path_buf(), ok);
+    ok
+}
+
+fn bot_check(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("confirm you") && m.contains("bot") || m.contains("sign in to confirm") }
+
+/// Downloads a video's audio (with the bot-check fallbacks).
+pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>) -> Result<PathBuf> {
+    with_bot_fallback(|extra| { let c = cancel.clone(); async move { let x: Vec<&str> = extra.iter().map(String::as_str).collect(); youtube_audio_with(ytdlp, video_id, dir, c, &x).await } }).await
+}
+
 async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>, extra: &[&str]) -> Result<PathBuf> {
     tokio::fs::create_dir_all(dir).await?;
     let template = dir.join(format!("{video_id}.%(ext)s"));
-    let mut cmd = tokio::process::Command::new(ytdlp);
+    let mut cmd = ytdlp_command(ytdlp);
     // m4a (AAC) decodes without ffmpeg; format 18 (mp4 with AAC audio) is the fallback every video has.
     cmd.args(["-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/18", "--no-playlist", "--no-part"]).args(extra).arg("-o").arg(&template);
-    let proxy = net::proxy();
-    if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
-    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).kill_on_drop(true).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
-    #[cfg(windows)]
-    { cmd.creation_flags(0x08000000); }
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().context("无法启动 yt-dlp")?;
     let stderr = child.stderr.take();
     let tail = tokio::spawn(async move {
@@ -453,13 +531,20 @@ async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Ar
 /// (WebView2, most WebKitGTK) only a progressive MP4 works: YouTube's HLS manifests send no CORS header, so
 /// hls.js can't load them.
 pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str, hls: bool) -> Result<String> {
-    let mut cmd = tokio::process::Command::new(ytdlp);
-    cmd.args(["-j", "--no-playlist", "--no-warnings"]);
-    let proxy = net::proxy();
-    if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
-    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).kill_on_drop(true);
-    #[cfg(windows)]
-    { cmd.creation_flags(0x08000000); }
+    // Addresses stay valid for hours: reopening a video doesn't ask YouTube again.
+    let key = format!("{video_id}|{hls}");
+    if let Some((url, at)) = STREAMS.lock().unwrap().get(&key).cloned() { if at.elapsed().as_secs() < 4 * 3600 { return Ok(url); } }
+    let url = with_bot_fallback(|extra| async move { stream_once(ytdlp, video_id, hls, &extra).await }).await?;
+    STREAMS.lock().unwrap().insert(key, (url.clone(), std::time::Instant::now()));
+    Ok(url)
+}
+
+static STREAMS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant)>>> = once_cell::sync::Lazy::new(Default::default);
+
+async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) -> Result<String> {
+    let mut cmd = ytdlp_command(ytdlp);
+    cmd.args(["-j", "--no-playlist", "--no-warnings"]).args(extra);
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}"));
     let out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await.map_err(|_| anyhow!("获取视频地址超时"))?.context("无法启动 yt-dlp")?;
     let info: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
         anyhow!("无法获取视频地址：{}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("").chars().take(200).collect::<String>())
@@ -838,6 +923,7 @@ mod scan_tests {
         let data = std::env::temp_dir().join(format!("subcast-scan-real-{}", uuid::Uuid::new_v4()));
         let t0 = std::time::Instant::now();
         for m in list_models(&data) { println!("{} installed={} {} from={:?}", m.id, m.installed, m.size_mb, m.from); }
+        println!("elsewhere: {:?}", elsewhere());
         println!("scan took {:?}", t0.elapsed());
         let _ = std::fs::remove_dir_all(&data);
     }

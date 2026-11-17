@@ -71,7 +71,7 @@ fn search_dirs() -> Vec<PathBuf> {
 }
 
 /// PATH for the agents themselves (they start node, git and the like).
-fn child_path() -> std::ffi::OsString { std::env::join_paths(search_dirs()).unwrap_or_default() }
+pub fn child_path() -> std::ffi::OsString { std::env::join_paths(search_dirs()).unwrap_or_default() }
 
 fn find(kind: Kind) -> Option<PathBuf> {
     let names: Vec<String> = if cfg!(windows) { ["exe", "cmd", "bat"].iter().map(|e| format!("{}.{e}", kind.exe())).collect() } else { vec![kind.exe().to_string()] };
@@ -95,7 +95,7 @@ fn command(path: &Path) -> Command {
     #[cfg(windows)]
     { c.creation_flags(0x08000000); }
     // CLIs only honour HTTPS_PROXY; apps opened from the Dock don't inherit it from the shell.
-    let proxy = crate::net::proxy();
+    let proxy = crate::net::effective_proxy();
     if !proxy.is_empty() { c.env("HTTPS_PROXY", &proxy).env("HTTP_PROXY", &proxy); }
     c
 }

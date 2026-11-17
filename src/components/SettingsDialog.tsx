@@ -19,6 +19,7 @@ import { useModelDownload } from "./TranscriptPanel";
 import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC } from "../lib/i18n";
 import { ModelSettings } from "./ModelSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
+import { ReadingSettings } from "./ReadingSettings";
 import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } from "../lib/updater";
 
 const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
@@ -106,7 +107,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
 
 export function SettingsDialog() {
   const { settings, saveSettings, set, notify, settingsSection } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection })));
-  type Section = "overview" | "model" | "asr" | "tts" | "shortcuts" | "general" | "storage" | "about";
+  type Section = "overview" | "model" | "asr" | "reading" | "tts" | "shortcuts" | "general" | "storage" | "about";
   const [section, setSection] = useState<Section>((settingsSection as Section) ?? "overview");
   const [chatOk, setChatOk] = useState<boolean | null>(null);
   const [trOk, setTrOk] = useState<boolean | null>(null);
@@ -114,11 +115,12 @@ export function SettingsDialog() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
   const proxyHint = t("留空使用系统代理，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"); // i18n-ignore: scripts/i18n.mjs reads the URL's "//" as a comment; the key is still extracted
-  const refresh = () => api.asrModels().then(setModels);
+  const [elsewhere, setElsewhere] = useState<{ app: string; format: string }[]>([]);
+  const refresh = () => api.asrModels().then((m) => { setModels(m); void api.asrElsewhere().then(setElsewhere).catch(() => {}); });
   const { downloading, start, cancel } = useModelDownload(refresh);
   useEffect(() => { void refresh(); }, []);
   const updateWaiting = useUpdate(hasUpdate);
-  const NAV: [Section, string][] = [["overview", tk("概览")], ["model", tk("AI 模型")], ["asr", tk("语音识别")], ["tts", tk("朗读")], ["shortcuts", tk("快捷键")], ["general", tk("通用")], ["storage", tk("存储")], ["about", tk("关于")]];
+  const NAV: [Section, string][] = [["overview", tk("概览")], ["model", tk("AI 模型")], ["asr", tk("语音识别")], ["reading", tk("阅读与字幕")], ["tts", tk("朗读")], ["shortcuts", tk("快捷键")], ["general", tk("通用")], ["storage", tk("存储")], ["about", tk("关于")]];
 
   return (
     <Modal title={t("设置")} onClose={() => { stopSpeaking(); set({ settingsOpen: false }); }} wide>
@@ -164,6 +166,7 @@ export function SettingsDialog() {
           )}
           {section === "model" && <ModelSettings ProviderEditor={ProviderEditor} />}
           {section === "shortcuts" && <ShortcutSettings />}
+          {section === "reading" && <ReadingSettings />}
           {section === "asr" && (
             <>
               <div className="engine-switch">
@@ -196,6 +199,9 @@ export function SettingsDialog() {
                   </div>
                 ))}
               </div>
+              {elsewhere.length > 0 && !models.find((m) => m.id === "qwen3-asr")?.installed && (
+                <p className="model-elsewhere small">{t("在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。", { where: [...new Set(elsewhere.map((e) => tr(e.app)))].join("、"), format: [...new Set(elsewhere.map((e) => tr(e.format)))].join(" / ") })}</p>
+              )}
               {models.some((m) => m.id.startsWith("file:")) && (
                 <>
                   <p className="model-found-h">{t("这台电脑上其他软件下载过的模型")}<span className="muted small">{t("直接使用，不用再下载")}</span></p>

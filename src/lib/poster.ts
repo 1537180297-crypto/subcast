@@ -31,7 +31,7 @@ export const POSTER_THEMES: PosterTheme[] = [
 ];
 
 const loaded = new Map<string, Promise<void>>();
-function loadCss(href: string): Promise<void> {
+export function loadCss(href: string): Promise<void> {
   let p = loaded.get(href);
   if (!p) {
     p = new Promise((res, rej) => {

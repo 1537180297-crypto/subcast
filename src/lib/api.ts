@@ -3,6 +3,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 
 /** A match inside one show: which part of the episode matched, a few words around it, and for subtitles the time. */
+/** One day-hour of listening to one episode (from the player; seeks don't count). */
+export interface ListenRow { day: string; hour: number; episodeId: string; showId: string; seconds: number; translated: boolean; showTitle: string; kind: string; cover: string; episodeTitle: string; video: boolean }
+
 export interface ShowHit { episode: Episode; field: "title" | "notes" | "transcript"; snippet: string; time?: number | null }
 
 export interface Show {
@@ -70,6 +73,9 @@ export const api = {
   transcribe: (episodeId: string, model: string, language: string, cloud?: CloudAsr) => invoke<Transcript>("transcribe", { episodeId, model, language, cloud: cloud ?? null }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   asrModels: () => invoke<ModelInfo[]>("asr_models"),
+  logListen: (episodeId: string, showId: string, seconds: number, translated: boolean) => invoke<void>("log_listen", { episodeId, showId, seconds, translated }),
+  listeningStats: (since: string) => invoke<ListenRow[]>("listening_stats", { since }),
+  asrElsewhere: () => invoke<{ app: string; format: string }[]>("asr_elsewhere"),
   rescanModels: () => invoke<void>("rescan_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),
   deleteModel: (id: string) => invoke<void>("delete_model", { id }),
@@ -149,4 +155,6 @@ export async function llmChat(opts: {
 
 /** The error as it came, for matching on its wording; show it with errorText (or tr). */
 export const rawErrorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+/** YouTube's "confirm you're not a bot" check, as the backend words it (asr.rs with_bot_fallback). */
+export const isBotCheck = (m: string) => m.includes("YouTube 要求验证「不是机器人」。选一个"); // i18n-ignore (matches the backend's text)
 export const errorText = (e: unknown) => tr(rawErrorText(e));

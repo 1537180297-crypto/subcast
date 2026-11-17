@@ -42,6 +42,50 @@ pub fn proxy() -> String {
     CLIENT.read().unwrap().0.clone()
 }
 
+/// The proxy for programs SubCast starts (yt-dlp, local AI agents): the one set in SubCast, else the system's.
+/// Our own requests follow the system proxy by themselves, but yt-dlp and the agents only read HTTPS_PROXY or
+/// --proxy, so behind Clash and the like (without TUN mode) they went straight to YouTube and hung.
+pub fn effective_proxy() -> String {
+    let own = proxy();
+    if !own.is_empty() { return own; }
+    static CACHE: Lazy<RwLock<(Option<std::time::Instant>, String)>> = Lazy::new(|| RwLock::new((None, String::new())));
+    if let Some(at) = CACHE.read().unwrap().0 { if at.elapsed().as_secs() < 30 { return CACHE.read().unwrap().1.clone(); } }
+    let found = system_proxy().unwrap_or_default();
+    *CACHE.write().unwrap() = (Some(std::time::Instant::now()), found.clone());
+    found
+}
+
+fn system_proxy() -> Option<String> {
+    for k in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"] {
+        if let Ok(v) = std::env::var(k) { if !v.trim().is_empty() { return Some(v.trim().to_string()); } }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("/usr/sbin/scutil").arg("--proxy").output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let get = |k: &str| text.lines().find_map(|l| { let (a, b) = l.split_once(" : ")?; (a.trim() == k).then(|| b.trim().to_string()) });
+        if get("HTTPSEnable").as_deref() == Some("1") { if let (Some(h), Some(p)) = (get("HTTPSProxy"), get("HTTPSPort")) { return Some(format!("http://{h}:{p}")); } }
+        if get("HTTPEnable").as_deref() == Some("1") { if let (Some(h), Some(p)) = (get("HTTPProxy"), get("HTTPPort")) { return Some(format!("http://{h}:{p}")); } }
+        if get("SOCKSEnable").as_deref() == Some("1") { if let (Some(h), Some(p)) = (get("SOCKSProxy"), get("SOCKSPort")) { return Some(format!("socks5://{h}:{p}")); } }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let q = |v: &str| std::process::Command::new("reg").args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", v])
+            .creation_flags(0x08000000).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+        let on = q("ProxyEnable")?.contains("0x1");
+        if on {
+            let server = q("ProxyServer")?;
+            let v = server.lines().find(|l| l.contains("ProxyServer"))?.split_whitespace().last()?.to_string();
+            // "host:port" or "http=host:port;https=host:port"
+            let pick = v.split(';').find(|p| p.starts_with("https=")).or_else(|| v.split(';').find(|p| p.starts_with("http="))).unwrap_or(&v);
+            let hp = pick.split('=').last()?;
+            return Some(if hp.contains("://") { hp.to_string() } else { format!("http://{hp}") });
+        }
+    }
+    None
+}
+
 pub fn client() -> reqwest::Client {
     CLIENT.read().unwrap().1.clone()
 }
@@ -98,6 +142,9 @@ fn refused(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("refused"
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore]
+    fn reads_the_system_proxy() { println!("effective proxy: {:?}", super::effective_proxy()); }
     /// Run with HTTPS_PROXY=http://127.0.0.1:9 (nothing listening): the request still gets through directly.
     #[tokio::test]
     #[ignore]
