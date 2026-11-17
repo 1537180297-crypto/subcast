@@ -17,6 +17,14 @@ export interface Settings {
   translateQuality: "fast" | "best";
   /** Give recognition and translation the episode's title and show notes (names and terms come out right). */
   useShowNotes: boolean;
+  /** The listener picked the models themselves: local agents are never switched in automatically after that. */
+  modelChosen?: boolean;
+  /** When YouTube asks to confirm "not a bot", download with this browser's YouTube sign-in ("" = never). */
+  ytCookiesBrowser?: string;
+  /** Shortcuts the listener changed (Settings › 快捷键); the rest use the defaults in lib/shortcuts.ts. */
+  shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;
+  /** The local agent SubCast switched in on its own (shown as such in settings). */
+  autoPicked?: string;
   subtitleMode: "bilingual" | "original" | "translation";
   playbackRate: number;
   /** "local", or the id of a cloud transcription service. */
@@ -109,6 +117,8 @@ export const GROUPS: { id: NonNullable<G>; name: string; note: string }[] = [
 /** Cloud transcription services, ported from Capwise. */
 export const ASR_SERVICES: CloudAsr[] = [
   { id: "doubao", name: tk("豆包语音（极速版）"), note: tk("中文最准，5 分钟一段，速度快"), protocol: "doubao", baseUrl: "https://openspeech.bytedance.com/api/v3", model: "bigmodel", models: ["bigmodel"], keyUrl: "https://console.volcengine.com/speech/new/experience/asr", needsKey: true, chunkSecs: 300 },
+  // DeepSeek's ASR takes ≤120 s per request and returns text only; 60 s pieces keep the timing close.
+  { id: "deepseek", name: "DeepSeek", note: tk("和问答共用同一个 DeepSeek Key"), protocol: "deepseek", baseUrl: "https://api.deepseek.com", model: "asr", models: ["asr"], keyUrl: "https://platform.deepseek.com/api_keys", needsKey: true, chunkSecs: 60 },
   { id: "siliconflow", name: tk("硅基流动"), note: tk("Qwen3-ASR、SenseVoice 等，便宜"), protocol: "openai", baseUrl: "https://api.siliconflow.cn/v1", model: "Qwen/Qwen3-ASR-1.7B", models: ["Qwen/Qwen3-ASR-1.7B", "FunAudioLLM/SenseVoiceSmall", "XingChenAGI/XingChenASR-V3.2"], keyUrl: "https://cloud.siliconflow.cn/account/ak", needsKey: true, chunkSecs: 20 },
   { id: "groq", name: "Groq", note: tk("Whisper large-v3，极快"), protocol: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "whisper-large-v3-turbo", models: ["whisper-large-v3-turbo", "whisper-large-v3"], keyUrl: "https://console.groq.com/keys", needsKey: true, chunkSecs: 600 },
   { id: "openai", name: "OpenAI", note: "Whisper / gpt-4o-transcribe", protocol: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini-transcribe", models: ["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"], keyUrl: "https://platform.openai.com/api-keys", needsKey: true, chunkSecs: 600 },

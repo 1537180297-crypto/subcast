@@ -60,6 +60,8 @@ export interface Batch { ids: number[] }
 export function batchShape(provider?: Provider | null): { lines: number; chars: number; before: number; after: number } {
   if (!provider) return { lines: 24, chars: 2600, before: 3, after: 2 };
   if (provider.group === "local") return { lines: 10, chars: 1000, before: 2, after: 1 };
+  // Local agents (Claude Code and the like) take seconds per request: fewer, larger batches.
+  if (provider.protocol === "cli") return { lines: 40, chars: 4000, before: 4, after: 2 };
   if (/deepseek/i.test(provider.id + provider.baseUrl) || provider.protocol === "anthropic") return { lines: 30, chars: 3000, before: 4, after: 2 };
   return { lines: 24, chars: 2600, before: 3, after: 2 };
 }

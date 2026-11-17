@@ -17,6 +17,8 @@ export interface PlayerHandle {
   toggle(): void;
   play(): void;
   setRate(rate: number): void;
+  /** Mutes or unmutes; returns whether it is muted now. */
+  toggleMute?(): boolean;
 }
 
 interface State {
@@ -34,9 +36,13 @@ interface State {
   length: number;
   playing: boolean;
   player: PlayerHandle | null;
+  /** The video fills the window (and the window the screen), subtitles on it. */
+  theater?: boolean;
+  /** Which tab the add dialog opens on. */
+  addTab?: "search" | "link" | "import";
   toast: string | null;
   settingsOpen: boolean;
-  settingsSection?: "model" | "asr" | "tts" | "general" | "storage" | "about";
+  settingsSection?: "model" | "asr" | "tts" | "shortcuts" | "general" | "storage" | "about";
   addOpen: boolean;
   init(): Promise<void>;
   go(view: View): void;

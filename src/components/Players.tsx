@@ -2,7 +2,8 @@ import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
+import { ExternalLink, Minimize2, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
@@ -42,6 +43,7 @@ export function AudioEngine() {
       toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
+      toggleMute: () => { el.muted = !el.muted; return el.muted; },
     };
     useStore.getState().set({ player: handle });
     return () => { if (useStore.getState().player === handle) useStore.getState().set({ player: null }); };
@@ -115,15 +117,46 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
   };
   const openBtn = <button className="link-btn video-open" onClick={watchOnYouTube}><ExternalLink size={13} /> {t("在 YouTube 打开")}</button>;
-  const fullscreen = () => { const el = box.current; if (!el) return; document.fullscreenElement ? void document.exitFullscreen() : void el.requestFullscreen?.().catch(() => {}); };
+  const fullscreen = () => toggleTheater();
+  const theater = useStore((s) => s.theater);
+  // Leaving the episode leaves full screen too.
+  useEffect(() => () => { if (useStore.getState().theater) toggleTheater(false); }, []);
+  // In full screen the controls show while the mouse moves and fade after 2.5 s of stillness.
+  const [idle, setIdle] = useState(false);
+  useEffect(() => {
+    if (!theater) return;
+    let timer = window.setTimeout(() => setIdle(true), 2500);
+    const wake = () => { setIdle(false); window.clearTimeout(timer); timer = window.setTimeout(() => setIdle(true), 2500); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); toggleTheater(false); } };
+    window.addEventListener("mousemove", wake);
+    window.addEventListener("keydown", esc);
+    return () => { window.clearTimeout(timer); window.removeEventListener("mousemove", wake); window.removeEventListener("keydown", esc); };
+  }, [theater]);
   return (
-    <div className="video" ref={box}>
+    <div className={`video ${theater ? "theater" : ""} ${theater && idle ? "idle" : ""}`} ref={box}>
       {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={native.kind === "hls" ? () => void api.youtubeStream(ep.videoId!, "mp4").then(setNative).catch((e) => setError(tr(String(e?.message ?? e)))) : undefined} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
       {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
       {error && <div className="video-error">{error} {openBtn}</div>}
       {overlay}
+      {theater && (
+        <div className="theater-bar" onClick={(e) => e.stopPropagation()}>
+          <p className="theater-title clamp1">{ep.title}</p>
+          <Controls compact />
+          <button className="icon-btn theater-exit" title={t("退出全屏（Esc）")} aria-label={t("退出全屏")} onClick={() => toggleTheater(false)}><Minimize2 size={16} /></button>
+        </div>
+      )}
     </div>
   );
+}
+
+/** Full screen for the video: the window goes full screen and the video fills it, with its subtitles. A layout
+ *  mode rather than the element Fullscreen API, which the macOS WebView doesn't enable. */
+export function toggleTheater(on?: boolean) {
+  const s = useStore.getState();
+  const next = on ?? !s.theater;
+  if (next && !document.querySelector(".video")) return false;
+  s.set({ theater: next });
+  void getCurrentWindow().setFullscreen(next).catch(() => {});
 }
 
 function PlayHint({ ep, show, onClick }: { ep: Episode; show: boolean; onClick: () => void }) {
@@ -165,6 +198,7 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
                 toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo()),
                 play: () => player.playVideo(),
                 setRate: (r: number) => player.setPlaybackRate(r),
+                toggleMute: () => { if (player.isMuted?.()) { player.unMute(); return false; } player.mute(); return true; },
               },
             });
             timer = window.setInterval(() => {
@@ -233,6 +267,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
       toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
+      toggleMute: () => { el.muted = !el.muted; return el.muted; },
     };
     useStore.getState().set({ player: handle });
     return () => {
@@ -294,6 +329,16 @@ export function cycleMode() {
   const { settings, saveSettings } = useStore.getState();
   const order = ["bilingual", "translation", "original"] as const;
   void saveSettings({ subtitleMode: order[(order.indexOf(settings.subtitleMode) + 1) % 3] });
+}
+
+/** Steps the speed up or down one notch (for shortcuts). */
+export function stepRate(dir: 1 | -1) {
+  const { settings, saveSettings, player, notify } = useStore.getState();
+  const i = RATES.indexOf(settings.playbackRate);
+  const r = RATES[Math.min(RATES.length - 1, Math.max(0, (i < 0 ? RATES.indexOf(1) : i) + dir))];
+  player?.setRate(r);
+  void saveSettings({ playbackRate: r });
+  notify(`${r}×`);
 }
 
 export function cycleRate() {

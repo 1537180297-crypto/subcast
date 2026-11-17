@@ -6,6 +6,7 @@ import { SIDEBAR, useLayout } from "./lib/layout";
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
+import { detectAgents } from "./lib/agents";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
@@ -15,7 +16,9 @@ import { loadFavorites } from "./lib/library";
 import { startUpdateChecks } from "./lib/updater";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { EpisodeView } from "./components/EpisodeView";
-import { AudioEngine, cycleMode, cycleRate } from "./components/Players";
+import { VideoDock } from "./components/VideoDock";
+import { AudioEngine, cycleMode, stepRate, toggleTheater } from "./components/Players";
+import { actionFor, comboOf, isPlain, type ActionId } from "./lib/shortcuts";
 import { useJobs } from "./lib/jobs";
 import { activeIndex } from "./components/TranscriptPanel";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -30,38 +33,48 @@ export default function App() {
     void startOffline();
     void loadFavorites();
     startUpdateChecks();
-    void init();
+    // Local AI agents (Claude Code and the like): found once settings are loaded, put to work if nothing else is set up.
+    void init().then(() => detectAgents());
     // Rendered: tells the app a hot-updated interface works (otherwise it falls back on its own; see ota.rs).
     void api.uiReady().then((info) => useStore.setState({ uiBuild: info.build })).catch(() => {});
+    // Shortcuts come from one registry (lib/shortcuts.ts), so Settings › 快捷键 can change them.
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); useStore.getState().openSettings(); return; }
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "l") {
-        const box = document.querySelector<HTMLInputElement>(".top-search input");
-        if (box) { e.preventDefault(); box.focus(); box.select(); }
-        return;
-      }
-      if (t.closest("input, textarea, select, [contenteditable], [role=separator]")) return;
-      if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "\\")) {
-        e.preventDefault();
-        const l = useLayout.getState();
-        if (e.key === "b") l.put({ sideOpen: !l.sideOpen }); else l.put({ panelOpen: !l.panelOpen });
-        return;
-      }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const combo = comboOf(e);
+      if (!combo) return;
+      const { settings } = useStore.getState();
+      const action = actionFor(combo, settings.shortcuts);
+      if (!action) return;
+      const typing = (e.target as HTMLElement).closest?.("input, textarea, select, [contenteditable], [role=separator], .shortcut-recorder");
+      if (typing && isPlain(combo)) return;
+      if (document.querySelector(".shortcut-recorder.recording")) return;
       const { player, time, current } = useStore.getState();
       const segs = current ? useJobs.getState().transcripts[current.id]?.segments : undefined;
-      if (e.code === "Space") { e.preventDefault(); player?.toggle(); }
-      else if (e.code === "ArrowLeft") { e.preventDefault(); player?.seek(Math.max(0, time - (e.shiftKey ? 5 : 15))); }
-      else if (e.code === "ArrowRight") { e.preventDefault(); player?.seek(time + (e.shiftKey ? 5 : 30)); }
-      else if ((e.code === "ArrowUp" || e.code === "ArrowDown") && segs?.length) {
-        e.preventDefault();
+      const lineSeek = (dir: -1 | 1) => {
+        if (!segs?.length) return false;
         const i = activeIndex(segs, time);
-        const j = Math.min(segs.length - 1, Math.max(0, e.code === "ArrowUp" ? (time - (segs[i]?.start ?? 0) > 2 ? i : i - 1) : i + 1));
+        const j = Math.min(segs.length - 1, Math.max(0, dir < 0 ? (time - (segs[i]?.start ?? 0) > 2 ? i : i - 1) : i + 1));
         player?.seek(segs[j].start);
-      }
-      else if (e.code === "KeyC") cycleMode();
-      else if (e.code === "KeyS") cycleRate();
+        return true;
+      };
+      const run: Record<ActionId, () => boolean | void> = {
+        playPause: () => player?.toggle(),
+        back: () => player?.seek(Math.max(0, time - 15)),
+        forward: () => player?.seek(time + 30),
+        backShort: () => player?.seek(Math.max(0, time - 5)),
+        forwardShort: () => player?.seek(time + 5),
+        prevLine: () => lineSeek(-1),
+        nextLine: () => lineSeek(1),
+        speedUp: () => stepRate(1),
+        speedDown: () => stepRate(-1),
+        mute: () => { const m = player?.toggleMute?.(); if (m != null) useStore.getState().notify(m ? t("已静音") : t("已取消静音")); },
+        fullscreen: () => toggleTheater(),
+        subtitleMode: () => cycleMode(),
+        toggleSidebar: () => { const l = useLayout.getState(); l.put({ sideOpen: !l.sideOpen }); },
+        togglePanel: () => { const l = useLayout.getState(); l.put({ panelOpen: !l.panelOpen }); },
+        search: () => { const box = document.querySelector<HTMLInputElement>(".top-search input"); if (!box) return false; box.focus(); box.select(); },
+        settings: () => useStore.getState().openSettings(),
+      };
+      if (run[action]() !== false) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     const scrollTimers = new WeakMap<Element, number>();
@@ -102,6 +115,7 @@ export default function App() {
       </main>
       <MiniPlayer />
       <AudioEngine />
+      <VideoDock />
       {settingsOpen && <SettingsDialog />}
       {addOpen && <AddDialog />}
       <SelectionTools />

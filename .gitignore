@@ -26,3 +26,4 @@ dist-ssr
 # release builds (scripts/release.sh)
 /release/
 src-tauri/windows/vcrt/*.dll
+/subcast-0*/

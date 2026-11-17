@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rescan-models"
+description = "Enables the rescan_models command without any pre-configured scope."
+commands.allow = ["rescan_models"]
+
+[[permission]]
+identifier = "deny-rescan-models"
+description = "Denies the rescan_models command without any pre-configured scope."
+commands.deny = ["rescan_models"]

@@ -51,7 +51,12 @@ async fn recognize_chunk(cfg: &CloudAsr, key: &str, wav: Vec<u8>, offset: f64, l
     let base = cfg.base_url.trim().trim_end_matches('/');
     let mut last = String::new();
     for attempt in 0..3 {
-        let res = if cfg.protocol == "doubao" {
+        let res = if cfg.protocol == "deepseek" {
+            // DeepSeek ASR (https://api-docs.deepseek.com/guides/asr): one WAV of ≤120 s / 8 MiB per request.
+            let part = reqwest::multipart::Part::bytes(wav.clone()).file_name("input.wav").mime_str("audio/wav")?;
+            client().post(format!("{base}/v1/tools/asr")).bearer_auth(key).multipart(reqwest::multipart::Form::new().part("file", part))
+                .timeout(std::time::Duration::from_secs(180)).send().await
+        } else if cfg.protocol == "doubao" {
             let audio = base64::engine::general_purpose::STANDARD.encode(&wav);
             client().post(format!("{base}/auc/bigmodel/recognize/flash"))
                 .header("X-Api-Key", key)
@@ -86,6 +91,12 @@ async fn recognize_chunk(cfg: &CloudAsr, key: &str, wav: Vec<u8>, offset: f64, l
                     if status.as_u16() == 401 || status.as_u16() == 403 { return Err(anyhow!("识别服务拒绝了请求：Key 无效或没有权限（{detail}）")); }
                     if status.is_client_error() && status.as_u16() != 429 { return Err(anyhow!("识别服务出错（{status}）：{detail}")); }
                     last = format!("{status} {detail}");
+                } else if cfg.protocol == "deepseek" {
+                    let v: Value = serde_json::from_str(&body).map_err(|_| anyhow!("DeepSeek 返回了无法解析的结果"))?;
+                    if let Some(err) = v.get("error") { return Err(anyhow!("DeepSeek 识别失败：{}", err["message"].as_str().unwrap_or(&err.to_string()))); }
+                    let text = v["text"].as_str().unwrap_or("").trim().to_string();
+                    // Text only: spread over the piece, sentence by sentence.
+                    return Ok(if text.is_empty() { vec![] } else { crate::transcript::split_timed(&text, offset, offset + len) });
                 } else if cfg.protocol == "doubao" {
                     if code == "20000003" { return Ok(vec![]); }
                     if !code.is_empty() && code != "20000000" {
@@ -120,13 +131,15 @@ async fn recognize_chunk(cfg: &CloudAsr, key: &str, wav: Vec<u8>, offset: f64, l
 
 /// Recognises 16 kHz mono samples in chunks, a few at a time, reporting progress 0–1.
 pub async fn transcribe(cfg: &CloudAsr, samples: Vec<f32>, language: &str, ctx: &crate::asr::AsrContext, cancel: Arc<AtomicBool>, on_progress: impl Fn(f64)) -> Result<Vec<Segment>> {
-    let key = crate::llm::get_key(&format!("asr.{}", cfg.id)).unwrap_or_default();
+    // DeepSeek recognition uses the same key as DeepSeek for Q&A when it has none of its own.
+    let key = crate::llm::get_key(&format!("asr.{}", cfg.id)).filter(|k| !k.is_empty())
+        .or_else(|| (cfg.protocol == "deepseek").then(|| crate::llm::get_key("deepseek")).flatten()).unwrap_or_default();
     if cfg.needs_key.unwrap_or(true) && key.is_empty() { return Err(anyhow!("请先在设置里填写这个识别服务的 API Key")); }
     let chunk = (cfg.chunk_secs.unwrap_or(if cfg.protocol == "doubao" { 300.0 } else { 20.0 }) * RATE as f64) as usize;
     let chunks: Vec<(usize, Vec<f32>)> = samples.chunks(chunk.max(RATE as usize)).enumerate().map(|(i, c)| (i, c.to_vec())).collect();
     let total = chunks.len().max(1);
     let done = std::sync::atomic::AtomicUsize::new(0);
-    let parallel = if cfg.protocol == "doubao" { 2 } else { 4 };
+    let parallel = match cfg.protocol.as_str() { "doubao" => 2, "deepseek" => 4, _ => 4 };
     let results: Vec<Result<Vec<Segment>>> = futures_util::stream::iter(chunks.into_iter().map(|(i, c)| {
         let (key, cfg, cancel, done, on_progress) = (key.clone(), cfg.clone(), cancel.clone(), &done, &on_progress);
         let (language, ctx) = (language.to_string(), ctx.clone());

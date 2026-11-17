@@ -1,9 +1,11 @@
 mod asr;
 mod asr_context;
+mod agents;
 mod cloud;
 mod db;
 mod feeds;
 mod hlsproxy;
+mod import;
 mod llm;
 mod model;
 mod net;
@@ -672,8 +674,8 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         asr_emit(&app, &episode_id, "done", 1.0, None, None);
         return Ok(t);
     }
-    let spec = asr::spec(&model).ok_or("未知模型")?;
-    let model_path = asr::models_dir(&state.data).join(spec.file);
+    let spec = asr::resolve(&state.data, &model).ok_or("未知模型")?;
+    let model_path = spec.path.clone();
     if cloud.is_none() && !model_path.is_file() { return Err("请先下载识别模型".into()); }
     let cancel = state.job(&episode_id);
     let work = state.data.join("work").join(&episode_id);
@@ -762,7 +764,7 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
         // What made it, for sharing the translation later (share_translation).
         let made_by = json!({ "source": if cloud.is_some() { "cloud" } else if spec.engine == "qwen3" { "qwen3" } else { "whisper" },
-            "model": cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.to_string()) });
+            "model": cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.clone()) });
         let _ = db::set_blob(&state.db.lock().unwrap(), &ep.id, "asr-meta", &made_by.to_string());
         Ok(t)
     }.await;
@@ -790,7 +792,7 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
                 show: ep.show_title.clone().unwrap_or_default(),
                 duration: ep.duration.unwrap_or(0.0).max(last_end).max(1.0),
                 source: if cloud.is_some() { "cloud".into() } else if spec.engine == "qwen3" { "qwen3".into() } else { "whisper".into() },
-                model: cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.to_string()),
+                model: cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.clone()),
                 language: t.language.clone(),
                 install,
                 translation,
@@ -860,7 +862,11 @@ fn cancel_job(state: State<'_, AppState>, id: String) {
 }
 
 #[tauri::command]
-fn asr_models(state: State<'_, AppState>) -> Vec<asr::ModelInfo> { asr::list_models(&state.data) }
+async fn asr_models(state: State<'_, AppState>) -> Res<Vec<asr::ModelInfo>> {
+    // Looking through other apps' folders takes a second or two: off the main thread.
+    let data = state.data.clone();
+    tokio::task::spawn_blocking(move || asr::list_models(&data)).await.map_err(e)
+}
 
 #[tauri::command]
 async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String, mirror_first: bool) -> Res<()> {
@@ -876,9 +882,13 @@ async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String, 
 }
 
 #[tauri::command]
+fn rescan_models() { asr::rescan(); }
+
+#[tauri::command]
 fn delete_model(state: State<'_, AppState>, id: String) -> Res<()> {
-    let spec = asr::spec(&id).ok_or("未知模型")?;
-    let _ = std::fs::remove_file(asr::models_dir(&state.data).join(spec.file));
+    // A link to a file another app keeps is only unlinked; the file itself stays.
+    let r = asr::resolve(&state.data, &id).ok_or("未知模型")?;
+    let _ = std::fs::remove_file(&r.path);
     Ok(())
 }
 
@@ -903,6 +913,7 @@ fn get_settings(state: State<'_, AppState>) -> Res<Value> {
 #[tauri::command]
 fn set_settings(state: State<'_, AppState>, settings: Value) -> Res<()> {
     net::set_proxy(settings["proxy"].as_str().unwrap_or("")).map_err(e)?;
+    *asr::YT_BROWSER.write().unwrap() = settings["ytCookiesBrowser"].as_str().unwrap_or("").to_string();
     db::set_setting(&state.db.lock().unwrap(), "app", &settings.to_string()).map_err(e)
 }
 
@@ -916,11 +927,66 @@ fn has_api_key(provider: String) -> bool { llm::get_key(&provider).is_some_and(|
 async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String, provider: llm::Provider, system: String, messages: Vec<llm::Message>, max_tokens: Option<u32>, json_mode: Option<bool>) -> Res<String> {
     let cancel = state.job(&request_id);
     let rid = request_id.clone();
-    let r = llm::chat(&provider, &system, &messages, max_tokens.unwrap_or(8000), json_mode.unwrap_or(false), &cancel, |d| {
-        let _ = app.emit("llm", json!({"requestId": rid, "delta": d}));
-    }).await;
+    let r = if provider.protocol == "cli" {
+        // A local agent (agents.rs): the conversation goes as one message; it keeps no history of its own.
+        let kind = agents::Kind::parse(provider.id.trim_start_matches("cli-")).ok_or("未知的本机 AI")?;
+        let path = agents::path_of(kind).ok_or_else(|| format!("没有找到 {}，请在设置里点「重新检测」", agents::display(kind)))?;
+        let user = flatten(&messages);
+        let app2 = app.clone();
+        agents::complete(kind, &path, agents::Request { system: &system, user: &user, model: Some(provider.model.as_str()).filter(|m| !m.is_empty() && *m != "default"), json: json_mode.unwrap_or(false) },
+            cancel.clone(), move |d| { let _ = app2.emit("llm", json!({"requestId": rid, "delta": d})); }).await
+    } else {
+        llm::chat(&provider, &system, &messages, max_tokens.unwrap_or(8000), json_mode.unwrap_or(false), &cancel, |d| {
+            let _ = app.emit("llm", json!({"requestId": rid, "delta": d}));
+        }).await
+    };
     state.done(&request_id);
     r.map_err(e)
+}
+
+/// A conversation as one message, for agents that take a single prompt.
+fn flatten(messages: &[llm::Message]) -> String {
+    if messages.len() == 1 { return messages[0].content.clone(); }
+    let mut out = String::from("以下是到目前为止的对话，请回答最后一个问题。\n\n"); // i18n-ignore (sent to the model)
+    for m in messages { out.push_str(if m.role == "assistant" { "【助手】\n" } else { "【用户】\n" }); out.push_str(&m.content); out.push_str("\n\n"); } // i18n-ignore
+    out
+}
+
+/// The listener's YouTube subscriptions, read with the given browser's sign-in (import.rs).
+#[tauri::command]
+async fn youtube_subscriptions(state: State<'_, AppState>, browser: String) -> Res<Vec<import::Channel>> {
+    if !matches!(browser.as_str(), "chrome" | "safari" | "firefox" | "edge" | "brave" | "chromium" | "opera" | "vivaldi") { return Err("不支持这个浏览器".into()); }
+    let bin = asr::ytdlp(&state.data).await.map_err(e)?;
+    import::youtube_subscriptions(&bin, &browser).await.map_err(e)
+}
+
+/// Writes every subscription with a feed to an OPML file in Downloads and returns its path.
+#[tauri::command]
+fn export_opml(state: State<'_, AppState>) -> Res<String> {
+    let shows = db::list_shows(&state.db.lock().unwrap()).map_err(e)?;
+    let list: Vec<(String, String)> = shows.into_iter().filter(|s| s.feed_url.starts_with("http")).map(|s| (s.title, s.feed_url)).collect();
+    let dir = dirs::download_dir().or_else(dirs::home_dir).ok_or("找不到下载文件夹")?;
+    let path = dir.join(format!("SubCast-{}.opml", chrono::Local::now().format("%Y%m%d")));
+    std::fs::write(&path, import::opml(&list)).map_err(e)?;
+    Ok(path.to_string_lossy().into())
+}
+
+/// Local AI agents on this computer (Claude Code, Codex, Qwen Code…) and whether they are logged in.
+#[tauri::command]
+async fn local_agents() -> Vec<agents::Found> { agents::detect().await }
+
+/// Starts an agent once to see whether it can answer (ready / needsLogin), without a model call.
+#[tauri::command]
+async fn probe_agent(kind: String) -> Res<String> {
+    let k = agents::Kind::parse(&kind).ok_or("未知的本机 AI")?;
+    let path = agents::path_of(k).ok_or("没有找到")?;
+    agents::probe(k, &path).await.map(str::to_string).map_err(e)
+}
+
+/// Starts an agent in the background (opening Q&A), so the first answer doesn't wait for it.
+#[tauri::command]
+async fn warm_agent(kind: String) {
+    if let Some(k) = agents::Kind::parse(&kind) { if let Some(p) = agents::path_of(k) { agents::warm(k, &p).await; } }
 }
 
 /// Machine translation (Google, free) with a persistent cache; used for titles, show notes, and subtitles
@@ -979,6 +1045,7 @@ pub fn run() {
             conn.execute("INSERT OR IGNORE INTO shows(id,kind,title,feed_url,updated_at) VALUES('single','single','单独打开','',0)", [])?;
             if let Some(s) = db::get_setting(&conn, "app")?.and_then(|r| serde_json::from_str::<Value>(&r).ok()) {
                 let _ = net::set_proxy(s["proxy"].as_str().unwrap_or(""));
+                *asr::YT_BROWSER.write().unwrap() = s["ytCookiesBrowser"].as_str().unwrap_or("").to_string();
             }
             // Release builds serve the interface over http://localhost (YouTube refuses tauri://), from a hot
             // update when one is active (ota.rs), else from the files built into the app.
@@ -1034,7 +1101,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

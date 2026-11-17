@@ -37,6 +37,12 @@
     "allow-youtube-stream",
     "allow-ui-ready",
     "allow-share-translation",
+    "allow-local-agents",
+    "allow-youtube-subscriptions",
+    "allow-rescan-models",
+    "allow-export-opml",
+    "allow-probe-agent",
+    "allow-warm-agent",
     "allow-ui-check",
     "allow-refresh-config",
     "allow-prepare-youtube",
@@ -61,7 +67,9 @@
     "allow-full-notes",
     "updater:default",
     "process:allow-restart",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen"
   ],
   "remote": {
     "urls": [

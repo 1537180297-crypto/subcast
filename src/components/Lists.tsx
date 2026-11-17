@@ -272,7 +272,7 @@ export function LatestView() {
           <section>
             <div className="module-head">
               <h2 className="module-title">{t("订阅节目")}</h2>
-              <button className="link-btn" onClick={() => set({ addOpen: true })}><Plus size={13} /> {t("添加")}</button>
+              <button className="link-btn" onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={13} /> {t("添加")}</button>
             </div>
             <div className="show-grid">{shows.slice(0, 16).map((s) => <ShowTile key={s.id} show={s} />)}</div>
           </section>
@@ -529,7 +529,8 @@ function Onboarding() {
       <div className="onboard-bar">
         <span className="muted">{progress ?? t("已选 {n} 个", { n: chosen.size })}</span>
         <div className="spacer" />
-        <button className="btn ghost" onClick={() => set({ addOpen: true })} disabled={!!progress}><Link2 size={14} /> {t("我有自己的链接")}</button>
+        <button className="btn ghost" onClick={() => set({ addOpen: true, addTab: "import" })} disabled={!!progress}><Youtube size={14} /> {t("从 YouTube / 小宇宙导入")}</button>
+        <button className="btn ghost" onClick={() => set({ addOpen: true, addTab: "link" })} disabled={!!progress}><Link2 size={14} /> {t("我有自己的链接")}</button>
         <button className="btn primary" onClick={start} disabled={!chosen.size || !!progress}>{progress ? <Loader2 size={14} className="spin" /> : null} {t("开始收听")}</button>
       </div>
     </div>

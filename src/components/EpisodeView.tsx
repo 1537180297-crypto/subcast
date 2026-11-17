@@ -1,7 +1,7 @@
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { TopBar } from "./Chrome";
-import { Component, useEffect, useRef, useState, type ReactNode } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isChineseUi, lang, t, tk } from "../lib/i18n";
 
 class PanelBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -28,7 +28,8 @@ import { isZh, useZh, useZhParagraphs } from "../lib/zh";
 import { autoTranslate, loadTranscript, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 import { ChatPanel, SummaryPanel } from "./AiPanels";
-import { Controls, YouTubePlayer } from "./Players";
+import { Controls } from "./Players";
+import { VideoSlot } from "./VideoDock";
 import { bytes, cancelDownload, downloadEpisode, isSaved, removeDownload, useOffline } from "../lib/offline";
 import { showLinks } from "../lib/showLinks";
 import { toggleFavorite, useLibrary } from "../lib/library";
@@ -38,15 +39,21 @@ import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 type Tab = "transcript" | "deep" | "chat" | "summary";
 const TAB_NAMES: Record<Tab, string> = { transcript: tk("字幕"), deep: tk("乔木精读"), chat: tk("AI 问答"), summary: tk("导读 · 节目简介与 AI 总结") };
 
-/** Splits a long subtitle block into screen-sized pieces at word / punctuation boundaries. */
+/** Splits a subtitle block into reading-sized pieces: at the end of each sentence, at a comma once a piece is
+ *  long enough, and between words only when a sentence runs on too long. */
 export function pieces(text: string, cjk: boolean): string[] {
-  const max = cjk ? 26 : 60;
-  const parts = cjk ? text.split(/(?<=[，。！？；：、,.!?;])/) : text.split(/(?<=\s)/);
+  const soft = cjk ? 14 : 38, hard = cjk ? 30 : 80;
+  const units = cjk ? text.split(/(?<=[，。！？；：、,.!?;])/) : text.split(/(?<=\s)/);
   const out: string[] = [];
   let cur = "";
-  for (const p of parts) {
-    if (cur && (cur + p).length > max) { out.push(cur.trim()); cur = ""; }
-    cur += p;
+  for (const u of units) {
+    if (cur && (cur + u).trim().length > hard) { out.push(cur.trim()); cur = ""; }
+    cur += u;
+    const t = cur.trim();
+    // Initials and titles end in a full stop without ending the sentence ("J.P.", "Mr.", "U.S.").
+    const last = u.trim();
+    const abbrev = !cjk && /^(?:[A-Z]\.)+(?:[A-Z]\.?)?$|^(?:Mr|Mrs|Ms|Dr|St|vs|etc|Inc|Co|Jr|Sr|No|Vol)\.$/.test(last);
+    if ((!abbrev && /[。！？.!?]["”')）]*$/.test(t)) || (t.length >= soft && /[，；：,;:]$/.test(t))) { out.push(t); cur = ""; }
   }
   if (cur.trim()) out.push(cur.trim());
   return out.length ? out : [text];
@@ -59,6 +66,49 @@ function pieceAt(text: string, cjk: boolean, progress: number): string {
   let acc = 0;
   for (const p of ps) { acc += p.length; if (acc / total >= progress) return p; }
   return ps[ps.length - 1];
+}
+
+/** Which piece (sentence-sized) of a block is being spoken, assuming speech is spread evenly over it. */
+function pieceIndex(ps: string[], progress: number): number {
+  const total = ps.reduce((n, p) => n + p.length, 0) || 1;
+  let acc = 0;
+  for (let k = 0; k < ps.length; k++) { acc += ps[k].length; if (acc / total >= progress) return k; }
+  return ps.length - 1;
+}
+
+/** Audio episodes: the sentence being spoken, and the next one already there, faded, so reading runs ahead of
+ *  the voice. Both are sentence pieces, not whole blocks, so it stays two short lines (four when bilingual). */
+function AudioSubtitles({ ep }: { ep: Episode }) {
+  const transcript = useJobs((s) => s.transcripts[ep.id]);
+  const items = useJobs((s) => s.translations[ep.id]?.items);
+  const time = useStore((s) => s.time);
+  const mode = useStore((s) => s.settings.subtitleMode);
+  if (!transcript) return null;
+  const segs = transcript.segments;
+  const i = Math.max(0, activeIndex(segs, time));
+  const seg = segs[i];
+  if (!seg) return null;
+  const progress = Math.min(1, Math.max(0, (time - seg.start) / Math.max(0.5, seg.end - seg.start)));
+  const cjk = (x: string) => /[\u4e00-\u9fff]/.test(x);
+  const origPs = pieces(seg.text, cjk(seg.text));
+  const zh = items?.[i];
+  const zhPs = zh ? pieces(zh, true) : [];
+  const k = pieceIndex(origPs, progress);
+  // The translation has its own pieces; the matching one is at the same share of the block.
+  const kz = zhPs.length ? Math.min(zhPs.length - 1, Math.floor((k / origPs.length) * zhPs.length + 1e-9)) : 0;
+  const nextSeg = segs[i + 1];
+  const nextZh = items?.[i + 1];
+  const nowLine = { orig: origPs[k], zh: zhPs.length ? (zhPs.length === origPs.length ? zhPs[k] : zhPs[kz]) : undefined };
+  const nextLine = k + 1 < origPs.length
+    ? { orig: origPs[k + 1], zh: zhPs.length ? (zhPs.length === origPs.length ? zhPs[k + 1] : kz + 1 < zhPs.length ? zhPs[kz + 1] : undefined) : undefined }
+    : nextSeg ? { orig: pieces(nextSeg.text, cjk(nextSeg.text))[0], zh: nextZh ? pieces(nextZh, true)[0] : undefined } : null;
+  const line = (l: { orig: string; zh?: string }, role: "now" | "next", key: string) => (
+    <div key={key} className={`asub-line ${role}`} aria-hidden={role === "next"}>
+      {l.zh && mode !== "original" && <p className="sub-zh">{l.zh}</p>}
+      {(mode !== "translation" || !l.zh) && <p className="sub-orig">{l.orig}</p>}
+    </div>
+  );
+  return <div className="asub" aria-live="off">{line(nowLine, "now", `${i}-${k}`)}{nextLine && line(nextLine, "next", `${i}-${k}-n`)}</div>;
 }
 
 function SubtitleOverlay({ ep }: { ep: Episode }) {
@@ -294,6 +344,12 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
     if (why) s.notify(why);
   };
 
+  // Stable, so the video (kept at the app's root, see VideoDock) isn't told about a change every render.
+  const videoOverlay = useMemo(() => <SubtitleOverlay ep={ep} />, [ep.id]);
+  const switchRef = useRef(switchTo);
+  switchRef.current = switchTo;
+  const onUnplayable = useMemo(() => () => switchRef.current(true, t("这个视频无法在应用内播放，已切换为音频")), [ep.id]);
+
   return (
     <div className="episode">
       <div className={`ep-body ${panelOpen ? "" : "panel-collapsed"}`} style={{ "--panel-w": `${panelOpen ? panel : 0}px` } as React.CSSProperties}>
@@ -320,14 +376,14 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             </div>
           )}
           {showVideo ? (
-            <YouTubePlayer ep={ep} overlay={<SubtitleOverlay ep={ep} />} onUnplayable={ep.audioUrl || saved ? () => switchTo(true, t("这个视频无法在应用内播放，已切换为音频")) : undefined} />
+            <VideoSlot ep={ep} overlay={videoOverlay} onUnplayable={ep.audioUrl || saved ? onUnplayable : undefined} />
           ) : (
             <div className="audio-stage">
               <button type="button" className="cover-play" onClick={coverToggle} title={isCurrent && playing ? t("暂停（空格）") : t("播放（空格）")} aria-label={isCurrent && playing ? t("暂停") : t("播放")}>
                 {ep.cover ? <img src={ep.cover} alt="" /> : <span className="cover-fallback" />}
                 <span className={`cover-play-btn ${isCurrent && playing ? "playing" : ""}`}>{isCurrent && playing ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}</span>
               </button>
-              <div className="audio-sub"><SubtitleOverlay ep={ep} /></div>
+              <div className="audio-sub"><AudioSubtitles ep={ep} /></div>
             </div>
           )}
           {isCurrent ? <div className="controls-slot" ref={controlsRef}><Controls /></div> : (
