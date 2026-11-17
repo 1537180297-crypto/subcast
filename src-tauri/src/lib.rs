@@ -499,27 +499,54 @@ async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res
 #[serde(rename_all = "camelCase")]
 struct VideoStream { url: String, /** hls | mp4 */ kind: &'static str }
 
-/// Serves the interface on localhost:LOCAL_PORT (what tauri-plugin-localhost did), from the active hot update when
-/// there is one.
-#[cfg(not(debug_assertions))]
-fn serve_ui(app: &AppHandle, active: ota::Active) {
-    let resolver = app.asset_resolver();
-    std::thread::spawn(move || {
-        let Ok(server) = tiny_http::Server::http(format!("localhost:{LOCAL_PORT}")) else { return };
-        for req in server.incoming_requests() {
-            let path = req.url().split(['?', '#']).next().unwrap_or("/").to_string();
-            let found = match ota::read(&active, &path) {
-                Some(file) => file.map(|(bytes, mime)| (bytes, mime.to_string(), None)),
-                None => resolver.get(path).map(|a| (a.bytes, a.mime_type, a.csp_header)),
-            };
-            let Some((bytes, mime, csp)) = found else { let _ = req.respond(tiny_http::Response::empty(404)); continue };
-            let mut resp = tiny_http::Response::from_data(bytes);
-            for (k, v) in [("Content-Type", Some(mime)), ("Cache-Control", Some("no-cache".to_string())), ("Content-Security-Policy", csp)] {
-                if let Some(h) = v.and_then(|v| tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).ok()) { resp.add_header(h); }
-            }
-            let _ = req.respond(resp);
+/// A loopback port for the interface that nothing else answers on. The page is opened as `http://localhost:<port>`,
+/// which the system may resolve to IPv6 (::1) first, so both 127.0.0.1 and ::1 are taken: another program on
+/// [::1]:14327 (the mobile app in the iOS Simulator, say) would otherwise be the one that answers, and the window
+/// would show its pages. Tries LOCAL_PORT first (localStorage belongs to the port), then the next few.
+fn bind_ui_port(preferred: u16) -> Option<(u16, Vec<std::net::TcpListener>)> {
+    use std::net::TcpListener;
+    for port in preferred..preferred.saturating_add(20) {
+        let Ok(v4) = TcpListener::bind(("127.0.0.1", port)) else { continue };
+        match TcpListener::bind(("::1", port)) {
+            Ok(v6) => return Some((port, vec![v4, v6])),
+            // Someone else answers "localhost" on this port over IPv6.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
+            // No IPv6 on this computer: IPv4 alone is what "localhost" means here.
+            Err(_) => return Some((port, vec![v4])),
         }
-    });
+    }
+    None
+}
+
+/// Serves the interface on localhost (what tauri-plugin-localhost did), from the active hot update when there is
+/// one. Returns the port, bound before the window opens so it can never load someone else's pages.
+#[cfg(not(debug_assertions))]
+fn serve_ui(app: &AppHandle, active: ota::Active) -> u16 {
+    let Some((port, listeners)) = bind_ui_port(LOCAL_PORT) else {
+        eprintln!("SubCast: no free port for the interface near {LOCAL_PORT}");
+        return LOCAL_PORT;
+    };
+    if port != LOCAL_PORT { eprintln!("SubCast: port {LOCAL_PORT} is taken by another program; using {port}"); }
+    for listener in listeners {
+        let Ok(server) = tiny_http::Server::from_listener(listener, None) else { continue };
+        let (resolver, active) = (app.asset_resolver(), active.clone());
+        std::thread::spawn(move || {
+            for req in server.incoming_requests() {
+                let path = req.url().split(['?', '#']).next().unwrap_or("/").to_string();
+                let found = match ota::read(&active, &path) {
+                    Some(file) => file.map(|(bytes, mime)| (bytes, mime.to_string(), None)),
+                    None => resolver.get(path).map(|a| (a.bytes, a.mime_type, a.csp_header)),
+                };
+                let Some((bytes, mime, csp)) = found else { let _ = req.respond(tiny_http::Response::empty(404)); continue };
+                let mut resp = tiny_http::Response::from_data(bytes);
+                for (k, v) in [("Content-Type", Some(mime)), ("Cache-Control", Some("no-cache".to_string())), ("Content-Security-Policy", csp)] {
+                    if let Some(h) = v.and_then(|v| tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).ok()) { resp.add_header(h); }
+                }
+                let _ = req.respond(resp);
+            }
+        });
+    }
+    port
 }
 
 #[derive(Serialize)]
@@ -1170,10 +1197,10 @@ pub fn run() {
             // Release builds serve the interface over http://localhost (YouTube refuses tauri://), from a hot
             // update when one is active (ota.rs), else from the files built into the app.
             #[cfg(not(debug_assertions))]
-            let ui: ota::Active = {
+            let (ui, ui_port): (ota::Active, u16) = {
                 let active = std::sync::Arc::new(std::sync::RwLock::new(ota::boot(&data)));
-                serve_ui(app.handle(), active.clone());
-                active
+                let port = serve_ui(app.handle(), active.clone());
+                (active, port)
             };
             #[cfg(not(debug_assertions))]
             let ui_data = data.clone();
@@ -1182,7 +1209,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             let url = tauri::WebviewUrl::App("index.html".into());
             #[cfg(not(debug_assertions))]
-            let url = tauri::WebviewUrl::External(format!("http://localhost:{LOCAL_PORT}").parse().unwrap());
+            let url = tauri::WebviewUrl::External(format!("http://localhost:{ui_port}").parse().unwrap());
             let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
                 .title("SubCast")
                 .inner_size(1360.0, 880.0)
@@ -1350,6 +1377,17 @@ mod live {
         let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ", true, true).await }).await.unwrap();
         println!("stream: {}", &url[..url.len().min(80)]);
         let _ = std::fs::remove_dir_all(&data);
+    }
+    /// Another program holding the port on IPv6 only (as the iOS Simulator's app did) must not win "localhost".
+    #[test]
+    fn ui_port_skips_a_port_taken_on_ipv6() {
+        let base = 45_000 + (std::process::id() % 1000) as u16 * 10;
+        let Ok(_other) = std::net::TcpListener::bind(("::1", base)) else { return }; // no IPv6 here
+        let (port, listeners) = super::bind_ui_port(base).expect("a free port");
+        assert_eq!(port, base + 1);
+        assert_eq!(listeners.len(), 2);
+        let (port2, _) = super::bind_ui_port(base + 5).expect("a free port");
+        assert_eq!(port2, base + 5);
     }
     /// SUBCAST_DB: a copy of a real library. Every transcribed episode in it should come back from the shared library.
     #[tokio::test]
