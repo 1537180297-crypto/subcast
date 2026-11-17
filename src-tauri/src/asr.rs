@@ -150,6 +150,47 @@ fn model_roots() -> Vec<(PathBuf, usize)> {
 
 /// Links usable model files found elsewhere on this computer into our models folder (nothing is copied or
 /// downloaded; deleting the link here never touches the original). Runs at most once a minute.
+static OTHER_FORMATS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+static SEEN_ELSEWHERE: std::sync::Mutex<Vec<Elsewhere>> = std::sync::Mutex::new(Vec::new());
+
+/// A Qwen3-ASR copy another app has, in a format SubCast can't run.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Elsewhere { pub app: String, pub format: String }
+
+/// Which app a folder belongs to, from its path.
+fn app_of(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    if s.contains("huggingface") { return "Hugging Face 缓存".into(); }
+    for marker in ["Application Support/", "Containers/", "Group Containers/"] {
+        if let Some(i) = s.find(marker) { if let Some(n) = s[i + marker.len()..].split('/').next() { return n.to_string(); } }
+    }
+    p.parent().and_then(|x| x.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+}
+
+fn describe_other(dirs: Vec<PathBuf>) -> Vec<Elsewhere> {
+    let mut out: Vec<Elsewhere> = Vec::new();
+    for d in dirs {
+        let files: Vec<String> = walkdir_names(&d, 3);
+        if !files.iter().any(|f| f.ends_with(".safetensors")) { continue; }
+        let mlx = d.to_string_lossy().to_lowercase().contains("mlx") || files.iter().any(|f| f.contains("mlx"));
+        let e = Elsewhere { app: app_of(&d), format: if mlx { "MLX".into() } else { "safetensors".into() } };
+        if !out.contains(&e) { out.push(e); }
+    }
+    out
+}
+
+fn walkdir_names(d: &Path, depth: usize) -> Vec<String> {
+    let mut v = Vec::new();
+    for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() && depth > 0 { v.extend(walkdir_names(&p, depth - 1)); } else { v.push(e.file_name().to_string_lossy().to_lowercase()); }
+    }
+    v
+}
+
+/// Qwen3-ASR copies found in other apps that SubCast can't use (format), from the last scan.
+pub fn elsewhere() -> Vec<Elsewhere> { SEEN_ELSEWHERE.lock().unwrap().clone() }
+
 /// Looks again on the next list (Settings › 重新查找).
 pub fn rescan() { *SCANNED.lock().unwrap() = None; }
 static SCANNED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
@@ -177,7 +218,10 @@ fn adopt_found(data: &Path) {
             if ft.is_symlink() && !path.to_string_lossy().contains("huggingface") { continue; }
             if path.starts_with(own) { continue; }
             let name = e.file_name().to_string_lossy().to_string();
-            if (ft.is_file() || ft.is_symlink()) && engine_of(&name).is_some() { out.push(path); }
+            if (ft.is_file() || ft.is_symlink()) && engine_of(&name).is_some() { out.push(path.clone()); }
+            // Qwen3-ASR in formats CrispASR can't read (Hugging Face / MLX safetensors folders), noted for the
+            // settings page so the listener knows why it isn't used.
+            if ft.is_dir() && name.to_lowercase().replace(['_', '-'], "").contains("qwen3asr") { OTHER_FORMATS.lock().unwrap().push(path.clone()); }
             else if ft.is_dir() && depth > 0 && !name.starts_with('.') || (ft.is_dir() && depth > 0 && (name == ".cache" || name.starts_with("models--"))) {
                 if matches!(name.as_str(), "node_modules" | "Caches" | "Logs" | "CrashReporter" | "Photos" | "MobileSync") { continue; }
                 walk(&path, depth - 1, own, out, budget);
@@ -186,6 +230,7 @@ fn adopt_found(data: &Path) {
     }
     let mut budget = 60_000;
     for (root, depth) in model_roots() { walk(&root, depth, &own, &mut found, &mut budget); }
+    *SEEN_ELSEWHERE.lock().unwrap() = describe_other(std::mem::take(&mut *OTHER_FORMATS.lock().unwrap()));
     for src in found {
         let Some(name) = src.file_name().map(|n| n.to_string_lossy().to_string()) else { continue };
         let Some(engine) = engine_of(&name) else { continue };
@@ -194,7 +239,10 @@ fn adopt_found(data: &Path) {
         if dest.exists() || !looks_like_model(&real, engine) { continue; }
         // llama.cpp-style Qwen3-ASR comes as two files (the audio encoder in an mmproj file); CrispASR needs the
         // single-file GGUF, so those (Cap's, for one) can't be used.
-        if engine == "qwen3" && real.parent().and_then(|d| std::fs::read_dir(d).ok()).is_some_and(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().to_lowercase().starts_with("mmproj"))) { continue; }
+        if engine == "qwen3" && real.parent().and_then(|d| std::fs::read_dir(d).ok()).is_some_and(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().to_lowercase().starts_with("mmproj"))) {
+            if let Some(d) = real.parent() { SEEN_ELSEWHERE.lock().unwrap().push(Elsewhere { app: app_of(d), format: "GGUF（llama.cpp 分体）".into() }); }
+            continue;
+        }
         #[cfg(unix)]
         let _ = std::os::unix::fs::symlink(&real, &dest);
         #[cfg(windows)]
@@ -838,6 +886,7 @@ mod scan_tests {
         let data = std::env::temp_dir().join(format!("subcast-scan-real-{}", uuid::Uuid::new_v4()));
         let t0 = std::time::Instant::now();
         for m in list_models(&data) { println!("{} installed={} {} from={:?}", m.id, m.installed, m.size_mb, m.from); }
+        println!("elsewhere: {:?}", elsewhere());
         println!("scan took {:?}", t0.elapsed());
         let _ = std::fs::remove_dir_all(&data);
     }

@@ -1027,6 +1027,8 @@ const dict: Record<string, string> = {
   "想听自己的？": "想聽自己的？",
   "导入 YouTube / 小宇宙订阅": "匯入 YouTube / 小宇宙訂閱",
   "发现更多节目": "發現更多節目",
+  "在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。": "在 {where} 裡找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的辨識程式只能用 GGUF 格式，沒法直接共用。下載上面的 Qwen3-ASR（約 960 MB）只需一次。",
+  "GGUF（llama.cpp 分体）": "GGUF（llama.cpp 分體）",
 };
 
 export default dict;

@@ -41,6 +41,7 @@
     "allow-youtube-subscriptions",
     "allow-rescan-models",
     "allow-log-listen",
+    "allow-asr-elsewhere",
     "allow-listening-stats",
     "allow-export-opml",
     "allow-probe-agent",

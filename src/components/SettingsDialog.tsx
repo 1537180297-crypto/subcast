@@ -114,7 +114,8 @@ export function SettingsDialog() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
   const proxyHint = t("留空使用系统代理，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"); // i18n-ignore: scripts/i18n.mjs reads the URL's "//" as a comment; the key is still extracted
-  const refresh = () => api.asrModels().then(setModels);
+  const [elsewhere, setElsewhere] = useState<{ app: string; format: string }[]>([]);
+  const refresh = () => api.asrModels().then((m) => { setModels(m); void api.asrElsewhere().then(setElsewhere).catch(() => {}); });
   const { downloading, start, cancel } = useModelDownload(refresh);
   useEffect(() => { void refresh(); }, []);
   const updateWaiting = useUpdate(hasUpdate);
@@ -196,6 +197,9 @@ export function SettingsDialog() {
                   </div>
                 ))}
               </div>
+              {elsewhere.length > 0 && !models.find((m) => m.id === "qwen3-asr")?.installed && (
+                <p className="model-elsewhere small">{t("在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。", { where: [...new Set(elsewhere.map((e) => tr(e.app)))].join("、"), format: [...new Set(elsewhere.map((e) => tr(e.format)))].join(" / ") })}</p>
+              )}
               {models.some((m) => m.id.startsWith("file:")) && (
                 <>
                   <p className="model-found-h">{t("这台电脑上其他软件下载过的模型")}<span className="muted small">{t("直接使用，不用再下载")}</span></p>

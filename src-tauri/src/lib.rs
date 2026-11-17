@@ -893,6 +893,9 @@ fn listening_stats(state: State<'_, AppState>, since: String) -> Res<Vec<Value>>
 }
 
 #[tauri::command]
+fn asr_elsewhere() -> Vec<asr::Elsewhere> { asr::elsewhere() }
+
+#[tauri::command]
 fn rescan_models() { asr::rescan(); }
 
 #[tauri::command]
@@ -1112,7 +1115,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

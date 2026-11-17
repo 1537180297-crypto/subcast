@@ -967,6 +967,8 @@ const dict: Record<string, string> = {
   "想听自己的？": "自分の番組を聴くには？",
   "导入 YouTube / 小宇宙订阅": "YouTube / 小宇宙 の登録をインポート",
   "发现更多节目": "ほかの番組を探す",
+  "在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。": "{where} に Qwen3-ASR がありますが {format} 形式です。SubCast の認識プログラムは GGUF 形式しか読めないため共用できません。上の Qwen3-ASR（約 960 MB）のダウンロードは一度だけです。",
+  "GGUF（llama.cpp 分体）": "GGUF（llama.cpp 分割）",
 };
 
 export default dict;
