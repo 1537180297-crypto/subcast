@@ -1,3 +1,4 @@
+import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, Loader2, RefreshCw, Settings2, Square, SquarePen } from "lucide-react";
@@ -238,30 +239,41 @@ export function ChatPanel({ ep }: { ep: Episode }) {
     </div>
   );
 }
+/** 导读 runs per episode outside the panel, so switching tabs or episodes mid-run neither loses the result
+ *  nor offers to start (and pay for) the same run again. */
+interface GuideJob { summary?: string | null; streaming: string | null; error: string | null; needsSetup: boolean }
+const useGuides = create<Record<string, GuideJob>>(() => ({}));
+const putGuide = (id: string, p: Partial<GuideJob>) => useGuides.setState((s) => ({ [id]: { ...(s[id] ?? { streaming: null, error: null, needsSetup: false }), ...p } }));
+
 export function SummaryPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
   const connected = useConnected();
   const seek = useSeek(ep);
-  const [summary, setSummary] = useState<string | null>(null);
-  const [streaming, setStreaming] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [needsSetup, setNeedsSetup] = useState(false);
+  const job = useGuides((s) => s[ep.id]);
+  const summary = job?.summary ?? null;
+  const streaming = job?.streaming ?? null;
+  const error = job?.error ?? null;
+  const needsSetup = !!job?.needsSetup;
 
   useEffect(() => {
-    setSummary(null); setError(null);
-    api.getBlob(ep.id, "summary").then(setSummary);
+    if (useGuides.getState()[ep.id]?.streaming != null) return;
+    void api.getBlob(ep.id, "summary").then((v) => { if (useGuides.getState()[ep.id]?.streaming == null) putGuide(ep.id, { summary: v || null }); });
   }, [ep.id, transcript]);
 
   const run = async () => {
-    setError(null);
+    if (useGuides.getState()[ep.id]?.streaming != null) return;
+    putGuide(ep.id, { error: null, needsSetup: false });
     try {
       await check();
-      setStreaming("");
-      const text = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history: [{ role: "user", content: summaryPrompt(transcript?.segments[transcript.segments.length - 1]?.end ?? ep.duration) }], onDelta: setStreaming });
-      setSummary(text);
-      void api.setBlob(ep.id, "summary", text);
-    } catch (e) { setError(errorText(e)); setNeedsSetup(Boolean((e as { setup?: boolean })?.setup) || /设置|API Key/.test(rawErrorText(e))); }
-    finally { setStreaming(null); }
+      putGuide(ep.id, { streaming: "" });
+      const text = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history: [{ role: "user", content: summaryPrompt(transcript?.segments[transcript.segments.length - 1]?.end ?? ep.duration) }], onDelta: (d) => putGuide(ep.id, { streaming: d }) });
+      // Some agents only stream: keep what arrived if the final answer comes back empty.
+      const out = text.trim() ? text : (useGuides.getState()[ep.id]?.streaming ?? "");
+      if (!out.trim()) throw new Error(t("模型没有返回内容，请重试或换一个模型"));
+      putGuide(ep.id, { summary: out });
+      void api.setBlob(ep.id, "summary", out);
+    } catch (e) { putGuide(ep.id, { error: errorText(e), needsSetup: Boolean((e as { setup?: boolean })?.setup) || /设置|API Key/.test(rawErrorText(e)) }); }
+    finally { putGuide(ep.id, { streaming: null }); }
   };
 
   const text = streaming ?? summary;

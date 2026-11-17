@@ -955,6 +955,7 @@ const dict: Record<string, string> = {
   "重新读取": "Read again",
   "读取 {name} 支持的模型": "Read {name}'s models",
   "手动添加模型名": "Add a model by name",
+  "模型没有返回内容，请重试或换一个模型": "The model returned nothing; try again or pick another model",
 };
 
 export default dict;
