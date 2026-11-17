@@ -22,7 +22,9 @@ function Mark({ id, name, size = 28 }: { id: string; name: string; size?: number
   return <span className="ms-mark" style={{ width: size, height: size, fontSize: size * 0.4 }} aria-hidden>{letters}</span>;
 }
 
-const RECOMMENDED = ["deepseek", "siliconflow", "openrouter", "custom"];
+const RECOMMENDED = ["deepseek", "siliconflow", "openrouter"];
+/** How many entries each list shows before 「更多」. */
+const SHOWN = 3;
 
 const STATUS: Record<FoundAgent["login"], { text: string; tone: "ok" | "warn" | "idle" }> = {
   ready: { text: tk("可用"), tone: "ok" },
@@ -36,6 +38,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
   useLang((s) => s.lang);
   const [editing, setEditing] = useState<string>(settings.chatProvider);
   const [more, setMore] = useState(false);
+  const [moreAgents, setMoreAgents] = useState(false);
   const [keys, setKeys] = useState<Record<string, boolean>>({});
   useEffect(() => { if (found == null) void detectAgents(); }, []);
   const apiProviders = useMemo(() => Object.values(settings.providers).filter((p) => p.protocol !== "cli"), [settings.providers]);
@@ -45,8 +48,17 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
 
   const used = (id: string) => (settings.translateProvider === id && settings.translateMode !== "google" ? t("默认") : "");
   const ready = (p: Provider) => !p.needsKey || keys[p.id];
-  const mine = apiProviders.filter((p) => RECOMMENDED.includes(p.id) || (p.needsKey && keys[p.id]) || settings.chatProvider === p.id || settings.translateProvider === p.id);
-  const rest = apiProviders.filter((p) => !mine.includes(p));
+  const inUse = (id: string) => settings.chatProvider === id || settings.translateProvider === id;
+  // Up front: what's in use, then what has a key, then the recommended ones; three at most (plus the open one).
+  const rank = (p: Provider) => (inUse(p.id) ? 0 : p.needsKey && keys[p.id] ? 1 : RECOMMENDED.includes(p.id) ? 2 + RECOMMENDED.indexOf(p.id) : 9);
+  const ranked = apiProviders.filter((p) => p.id !== "custom" && rank(p) < 9).sort((a, b) => rank(a) - rank(b));
+  const mine = ranked.filter((p, i) => i < SHOWN || p.id === editing);
+  const rest = apiProviders.filter((p) => !mine.includes(p) && p.id !== "custom");
+  const custom = settings.providers.custom;
+  // Local agents: the one in use, then ready, then needing login, then unconfirmed.
+  const order = { ready: 1, needsLogin: 2, unknown: 3 } as const;
+  const agents = [...(found ?? [])].sort((a, b) => (inUse(agentProviderId(a.kind)) ? 0 : order[a.login]) - (inUse(agentProviderId(b.kind)) ? 0 : order[b.login]));
+  const shownAgents = moreAgents ? agents : agents.filter((f, i) => i < SHOWN || agentProviderId(f.kind) === editing);
   const p = settings.providers[editing];
   const agent = agentOf(p);
   const update = (np: Provider) => void saveSettings({ providers: { ...settings.providers, [np.id]: np }, ...(np.id === settings.chatProvider && np.model !== p?.model ? { chatModel: "" } : {}) });
@@ -82,7 +94,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
           </div>
           {found == null ? <p className="muted small ms-empty"><Loader2 size={12} className="spin" /> {t("正在查找本机的 AI 工具…")}</p>
             : found.length === 0 ? <p className="muted small ms-empty">{t("没有找到。装好 Claude Code 或 Codex 并登录后，点上面的刷新。")}</p>
-            : found.map((f) => {
+            : shownAgents.map((f) => {
               const id = agentProviderId(f.kind);
               const st = STATUS[f.login];
               return (
@@ -93,6 +105,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
                 </button>
               );
             })}
+          {(moreAgents ? agents.length > SHOWN : agents.length > shownAgents.length) && <button className="ms-more" aria-expanded={moreAgents} onClick={() => setMoreAgents(!moreAgents)}><ChevronDown size={13} className={moreAgents ? "flip" : ""} /> {moreAgents ? t("收起") : t("更多（{n}）", { n: agents.length - shownAgents.length })}</button>}
           <div className="ms-group-h"><span>{t("API 模型")}<em>{t("填 Key 使用，按量付费")}</em></span></div>
           {mine.map((x) => (
             <button key={x.id} className={`ms-item ${editing === x.id ? "on" : ""}`} onClick={() => setEditing(x.id)}>
@@ -101,6 +114,12 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
               <span className={`ms-dot ${ready(x) ? "ok" : "idle"}`} />
             </button>
           ))}
+          {custom && (
+            <button className={`ms-item slim ${editing === custom.id ? "on" : ""}`} onClick={() => setEditing(custom.id)}>
+              <Mark id={custom.id} name={tr(custom.name)} size={20} />
+              <span className="ms-item-name">{tr(custom.name)}</span>
+            </button>
+          )}
           <button className="ms-more" aria-expanded={more} onClick={() => setMore(!more)}><ChevronDown size={13} className={more ? "flip" : ""} /> {more ? t("收起") : t("更多服务商（{n}）", { n: rest.length })}</button>
           {more && GROUPS.map((g) => {
             const list = rest.filter((x) => (x.group ?? "provider") === g.id);

@@ -1011,6 +1011,7 @@ const dict: Record<string, string> = {
   "更快，需要 Key，按量付费": "更快，需要 Key，按量計費",
   "存于系统钥匙串": "存於系統鑰匙圈",
   "更换": "更換",
+  "更多（{n}）": "更多（{n}）",
 };
 
 export default dict;
