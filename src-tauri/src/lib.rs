@@ -30,8 +30,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 /// The port the bundled app serves its pages from. YouTube's embedded player refuses pages served from the
 /// `tauri://` scheme (no valid origin / referrer), so release builds use http://localhost like a normal website.
-#[cfg(not(debug_assertions))]
+#[cfg_attr(debug_assertions, allow(dead_code))]
 const LOCAL_PORT: u16 = 14327;
+/// How many ports from LOCAL_PORT the interface may use (each listed in capabilities/default.json).
+#[cfg_attr(debug_assertions, allow(dead_code))]
+const UI_PORTS: u16 = 20;
 
 pub struct AppState {
     db: Mutex<Connection>,
@@ -505,7 +508,8 @@ struct VideoStream { url: String, /** hls | mp4 */ kind: &'static str }
 /// would show its pages. Tries LOCAL_PORT first (localStorage belongs to the port), then the next few.
 fn bind_ui_port(preferred: u16) -> Option<(u16, Vec<std::net::TcpListener>)> {
     use std::net::TcpListener;
-    for port in preferred..preferred.saturating_add(20) {
+    // The same 20 ports are allowed in capabilities/default.json (remote.urls); keep the two in step.
+    for port in preferred..preferred.saturating_add(UI_PORTS) {
         let Ok(v4) = TcpListener::bind(("127.0.0.1", port)) else { continue };
         match TcpListener::bind(("::1", port)) {
             Ok(v6) => return Some((port, vec![v4, v6])),
@@ -1392,6 +1396,14 @@ mod live {
         assert_eq!(listeners.len(), 2);
         let (port2, _) = super::bind_ui_port(base + 5).expect("a free port");
         assert_eq!(port2, base + 5);
+    }
+    /// Every port the interface may move to is allowed to call the app's commands.
+    #[test]
+    fn every_ui_port_is_allowed() {
+        let caps = include_str!("../capabilities/default.json");
+        for p in super::LOCAL_PORT..super::LOCAL_PORT + super::UI_PORTS {
+            assert!(caps.contains(&format!("\"http://localhost:{p}\"")), "port {p} missing from capabilities");
+        }
     }
     /// SUBCAST_DB: a copy of a real library. Every transcribed episode in it should come back from the shared library.
     #[tokio::test]
