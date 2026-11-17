@@ -5,6 +5,7 @@ mod cloud;
 mod db;
 mod feeds;
 mod hlsproxy;
+mod import;
 mod llm;
 mod model;
 mod net;
@@ -942,6 +943,25 @@ fn flatten(messages: &[llm::Message]) -> String {
     out
 }
 
+/// The listener's YouTube subscriptions, read with the given browser's sign-in (import.rs).
+#[tauri::command]
+async fn youtube_subscriptions(state: State<'_, AppState>, browser: String) -> Res<Vec<import::Channel>> {
+    if !matches!(browser.as_str(), "chrome" | "safari" | "firefox" | "edge" | "brave" | "chromium" | "opera" | "vivaldi") { return Err("不支持这个浏览器".into()); }
+    let bin = asr::ytdlp(&state.data).await.map_err(e)?;
+    import::youtube_subscriptions(&bin, &browser).await.map_err(e)
+}
+
+/// Writes every subscription with a feed to an OPML file in Downloads and returns its path.
+#[tauri::command]
+fn export_opml(state: State<'_, AppState>) -> Res<String> {
+    let shows = db::list_shows(&state.db.lock().unwrap()).map_err(e)?;
+    let list: Vec<(String, String)> = shows.into_iter().filter(|s| s.feed_url.starts_with("http")).map(|s| (s.title, s.feed_url)).collect();
+    let dir = dirs::download_dir().or_else(dirs::home_dir).ok_or("找不到下载文件夹")?;
+    let path = dir.join(format!("SubCast-{}.opml", chrono::Local::now().format("%Y%m%d")));
+    std::fs::write(&path, import::opml(&list)).map_err(e)?;
+    Ok(path.to_string_lossy().into())
+}
+
 /// Local AI agents on this computer (Claude Code, Codex, Qwen Code…) and whether they are logged in.
 #[tauri::command]
 async fn local_agents() -> Vec<agents::Found> { agents::detect().await }
@@ -1071,7 +1091,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

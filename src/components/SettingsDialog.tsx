@@ -8,7 +8,7 @@ import { speak, stopSpeaking } from "../lib/tts";
 import logoUrl from "../assets/logo.png";
 import wechatQr from "../assets/about-wechat-qr.jpg";
 import rewardQr from "../assets/about-reward-qr.png";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type CloudAsr, type ModelInfo, type Provider } from "../lib/api";
 import { llmReady } from "../lib/jobs";
 import { useStore } from "../store";
@@ -214,6 +214,14 @@ export function SettingsDialog() {
           {section === "tts" && <TtsSettings />}
           {section === "general" && (
             <>
+              <div className="setup-block">
+                <p className="setup-title">{t("订阅")}</p>
+                <div className="row-actions">
+                  <button className="btn sm" onClick={() => { set({ settingsOpen: false, addOpen: true, addTab: "import" }); }}>{t("导入订阅…")}</button>
+                  <button className="btn sm" onClick={async () => { try { const path = await api.exportOpml(); notify(t("已导出到「下载」：{name}", { name: path.split(/[\\/]/).pop() ?? "" })); void revealItemInDir(path).catch(() => {}); } catch (e) { notify(errorText(e)); } }}>{t("导出 OPML")}</button>
+                </div>
+                <p className="muted small">{t("从 YouTube、小宇宙和其他播客 App 导入；导出的 OPML 可以在其他播客 App 里打开。")}</p>
+              </div>
               <label><span>{t("界面语言")}</span>
                 <select value={settings.uiLang} onChange={(e) => void saveSettings({ uiLang: e.target.value as LangSetting })}>
                   <option value="auto">{t("跟随系统（{name}）", { name: LANGS.find((l) => l.id === systemLang())?.name ?? "" })}</option>

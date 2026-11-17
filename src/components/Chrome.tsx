@@ -1,7 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Compass, Download, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X } from "lucide-react";
+import { ChevronLeft, Compass, Download, History, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
+import { ImportPanel } from "./ImportPanel";
 import { useStore, type View } from "../store";
 import { hasUpdate, useUpdate } from "../lib/updater";
 import { PICKS, deepPickFor, isSubscribed, pickName, showName } from "../lib/picks";
@@ -49,7 +50,7 @@ export function Sidebar() {
         {(hasDownloads || view.kind === "downloads") && nav({ kind: "downloads" }, <Download size={16} />, t("已下载"))}
       </nav>
       <div className="side-sep" />
-      <div className="side-head"><span className="label">{tx("sidebar", "订阅")}</span><button className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true })}><Plus size={14} /></button></div>
+      <div className="side-head"><span className="label">{tx("sidebar", "订阅")}</span><button className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={14} /></button></div>
       <div className="show-list">
         {shows.map((s) => (
           <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={rail ? showName(s.title) : s.title}>
@@ -203,7 +204,7 @@ export function Modal({ title, onClose, children, wide, head }: { title: string;
 
 export function AddDialog() {
   const { set, reloadShows, go, openEpisode, notify, shows } = useStore(useShallow((s) => ({ set: s.set, reloadShows: s.reloadShows, go: s.go, openEpisode: s.openEpisode, notify: s.notify, shows: s.shows })));
-  const [tab, setTab] = useState<"search" | "link">("search");
+  const [tab, setTab] = useState<"search" | "link" | "import">(useStore.getState().addTab ?? "search");
   const [q, setQ] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -238,11 +239,12 @@ export function AddDialog() {
     <div className="add-tabs" role="tablist">
       <button role="tab" aria-selected={tab === "search"} className={tab === "search" ? "on" : ""} onClick={() => { setTab("search"); setError(null); }}><Search size={15} /> {t("搜索节目")}</button>
       <button role="tab" aria-selected={tab === "link"} className={tab === "link" ? "on" : ""} onClick={() => { setTab("link"); setError(null); }}><Link2 size={15} /> {t("链接或 RSS")}</button>
+      <button role="tab" aria-selected={tab === "import"} className={tab === "import" ? "on" : ""} onClick={() => { setTab("import"); setError(null); }}><Import size={15} /> {t("导入订阅")}</button>
     </div>
   );
   return (
     <Modal title={t("添加节目")} onClose={close} head={head}>
-      {tab === "search" ? (
+      {tab === "import" ? <ImportPanel onDone={close} /> : tab === "search" ? (
         <form className="add-form" onSubmit={(e) => { e.preventDefault(); if (pastedLink) void add(q.trim()); else if (results?.[0] && !shows.some((s) => s.feedUrl === results[0].feedUrl)) void add(results[0].feedUrl); }}>
           <div className="add-search">
             {pastedLink ? <Link2 size={16} /> : <Search size={16} />}

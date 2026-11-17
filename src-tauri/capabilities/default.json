@@ -38,6 +38,8 @@
     "allow-ui-ready",
     "allow-share-translation",
     "allow-local-agents",
+    "allow-youtube-subscriptions",
+    "allow-export-opml",
     "allow-probe-agent",
     "allow-warm-agent",
     "allow-ui-check",

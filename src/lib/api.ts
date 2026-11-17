@@ -88,6 +88,7 @@ export const api = {
   youtubeStream: (videoId: string, mode: "native-hls" | "proxy-hls" | "mp4") => invoke<{ url: string; kind: "hls" | "mp4" }>("youtube_stream", { videoId, mode }),
   uiReady: () => invoke<{ shell: string; build: number | null }>("ui_ready"),
   shareTranslation: (episodeId: string, engine: string, model: string) => invoke<string>("share_translation", { episodeId, engine, model }),
+  exportOpml: () => invoke<string>("export_opml"),
   uiCheck: () => invoke<string>("ui_check"),
   refreshConfig: () => invoke<void>("refresh_config"),
   prepareYoutube: () => invoke<void>("prepare_youtube"),

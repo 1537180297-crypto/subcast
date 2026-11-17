@@ -38,6 +38,8 @@ interface State {
   player: PlayerHandle | null;
   /** The video fills the window (and the window the screen), subtitles on it. */
   theater?: boolean;
+  /** Which tab the add dialog opens on. */
+  addTab?: "search" | "link" | "import";
   toast: string | null;
   settingsOpen: boolean;
   settingsSection?: "model" | "asr" | "tts" | "shortcuts" | "general" | "storage" | "about";
