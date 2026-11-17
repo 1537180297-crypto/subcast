@@ -889,7 +889,6 @@ const dict: Record<string, string> = {
   "标准": "Standard",
   "大": "Large",
   "特大": "Extra large",
-  "默认显示": "Show",
   "视频上的字幕": "Subtitles on video",
   "半透明底": "Shaded background",
   "描边，无底": "Outline, no background",

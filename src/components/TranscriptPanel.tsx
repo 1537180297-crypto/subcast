@@ -11,7 +11,7 @@ import { api, errorText, rawErrorText, type Episode, type ModelInfo, type Segmen
 import { clock, sizeMb } from "../lib/format";
 import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, switchYoutubeTrack, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
-import { ASR_SERVICES } from "../lib/settings";
+import { ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { lang, t, tk, tr, useLang } from "../lib/i18n";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
@@ -306,6 +306,11 @@ function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; au
   );
 }
 
+/** What the episode's pickers offer: Qwen3-ASR, models already on this computer, the main cloud services and
+ *  whatever is in use. The rest are in Settings (the 「更多…」 entry opens it). */
+const pickerModels = (models: ModelInfo[], s: Settings) => models.filter((m) => m.id === "qwen3-asr" || m.installed || (s.asrEngine === "local" && s.asrModel === m.id));
+const pickerCloud = (s: Settings) => ASR_SERVICES.filter((a) => CLOUD_ASR_MAIN.includes(a.id) || s.asrEngine === a.id);
+
 /** Episodes transcription was started for automatically this session (never twice). */
 const autoStarted = new Set<string>();
 
@@ -326,6 +331,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   }, [cloud?.id, settingsOpen]);
   const missingKey = !!cloud?.needsKey && cloudKey === false;
   const pickEngine = (value: string) => {
+    if (value === "more") { useStore.getState().openSettings("asr"); return; }
     const [kind, id] = value.split(":");
     void saveSettings(kind === "cloud" ? { asrEngine: id } : { asrEngine: "local", asrModel: id });
   };
@@ -352,6 +358,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   };
   /** Mid-way, switch to another way of transcribing: the running one stops, the new one starts from the beginning. */
   const switchEngine = async (value: string) => {
+    if (value === "more") { useStore.getState().openSettings("asr"); return; }
     const [kind, id] = value.split(":");
     await saveSettings(kind === "cloud" ? { asrEngine: id } : { asrEngine: "local", asrModel: id });
     await stopRunning();
@@ -391,11 +398,12 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
             <select className="engine-switch-mini" aria-label={t("换一种识别方式")} title={t("换一种识别方式（从头开始）")} value="" onChange={(e) => e.target.value && void switchEngine(e.target.value)}>
               <option value="">{t("换一种方式…")}</option>
               <optgroup label={t("本机模型 · 音频不出本机")}>
-                {models.filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
+                {pickerModels(models, settings).filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
               </optgroup>
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
-                {ASR_SERVICES.filter((a) => settings.asrEngine !== a.id).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
+                {pickerCloud(settings).filter((a) => settings.asrEngine !== a.id).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
               </optgroup>
+              <option value="more">{t("更多")}…</option>
             </select>
             <button className="btn ghost sm" onClick={() => void stopRunning()}>{t("取消")}</button>
           </span>
@@ -438,11 +446,12 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
           <label><span>{t("识别方式")}</span>
             <select value={cloud ? `cloud:${cloud.id}` : `local:${model?.id}`} onChange={(e) => pickEngine(e.target.value)}>
               <optgroup label={t("本机模型 · 音频不出本机")}>
-                {models.map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
+                {pickerModels(models, settings).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
               </optgroup>
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
-                {ASR_SERVICES.map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
+                {pickerCloud(settings).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
               </optgroup>
+              <option value="more">{t("更多")}…</option>
             </select>
           </label>
         </div>

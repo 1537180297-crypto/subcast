@@ -44,9 +44,6 @@ export function ReadingSettings() {
         <div className="reading-row"><span>{t("字体")}</span>
           <Seg value={settings.subtitleFont ?? "system"} options={(Object.keys(SUB_FONTS) as (keyof typeof SUB_FONTS)[]).map((id) => [id, fontName(id)])} onChange={(v) => save({ subtitleFont: v })} />
         </div>
-        <div className="reading-row"><span>{t("默认显示")}</span>
-          <Seg value={settings.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")]]} onChange={(v) => save({ subtitleMode: v })} />
-        </div>
         <div className="reading-row"><span>{t("视频上的字幕")}</span>
           <Seg value={settings.subtitleLook ?? "box"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => save({ subtitleLook: v })} />
         </div>

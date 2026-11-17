@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
 import { BookOpen, Check, ChevronDown, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
-import { ASR_SERVICES } from "../lib/settings";
+import { ASR_SERVICES, CLOUD_ASR_MAIN } from "../lib/settings";
 import { stopSpeaking } from "../lib/tts";
 import logoUrl from "../assets/logo.png";
 import wechatQr from "../assets/about-wechat-qr.jpg";
@@ -127,7 +127,6 @@ export function SettingsDialog() {
   const [showKeys, setShowKeys] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
   const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["general", tk("通用"), SlidersHorizontal], ["about", tk("关于"), Info]];
-  const CLOUD_MAIN = ["doubao", "siliconflow", "groq"];
   const modelRow = (m: ModelInfo) => (
     <div key={m.id} className={`model-item ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`}>
       <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrEngine: "local", asrModel: m.id })}>
@@ -175,7 +174,7 @@ export function SettingsDialog() {
                 {cloudOpen && (
                   <>
                     <div className="provider-tabs">
-                      {ASR_SERVICES.filter((a) => moreCloud || CLOUD_MAIN.includes(a.id) || settings.asrEngine === a.id).map((a) => <button key={a.id} className={`chip ${settings.asrEngine === a.id ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: a.id })}>{t(a.name)}</button>)}
+                      {ASR_SERVICES.filter((a) => moreCloud || CLOUD_ASR_MAIN.includes(a.id) || settings.asrEngine === a.id).map((a) => <button key={a.id} className={`chip ${settings.asrEngine === a.id ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: a.id })}>{t(a.name)}</button>)}
                       {!moreCloud && <button className="chip" onClick={() => setMoreCloud(true)}>{t("更多")}</button>}
                       {settings.asrEngine !== "local" && <button className="chip" onClick={() => saveSettings({ asrEngine: "local" })}>{t("用回本机")}</button>}
                     </div>

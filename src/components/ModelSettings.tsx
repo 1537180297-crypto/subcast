@@ -22,7 +22,7 @@ function Mark({ id, name, size = 28 }: { id: string; name: string; size?: number
   return <span className="ms-mark" style={{ width: size, height: size, fontSize: size * 0.4 }} aria-hidden>{letters}</span>;
 }
 
-const RECOMMENDED = ["deepseek", "siliconflow", "openrouter"];
+const RECOMMENDED = ["deepseek", "siliconflow", "openrouter", "custom"];
 
 const STATUS: Record<FoundAgent["login"], { text: string; tone: "ok" | "warn" | "idle" }> = {
   ready: { text: tk("可用"), tone: "ok" },
