@@ -4,7 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ExternalLink, Loader2, Minimize2, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, isBotCheck, type Episode } from "../lib/api";
+import { api, isBotCheck, needsBrowserAccess, type Episode } from "../lib/api";
+import { BrowserAccess } from "./BrowserAccess";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
 import { useStore } from "../store";
@@ -149,6 +150,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
       const msg = typeof e === "string" ? e : String((e as any)?.message ?? e);
       // YouTube wants a signed-in browser: ask once, here, instead of failing or silently falling back to audio.
       if (isBotCheck(msg)) { setBotCheck(why); return; }
+      if (needsBrowserAccess(msg)) { setDenied(why); return; }
       if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(msg) }));
     }
     finally { setFallingBack(null); void off.then((f) => f()); }
@@ -162,6 +164,8 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     void api.youtubeStream(ep.videoId!, mode, true).then(setNative).catch((e) => setError(tr(String(e?.message ?? e))));
   };
   const [botCheck, setBotCheck] = useState<string | null>(null);
+  /** macOS refused access to the browser's data; holds the reason to retry with. */
+  const [denied, setDenied] = useState<string | null>(null);
   const [browser, setBrowser] = useState(useStore.getState().settings.ytCookiesBrowser || "chrome");
   const retryWithBrowser = async () => {
     const why = botCheck ?? "";
@@ -169,7 +173,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     await useStore.getState().saveSettings({ ytCookiesBrowser: browser });
     void fallback(why);
   };
-  useEffect(() => { setNative(null); setError(null); retried.current = false; }, [ep.id]);
+  useEffect(() => { setNative(null); setError(null); setDenied(null); retried.current = false; }, [ep.id]);
   // Have yt-dlp ready before it is needed: a first fallback would otherwise start with a 35 MB download.
   useEffect(() => { void api.prepareYoutube().catch(() => {}); }, []);
   const watchOnYouTube = () => {
@@ -207,6 +211,11 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
             <button className="btn primary sm" onClick={() => void retryWithBrowser()}>{t("借用登录再试")}</button>
             {openBtn}
           </div>
+        </div>
+      )}
+      {denied != null && (
+        <div className="video-error bot-check">
+          <BrowserAccess browser={browser} onRetry={() => { const why = denied; setDenied(null); void fallback(why); }} />
         </div>
       )}
       {error && <div className="video-error">{error} {openBtn}</div>}

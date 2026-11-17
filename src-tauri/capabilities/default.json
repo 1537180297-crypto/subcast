@@ -39,6 +39,7 @@
     "allow-share-translation",
     "allow-local-agents",
     "allow-youtube-subscriptions",
+    "allow-open-privacy-settings",
     "allow-rescan-models",
     "allow-log-listen",
     "allow-asr-elsewhere",

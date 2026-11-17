@@ -464,6 +464,7 @@ where F: Fn(Vec<String>) -> Fut, Fut: std::future::Future<Output = Result<T>> {
                 Err(e2) if bot_check(&e2.to_string()) => {
                     let browser = YT_BROWSER.read().unwrap().clone();
                     if browser.is_empty() { return Err(anyhow!("YouTube 要求验证「不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 借用它的登录再试")); }
+                    { let b = browser.clone(); tokio::task::spawn_blocking(move || crate::import::ensure_browser_access(&b)).await??; }
                     job(vec!["--cookies-from-browser".into(), browser.clone()]).await
                         .map_err(|e3| if bot_check(&e3.to_string()) { anyhow!("YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试") } else { e3 })
                 }

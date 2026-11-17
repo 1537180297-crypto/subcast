@@ -1803,3 +1803,7 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .portrait-cta .muted { flex: 1 1 260px; margin: 0; }
 .stats > .stats-card:last-of-type { margin-top: 16px; }
 @container stats (max-width: 720px) { .stat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stats-grid { grid-template-columns: minmax(0, 1fr); } .stats-lede { font-size: 20px; } }
+.browser-access { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 12px 14px; border-radius: 10px; background: var(--soft); font-size: 13px; text-align: left; }
+.browser-access ol { margin: 0; padding-left: 18px; color: var(--text-2); }
+.video-error .browser-access { margin: 0; background: transparent; padding: 0; color: inherit; }
+.video-error .browser-access ol { color: inherit; opacity: 0.85; }
