@@ -1527,3 +1527,10 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .import-row.done { color: var(--muted); cursor: default; }
 .import-row img, .import-ph { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: var(--line); display: grid; place-items: center; font-size: 12px; }
 .import-row .clamp1 { flex: 1; min-width: 0; }
+/* Full screen: the control strip sits on the dark gradient, not on a card. */
+.theater-bar .controls { background: transparent; border: 0; box-shadow: none; padding: 0; }
+.theater-bar .controls, .theater-bar .controls .time, .theater-bar .controls .icon-btn, .theater-bar .controls .round-btn { color: #fff; }
+.theater-bar .controls .rate-btn { background: rgba(255,255,255,.14); color: #fff; border-color: transparent; }
+.theater-bar .controls .play-btn { background: #fff; color: #111; }
+.video.theater:not(.idle) .subtitle-overlay { bottom: calc(9vh + 56px); }
+.video.theater .subtitle-overlay { transition: bottom .25s ease; }

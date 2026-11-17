@@ -10,7 +10,7 @@ import { AGENTS, agentOf, agentProvider, agentProviderId, detectAgents, useAgent
 import { GROUPS } from "../lib/settings";
 import { providerIcon } from "../lib/providerIcons";
 import { useStore } from "../store";
-import { t, tr, useLang } from "../lib/i18n";
+import { t, tk, tr, useLang } from "../lib/i18n";
 
 /** The service's own mark where we have it, else its initials on a tint. */
 function Mark({ id, name, size = 28 }: { id: string; name: string; size?: number }) {
@@ -21,9 +21,9 @@ function Mark({ id, name, size = 28 }: { id: string; name: string; size?: number
 }
 
 const STATUS: Record<FoundAgent["login"], { text: string; tone: "ok" | "warn" | "idle" }> = {
-  ready: { text: "可用", tone: "ok" },
-  needsLogin: { text: "需要登录", tone: "warn" },
-  unknown: { text: "待确认", tone: "idle" },
+  ready: { text: tk("可用"), tone: "ok" },
+  needsLogin: { text: tk("需要登录"), tone: "warn" },
+  unknown: { text: tk("待确认"), tone: "idle" },
 };
 
 export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p: Provider; onChange: (p: Provider) => void }) => React.ReactElement }) {
