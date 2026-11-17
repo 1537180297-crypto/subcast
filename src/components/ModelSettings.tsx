@@ -8,11 +8,14 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type Provider } from "../lib/api";
 import { AGENTS, agentOf, agentProvider, agentProviderId, detectAgents, useAgents, type AgentKind, type FoundAgent } from "../lib/agents";
 import { GROUPS } from "../lib/settings";
+import { providerIcon } from "../lib/providerIcons";
 import { useStore } from "../store";
 import { t, tr, useLang } from "../lib/i18n";
 
-/** Initials on a tint: one mark per source, no brand art. */
-function Mark({ name, size = 28 }: { name: string; size?: number }) {
+/** The service's own mark where we have it, else its initials on a tint. */
+function Mark({ id, name, size = 28 }: { id: string; name: string; size?: number }) {
+  const icon = providerIcon(id);
+  if (icon) return <span className="ms-mark has-icon" style={{ width: size, height: size }} aria-hidden dangerouslySetInnerHTML={{ __html: icon }} />;
   const letters = name.replace(/[（(].*$/, "").trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   return <span className="ms-mark" style={{ width: size, height: size, fontSize: size * 0.4 }} aria-hidden>{letters}</span>;
 }
@@ -67,7 +70,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
               const st = STATUS[f.login];
               return (
                 <button key={f.kind} className={`ms-item ${editing === id ? "on" : ""}`} onClick={() => setEditing(id)}>
-                  <Mark name={AGENTS[f.kind].name} />
+                  <Mark id={id} name={AGENTS[f.kind].name} />
                   <span className="ms-item-name">{AGENTS[f.kind].name}<small>{used(id) || t(st.text)}</small></span>
                   <span className={`ms-dot ${st.tone}`} aria-label={t(st.text)} />
                 </button>
@@ -76,7 +79,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
           <div className="ms-group-h"><span>{t("API 模型")}<em>{t("填 Key 使用，按量付费")}</em></span></div>
           {mine.map((x) => (
             <button key={x.id} className={`ms-item ${editing === x.id ? "on" : ""}`} onClick={() => setEditing(x.id)}>
-              <Mark name={tr(x.name)} />
+              <Mark id={x.id} name={tr(x.name)} />
               <span className="ms-item-name">{tr(x.name)}<small>{used(x.id) || (ready(x) ? t("已填 Key") : t("未设置"))}</small></span>
               <span className={`ms-dot ${ready(x) ? "ok" : "idle"}`} />
             </button>
@@ -89,6 +92,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
                 <p className="ms-sub-h">{t(g.name)}</p>
                 {list.map((x) => (
                   <button key={x.id} className={`ms-item slim ${editing === x.id ? "on" : ""}`} onClick={() => setEditing(x.id)}>
+                    <Mark id={x.id} name={tr(x.name)} size={20} />
                     <span className="ms-item-name">{tr(x.name)}</span>
                   </button>
                 ))}
@@ -100,7 +104,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
           {agent ? <AgentDetail kind={agent} found={found?.find((f) => f.kind === agent)} p={p ?? agentProvider(agent)} onChange={update} />
             : p ? (
               <>
-                <div className="ms-head"><Mark name={tr(p.name)} size={36} /><div><p className="ms-title">{tr(p.name)}</p><p className="muted small">{p.needsKey ? t("用你自己的 API Key，按用量付费给服务商。Key 只存在本机钥匙串。") : t("在你电脑上运行的模型服务，不需要 Key。")}</p></div></div>
+                <div className="ms-head"><Mark id={p.id} name={tr(p.name)} size={36} /><div><p className="ms-title">{tr(p.name)}</p><p className="muted small">{p.needsKey ? t("用你自己的 API Key，按用量付费给服务商。Key 只存在本机钥匙串。") : t("在你电脑上运行的模型服务，不需要 Key。")}</p></div></div>
                 <ProviderEditor key={p.id} p={p} onChange={update} />
               </>
             ) : null}
@@ -143,7 +147,7 @@ function AgentDetail({ kind, found, p, onChange }: { kind: AgentKind; found?: Fo
   return (
     <div className="provider-form">
       <div className="ms-head">
-        <Mark name={info.name} size={36} />
+        <Mark id={id} name={info.name} size={36} />
         <div><p className="ms-title">{info.name} <span className={`ms-pill ${st.tone}`}>{t(st.text)}</span></p><p className="muted small">{info.vendor}{found?.version ? ` · ${found.version}` : ""}</p></div>
       </div>
       <p className="ms-lead">{t("用你自己的 {plan}，不需要 API Key。用量计入你的订阅额度。", { plan: t(info.plan) })}</p>
