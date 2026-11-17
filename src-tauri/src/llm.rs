@@ -78,47 +78,62 @@ fn api_error(status: u16, body: &str) -> anyhow::Error {
 }
 
 /// Streams one reply; `on_delta` gets each piece of text. Returns the whole text.
+/// Copes with what different providers and models do: newer reasoning models that refuse `max_tokens`
+/// (retried with `max_completion_tokens`), models without JSON mode (retried without it), replies sent as one
+/// JSON body instead of a stream, content given as an array of parts, and thinking that arrives separately or
+/// inline as <think>…</think> (never shown; reported if it was all that came).
 pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: u32, json_mode: bool, cancel: &AtomicBool, mut on_delta: impl FnMut(&str)) -> Result<String> {
     let key = get_key(&p.id);
     let anthropic = p.protocol == "anthropic";
-    let req = if anthropic {
-        let key = key.ok_or_else(|| anyhow!("请先在设置里填写 API Key"))?;
-        let msgs: Vec<Value> = messages.iter().map(|m| json!({"role": m.role, "content": m.content})).collect();
-        net::client()
-            .post(anthropic_url(&p.base_url))
-            .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&json!({ "model": p.model, "max_tokens": max_tokens, "system": system, "messages": msgs, "stream": true }))
-    } else {
-        let mut msgs = vec![json!({"role": "system", "content": system})];
-        msgs.extend(messages.iter().map(|m| json!({"role": m.role, "content": m.content})));
-        let mut body = json!({ "model": p.model, "messages": msgs, "stream": true, "max_tokens": max_tokens });
-        if json_mode { body["response_format"] = json!({"type": "json_object"}); }
-        let mut r = net::client().post(openai_url(&p.base_url)).json(&body);
-        if needs_opencode_session(&p.base_url) { r = r.header("x-opencode-session", opencode_session()); }
-        if let Some(k) = key.filter(|k| !k.is_empty()) { r = r.bearer_auth(k); }
-        r
-    };
-    let res = req.send().await.map_err(|e| anyhow!("连不上模型服务：{e}"))?;
-    let status = res.status();
-    if !status.is_success() {
+    if anthropic && key.is_none() { return Err(anyhow!("请先在设置里填写 API Key")); }
+    let (mut completion_tokens, mut json) = (false, json_mode);
+    let mut tries = 0;
+    let res = loop {
+        tries += 1;
+        let req = if anthropic {
+            let msgs: Vec<Value> = messages.iter().map(|m| json!({"role": m.role, "content": m.content})).collect();
+            net::client()
+                .post(anthropic_url(&p.base_url))
+                .header("x-api-key", key.clone().unwrap_or_default())
+                .header("anthropic-version", "2023-06-01")
+                .json(&json!({ "model": p.model, "max_tokens": max_tokens, "system": system, "messages": msgs, "stream": true }))
+        } else {
+            let mut msgs = vec![json!({"role": "system", "content": system})];
+            msgs.extend(messages.iter().map(|m| json!({"role": m.role, "content": m.content})));
+            let mut body = json!({ "model": p.model, "messages": msgs, "stream": true });
+            body[if completion_tokens { "max_completion_tokens" } else { "max_tokens" }] = json!(max_tokens);
+            if json { body["response_format"] = json!({"type": "json_object"}); }
+            let mut r = net::client().post(openai_url(&p.base_url)).json(&body);
+            if needs_opencode_session(&p.base_url) { r = r.header("x-opencode-session", opencode_session()); }
+            if let Some(k) = key.as_ref().filter(|k| !k.is_empty()) { r = r.bearer_auth(k); }
+            r
+        };
+        let res = req.send().await.map_err(|e| anyhow!("连不上模型服务：{e}"))?;
+        let status = res.status();
+        if status.is_success() { break res; }
         let body = res.text().await.unwrap_or_default();
+        let l = body.to_lowercase();
+        if !anthropic && status.as_u16() == 400 && tries < 3 {
+            if !completion_tokens && l.contains("max_completion_tokens") { completion_tokens = true; continue; }
+            if json && (l.contains("response_format") || l.contains("json_object") || l.contains("json mode")) { json = false; continue; }
+        }
         return Err(api_error(status.as_u16(), &body));
-    }
+    };
     let mut stream = res.bytes_stream();
     let mut lines = LineBuf::default();
     let mut full = String::new();
-    // Reasoning models stream their thinking separately; if that is all that came, say so (usually the
-    // length limit ran out while thinking) instead of a bare "nothing returned".
-    let (mut thought, mut cut) = (false, false);
+    let mut think = ThinkFilter::default();
+    let (mut thought, mut cut, mut streamed) = (false, false, false);
+    let mut raw = String::new();
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) { return Err(anyhow!("已停止")); }
         lines.push(&chunk.map_err(|e| anyhow!("连接中断：{e}"))?);
         while let Some(line) = lines.next_line() {
             let line = line.trim().to_string();
-            let Some(data) = line.strip_prefix("data:") else { continue };
+            let Some(data) = line.strip_prefix("data:") else { if !streamed && raw.len() < 4_000_000 { raw.push_str(&line); raw.push('\n'); } continue };
+            streamed = true;
             let data = data.trim();
-            if data == "[DONE]" { return finish(full, thought, cut); }
+            if data == "[DONE]" { return finish(full, thought || think.saw, cut); }
             let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
             let piece = if anthropic {
                 if v["delta"]["thinking"].is_string() { thought = true; }
@@ -133,21 +148,67 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
                 let d = &v["choices"][0]["delta"];
                 if d["reasoning_content"].as_str().is_some_and(|x| !x.is_empty()) || d["reasoning"].as_str().is_some_and(|x| !x.is_empty()) { thought = true; }
                 if v["choices"][0]["finish_reason"].as_str() == Some("length") { cut = true; }
-                d["content"].as_str().map(String::from)
+                text_of(&d["content"])
             };
-            if let Some(piece) = piece.filter(|p| !p.is_empty()) {
+            if let Some(piece) = piece.map(|x| think.feed(&x)).filter(|p| !p.is_empty()) {
                 full.push_str(&piece);
                 on_delta(&piece);
             }
         }
     }
-    finish(full, thought, cut)
+    // Not a stream after all: one JSON body (OpenAI-style message or Anthropic content blocks).
+    if !streamed {
+        let rest = lines.rest();
+        let v: Value = serde_json::from_str(format!("{raw}{rest}").trim()).unwrap_or(Value::Null);
+        if let Some(e) = v["error"]["message"].as_str() { return Err(anyhow!("模型服务出错：{e}")); }
+        let msg = &v["choices"][0]["message"];
+        if msg["reasoning_content"].is_string() || msg["reasoning"].is_string() { thought = true; }
+        if v["choices"][0]["finish_reason"].as_str() == Some("length") || v["stop_reason"].as_str() == Some("max_tokens") { cut = true; }
+        let text = text_of(&msg["content"]).or_else(|| text_of(&v["content"])).unwrap_or_default();
+        let text = think.feed(&text);
+        if !text.is_empty() { on_delta(&text); full.push_str(&text); }
+    }
+    finish(full, thought || think.saw, cut)
+}
+
+/// Message content as text: a string, or an array of parts ({type:"text", text}).
+fn text_of(v: &Value) -> Option<String> {
+    if let Some(s) = v.as_str() { return Some(s.to_string()); }
+    let parts = v.as_array()?;
+    Some(parts.iter().filter(|x| x["type"].as_str().is_none_or(|t| t == "text" || t == "output_text")).filter_map(|x| x["text"].as_str()).collect())
 }
 
 fn finish(full: String, thought: bool, cut: bool) -> Result<String> {
-    if !full.trim().is_empty() { return Ok(full); }
+    if !full.trim().is_empty() { return Ok(full.trim_start().to_string()); }
     if thought || cut { return Err(anyhow!("模型把篇幅都用在了思考上，没有写出正文。请重试，或换一个不带深度思考的模型")); }
     Err(anyhow!("模型没有返回内容"))
+}
+
+/// Drops <think>…</think> (some models and relays put their reasoning in the content) across stream pieces.
+#[derive(Default)]
+struct ThinkFilter { inside: bool, pending: String, saw: bool }
+
+impl ThinkFilter {
+    fn feed(&mut self, piece: &str) -> String {
+        let mut s = std::mem::take(&mut self.pending) + piece;
+        let mut out = String::new();
+        loop {
+            let tag = if self.inside { "</think>" } else { "<think>" };
+            if let Some(i) = s.find(tag) {
+                if !self.inside { out.push_str(&s[..i]); }
+                self.inside = !self.inside;
+                if self.inside { self.saw = true; }
+                s = s[i + tag.len()..].to_string();
+                continue;
+            }
+            // Keep a possible partial tag for the next piece.
+            let keep = (1..tag.len()).rev().find(|&n| s.len() >= n && s.is_char_boundary(s.len() - n) && tag.starts_with(&s[s.len() - n..])).unwrap_or(0);
+            let (now, later) = s.split_at(s.len() - keep);
+            if !self.inside { out.push_str(now); }
+            self.pending = later.to_string();
+            return out;
+        }
+    }
 }
 
 /// Bytes from a stream, handed out as whole lines. Decoding per network chunk would split a Chinese
@@ -162,6 +223,8 @@ impl LineBuf {
         let line: Vec<u8> = self.bytes.drain(..=pos).collect();
         Some(String::from_utf8_lossy(&line[..pos]).into_owned())
     }
+    /// What's left without a final newline.
+    fn rest(&mut self) -> String { String::from_utf8_lossy(&std::mem::take(&mut self.bytes)).into_owned() }
 }
 
 #[cfg(test)]
@@ -179,5 +242,27 @@ mod line_buf_tests {
         }
         assert_eq!(got, ["data: 黄仁勋能", "", "data: [DONE]"]);
         assert!(!got.concat().contains('\u{FFFD}'));
+    }
+}
+
+#[cfg(test)]
+mod reply_tests {
+    use super::*;
+    #[test]
+    fn think_tags_are_dropped_across_pieces() {
+        let mut f = ThinkFilter::default();
+        let out: String = ["<thi", "nk>let me see</th", "ink>\n答案", "是 <b>42</b>"].iter().map(|p| f.feed(p)).collect();
+        assert_eq!(out, "\n答案是 <b>42</b>");
+        assert!(f.saw);
+        let mut g = ThinkFilter::default();
+        assert_eq!(g.feed("a < b"), "a < b");
+        assert_eq!(g.feed(" x <"), " x ");
+        assert_eq!(g.feed(" ok"), "< ok");
+    }
+    #[test]
+    fn content_as_parts_and_empty_answers() {
+        assert_eq!(text_of(&json!([{ "type": "text", "text": "你" }, { "type": "image_url" }, { "text": "好" }])).unwrap(), "你好");
+        assert!(finish(String::new(), true, false).unwrap_err().to_string().contains("思考"));
+        assert_eq!(finish("  \n答".into(), false, false).unwrap(), "答");
     }
 }

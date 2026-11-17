@@ -243,7 +243,12 @@ pub async fn complete(kind: Kind, path: &Path, mut req: Request<'_>, cancel: Arc
     let conn = POOL.take(kind, path, req.system, req.model).await?;
     let result = conn.ask(&req, cancel, &on_delta).await;
     POOL.give_back(conn, result.is_ok()).await;
-    result.map_err(|e| friendly(kind, e))
+    match result {
+        // An agent can finish a turn with nothing to show (only thinking, a refusal, a cut-off): say so.
+        Ok(text) if text.trim().is_empty() => Err(anyhow!("{} 没有给出回答（可能只输出了思考过程，或被中途打断），请重试或换一个模型", display(kind))),
+        Ok(text) => Ok(text),
+        Err(e) => Err(friendly(kind, e)),
+    }
 }
 
 fn friendly(kind: Kind, e: anyhow::Error) -> anyhow::Error {
@@ -549,6 +554,10 @@ impl Codex {
             if v["params"]["threadId"].as_str().is_some_and(|t| t != thread_id) { continue; }
             match m {
                 "item/agentMessage/delta" => if let Some(d) = v["params"]["delta"].as_str() { text.push_str(d); on_delta(d); },
+                // The finished message, in case its pieces never came as deltas.
+                "item/completed" => if text.is_empty() && v["params"]["item"]["type"].as_str() == Some("agentMessage") {
+                    if let Some(t) = v["params"]["item"]["text"].as_str() { text.push_str(t); on_delta(t); }
+                },
                 "turn/completed" => {
                     let turn = &v["params"]["turn"];
                     if turn["status"].as_str() == Some("failed") {
