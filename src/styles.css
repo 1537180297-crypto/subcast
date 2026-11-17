@@ -832,7 +832,7 @@ body.resizing iframe, body.resizing video { pointer-events: none; }
 .gen-wrap { flex: 1; min-height: 0; overflow-y: auto; display: flex; padding: 24px 20px; }
 .gen-card { margin: auto; width: 100%; max-width: 360px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
 .gen-icon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 6px; border-radius: 12px; background: var(--soft); color: var(--text-2); }
-.gen-title { font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif; font-size: 20px; font-weight: 600; line-height: 1.35; color: var(--text); }
+.gen-title { font-size: 20px; font-weight: 600; line-height: 1.35; color: var(--text); }
 .gen-note { font-size: 13.5px; line-height: 1.65; color: var(--text-2); text-wrap: pretty; }
 .gen-warn { width: 100%; padding: 8px 10px; border-radius: 8px; background: var(--soft); color: var(--text-2); font-size: 12.5px; line-height: 1.5; text-align: left; overflow-wrap: anywhere; }
 .gen-warn > span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -1104,7 +1104,7 @@ input:focus, select:focus, textarea:focus { border-color: color-mix(in srgb, var
 
 /* shared empty state */
 .empty-state .es-art { display: grid; place-items: center; min-height: 48px; }
-.es-title { font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif; font-size: 17px; font-weight: 600; color: var(--text); }
+.es-title { font-size: 17px; font-weight: 600; color: var(--text); }
 .es-note { font-size: 13px; line-height: 1.6; color: var(--text-2); max-width: 300px; text-wrap: pretty; }
 .connect-card .es-title { font-size: 16px; }
 .night-note { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
@@ -1748,14 +1748,14 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .hero-left { font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) { .hero-cover { width: 104px; height: 104px; } .hero-cover.wide { width: 185px; } .hero-meta { min-height: 104px; } }
 
-/* ---- 收听统计: a narrative opening, then findings. Serif for the sentences that speak to you, tabular
-   numerals for the figures. ---- */
+/* ---- 收听统计: a narrative opening, then findings. One typeface throughout (figures sit on the same baseline as the words);
+   size and weight carry the hierarchy, tabular numerals keep figures steady. ---- */
 .stats-lede-card { padding: 26px 26px 18px; border-radius: 18px; margin-bottom: 16px;
   background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 13%, var(--panel)), var(--panel) 60%); border: 1px solid var(--line); }
-.stats-lede { font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif; font-size: 24px; line-height: 1.6; color: var(--text); margin: 0; letter-spacing: .01em; text-wrap: pretty; }
-.stats-lede b { font-family: var(--font, system-ui); font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.stats-lede { font-size: 24px; font-weight: 500; line-height: 1.55; color: var(--text); margin: 0; letter-spacing: -.005em; text-wrap: pretty; font-variant-numeric: tabular-nums; }
+.stats-lede b { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
 .stats-lede b[title] { text-decoration: underline dotted color-mix(in srgb, var(--accent) 50%, transparent); text-underline-offset: 6px; cursor: help; }
-.stats-lede-sub { font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-size: 15px; color: var(--text-2); margin: 6px 0 0; cursor: help; }
+.stats-lede-sub { font-size: 15px; color: var(--text-2); margin: 6px 0 0; cursor: help; }
 .stats-lede-card .stat-tiles { margin: 20px 0 0; }
 .stats-lede-card .stat-tile { background: color-mix(in srgb, var(--panel) 70%, transparent); }
 .stat-tile b { font-size: 21px; }
@@ -1776,12 +1776,12 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .clock-bar.zero { stroke: var(--line); }
 .clock-bar.peak { stroke: var(--accent); }
 .clock-label { font-size: 10px; fill: var(--muted); text-anchor: middle; font-variant-numeric: tabular-nums; }
-.persona { margin: 6px 0 2px; font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-size: 20px; }
+.persona { margin: 6px 0 2px; font-size: 19px; font-weight: 650; }
 .persona-line { margin: 2px 0; max-width: 34em; line-height: 1.6; }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 16px; }
 .fact { padding: 16px 18px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
 .fact b { display: block; font-size: 26px; font-weight: 700; letter-spacing: -.01em; color: var(--accent); font-variant-numeric: tabular-nums; }
-.fact p { margin: 8px 0 0; font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-size: 14px; line-height: 1.65; color: var(--text-2); }
+.fact p { margin: 8px 0 0; font-size: 14px; line-height: 1.65; color: var(--text-2); }
 .topic-map { display: flex; flex-wrap: wrap; gap: 6px; min-height: 120px; align-content: stretch; }
 .topic-tile { flex-basis: 90px; min-height: 56px; display: flex; flex-direction: column; justify-content: space-between; padding: 10px 12px; border-radius: 10px; color: var(--text); }
 .topic-tile.t0 { background: color-mix(in srgb, var(--accent) 32%, var(--panel)); }
@@ -1797,7 +1797,7 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .ears-note { margin: 10px 0 0; line-height: 1.6; }
 .portrait { margin-top: 16px; }
 .portrait .stats-card-h h2 { display: inline-flex; align-items: center; gap: 6px; }
-.portrait-text { font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-size: 15px; line-height: 1.8; }
+.portrait-text { font-size: 15px; line-height: 1.8; }
 .portrait-text p { margin: 0 0 8px; }
 .portrait-cta { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .portrait-cta .muted { flex: 1 1 260px; margin: 0; }
