@@ -715,7 +715,6 @@ const dict: Record<string, string> = {
   "浏览器": "Browser",
   "从浏览器导入": "Import from browser",
   "Safari 需要先在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许 SubCast。": "For Safari, first allow SubCast in System Settings › Privacy & Security › Full Disk Access.",
-  "系统可能会问是否允许读取「{name} Safe Storage」，选「允许」。": "macOS may ask whether to allow access to \"{name} Safe Storage\". Choose \"Allow\".",
   "登录信息只在本机读取，读完就删除，不会上传。": "Sign-in data is read only on this Mac, deleted right after, and never uploaded.",
   "小宇宙和其他播客 App": "Xiaoyuzhou and other podcast apps",
   "导入订阅文件：OPML（小宇宙、Pocket Casts、Overcast 等），或 Google Takeout、NewPipe、FreeTube 的导出。": "Import a subscriptions file: OPML (Xiaoyuzhou, Pocket Casts, Overcast, etc.), or an export from Google Takeout, NewPipe or FreeTube.",
@@ -809,7 +808,6 @@ const dict: Record<string, string> = {
   "本机 AI 没有返回会话": "Local AI didn't return a session",
   "本机 AI 出错": "Local AI error",
   "读取浏览器登录信息超时": "Timed out reading browser sign-in data",
-  "没有找到这个浏览器的数据，换一个浏览器试试": "No data found for this browser. Try another browser",
   "没有权限读取这个浏览器的数据（Safari 需要在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许 SubCast）": "No permission to read this browser's data (for Safari, allow SubCast in System Settings › Privacy & Security › Full Disk Access)",
   "这个浏览器里没有登录 YouTube{}": "Not signed in to YouTube in this browser{}",
   "没有读到 YouTube 的订阅页": "Couldn't read the YouTube subscriptions page",
@@ -1024,6 +1022,12 @@ const dict: Record<string, string> = {
   "音量": "Volume",
   "调高音量": "Volume up",
   "调低音量": "Volume down",
+  "macOS 需要你允许 SubCast 读取 {name} 的数据，才能借用它的 YouTube 登录。": "macOS needs your permission for SubCast to read {name}'s data before it can use your YouTube sign-in there.",
+  "点下面的按钮打开「文件和文件夹」": "Click the button below to open Files and Folders",
+  "在 SubCast 下打开「{name}」": "Under SubCast, turn on \"{name}\"",
+  "回到 SubCast，会自动重试": "Come back to SubCast and it tries again",
+  "打开系统设置": "Open System Settings",
+  "系统会问是否允许 SubCast 读取 {name} 的数据，选「允许」。": "macOS will ask whether SubCast may read {name}'s data; choose Allow. ",
 };
 
 export default dict;

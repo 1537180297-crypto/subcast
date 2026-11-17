@@ -775,7 +775,6 @@ const dict: Record<string, string> = {
   "浏览器": "瀏覽器",
   "从浏览器导入": "從瀏覽器匯入",
   "Safari 需要先在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许 SubCast。": "Safari 需要先在 系統設定 › 隱私權與安全性 › 完整磁碟取用權限 裡允許 SubCast。",
-  "系统可能会问是否允许读取「{name} Safe Storage」，选「允许」。": "系統可能會問是否允許讀取「{name} Safe Storage」，選「允許」。",
   "登录信息只在本机读取，读完就删除，不会上传。": "登入資訊只在本機讀取，讀完就刪除，不會上傳。",
   "小宇宙和其他播客 App": "小宇宙和其他 Podcast App",
   "导入订阅文件：OPML（小宇宙、Pocket Casts、Overcast 等），或 Google Takeout、NewPipe、FreeTube 的导出。": "匯入訂閱檔案：OPML（小宇宙、Pocket Casts、Overcast 等），或 Google Takeout、NewPipe、FreeTube 的匯出檔。",
@@ -869,7 +868,6 @@ const dict: Record<string, string> = {
   "本机 AI 没有返回会话": "本機 AI 沒有傳回工作階段",
   "本机 AI 出错": "本機 AI 出錯",
   "读取浏览器登录信息超时": "讀取瀏覽器登入資訊逾時",
-  "没有找到这个浏览器的数据，换一个浏览器试试": "沒有找到這個瀏覽器的資料，換一個瀏覽器試試",
   "没有权限读取这个浏览器的数据（Safari 需要在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许 SubCast）": "沒有權限讀取這個瀏覽器的資料（Safari 需要在 系統設定 › 隱私權與安全性 › 完整磁碟取用權限 裡允許 SubCast）",
   "这个浏览器里没有登录 YouTube{}": "這個瀏覽器裡沒有登入 YouTube{}",
   "没有读到 YouTube 的订阅页": "沒有讀到 YouTube 的訂閱頁",
@@ -1084,6 +1082,12 @@ const dict: Record<string, string> = {
   "音量": "音量",
   "调高音量": "調高音量",
   "调低音量": "調低音量",
+  "macOS 需要你允许 SubCast 读取 {name} 的数据，才能借用它的 YouTube 登录。": "macOS 需要你允許 SubCast 讀取 {name} 的資料，才能借用它的 YouTube 登入。",
+  "点下面的按钮打开「文件和文件夹」": "點下面的按鈕打開「檔案與資料夾」",
+  "在 SubCast 下打开「{name}」": "在 SubCast 下打開「{name}」",
+  "回到 SubCast，会自动重试": "回到 SubCast，會自動重試",
+  "打开系统设置": "打開系統設定",
+  "系统会问是否允许 SubCast 读取 {name} 的数据，选「允许」。": "系統會問是否允許 SubCast 讀取 {name} 的資料，選「允許」。",
 };
 
 export default dict;

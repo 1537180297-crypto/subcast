@@ -105,6 +105,7 @@ export const api = {
   uiCheck: () => invoke<string>("ui_check"),
   refreshConfig: () => invoke<void>("refresh_config"),
   prepareYoutube: () => invoke<void>("prepare_youtube"),
+  openPrivacySettings: () => invoke<void>("open_privacy_settings"),
   youtubeTracks: (episodeId: string) => invoke<{ language: string; auto: boolean }[]>("youtube_tracks", { episodeId }),
   useYoutubeTrack: (episodeId: string, language: string, auto: boolean) => invoke<Transcript>("use_youtube_track", { episodeId, language, auto }),
   translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
@@ -170,3 +171,5 @@ export const rawErrorText = (e: unknown) => (typeof e === "string" ? e : e insta
 /** YouTube's "confirm you're not a bot" check, as the backend words it (asr.rs with_bot_fallback). */
 export const isBotCheck = (m: string) => m.includes("YouTube 要求验证「不是机器人」。选一个"); // i18n-ignore (matches the backend's text)
 export const errorText = (e: unknown) => tr(rawErrorText(e));
+/** macOS refused SubCast access to a browser's data (import.rs NEEDS_ACCESS). */
+export const needsBrowserAccess = (m: string) => m.includes("需要你允许 SubCast 读取"); // i18n-ignore (matches the backend's text)

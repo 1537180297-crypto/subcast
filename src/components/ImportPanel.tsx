@@ -4,7 +4,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, FileUp, Loader2, Youtube } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { api, errorText } from "../lib/api";
+import { api, errorText, needsBrowserAccess, rawErrorText } from "../lib/api";
+import { BrowserAccess, browserName } from "./BrowserAccess";
 import { useStore } from "../store";
 import { t, IS_MAC } from "../lib/i18n";
 import { sameFeed } from "../lib/picks";
@@ -66,6 +67,7 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<Browser | "file" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [denied, setDenied] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
   const [browser, setBrowser] = useState<Browser>("chrome");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -77,11 +79,11 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
     if (!list.length) setError(t("文件里没有找到订阅"));
   };
   const fromBrowser = async () => {
-    setBusy(browser); setError(null); setItems(null);
+    setBusy(browser); setError(null); setDenied(false); setItems(null);
     try {
       const ch = await invoke<{ id: string; title: string; thumbnail: string }[]>("youtube_subscriptions", { browser });
       offer(ch.map((c) => ({ input: ytChannel(c.id), title: c.title, thumb: c.thumbnail, source: "youtube" })));
-    } catch (e) { setError(errorText(e)); } finally { setBusy(null); }
+    } catch (e) { if (needsBrowserAccess(rawErrorText(e))) setDenied(true); else setError(errorText(e)); } finally { setBusy(null); }
   };
   const fromFile = async (f: File) => {
     setBusy("file"); setError(null); setItems(null);
@@ -103,7 +105,7 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
     setProgress(null); setItems(null);
     onDone?.();
   };
-  useEffect(() => { setError(null); }, [browser]);
+  useEffect(() => { setError(null); setDenied(false); }, [browser]);
 
   if (items?.length) {
     const fresh = items.filter((x) => !has(x.input));
@@ -147,9 +149,10 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
           <button className="btn primary sm" onClick={() => void fromBrowser()} disabled={busy != null}>{busy === browser ? <><Loader2 size={13} className="spin" /> {t("正在读取…")}</> : t("从浏览器导入")}</button>
         </div>
         <p className="muted small import-note">
-          {browser === "safari" ? t("Safari 需要先在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许 SubCast。") : IS_MAC && browser !== "firefox" ? t("系统可能会问是否允许读取「{name} Safe Storage」，选「允许」。", { name: BROWSERS.find(([k]) => k === browser)![1] }) : ""}
+          {browser === "safari" ? t("Safari 需要先在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许 SubCast。") : IS_MAC ? t("系统会问是否允许 SubCast 读取 {name} 的数据，选「允许」。", { name: browserName(browser) }) : ""}
           {t("登录信息只在本机读取，读完就删除，不会上传。")}
         </p>
+        {denied && <BrowserAccess browser={browser} onRetry={() => void fromBrowser()} />}
       </div>
       <div className="import-card">
         <div className="import-card-head"><span className="import-icon"><FileUp size={18} /></span><div><p className="import-title">{t("小宇宙和其他播客 App")}</p><p className="muted small">{t("导入订阅文件：OPML（小宇宙、Pocket Casts、Overcast 等），或 Google Takeout、NewPipe、FreeTube 的导出。")}</p></div></div>
