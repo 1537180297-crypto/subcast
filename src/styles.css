@@ -1747,3 +1747,59 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .hero-foot { margin-top: auto; padding-top: 12px; }
 .hero-left { font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) { .hero-cover { width: 104px; height: 104px; } .hero-cover.wide { width: 185px; } .hero-meta { min-height: 104px; } }
+
+/* ---- 收听统计: a narrative opening, then findings. Serif for the sentences that speak to you, tabular
+   numerals for the figures. ---- */
+.stats-lede-card { padding: 26px 26px 18px; border-radius: 18px; margin-bottom: 16px;
+  background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 13%, var(--panel)), var(--panel) 60%); border: 1px solid var(--line); }
+.stats-lede { font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif; font-size: 24px; line-height: 1.6; color: var(--text); margin: 0; letter-spacing: .01em; text-wrap: pretty; }
+.stats-lede b { font-family: var(--font, system-ui); font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.stats-lede b[title] { text-decoration: underline dotted color-mix(in srgb, var(--accent) 50%, transparent); text-underline-offset: 6px; cursor: help; }
+.stats-lede-sub { font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-size: 15px; color: var(--text-2); margin: 6px 0 0; cursor: help; }
+.stats-lede-card .stat-tiles { margin: 20px 0 0; }
+.stats-lede-card .stat-tile { background: color-mix(in srgb, var(--panel) 70%, transparent); }
+.stat-tile b { font-size: 21px; }
+.stat-tile > .muted:last-child:not(:first-child) { font-size: 11.5px; }
+.top-shows li { grid-template-columns: 18px 40px 1fr auto; }
+.top-shows img, .top-ph { width: 40px; height: 40px; }
+.top-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.top-title .clamp1 { min-width: 0; }
+.top-badge { flex: none; font-style: normal; font-size: 10.5px; padding: 1px 6px; border-radius: 99px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.top-badge.plain { background: var(--soft); color: var(--text-2); }
+.top-meta { font-size: 11.5px; }
+.top-time { color: var(--text); font-variant-numeric: tabular-nums; }
+.clock-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.clock-card .stats-card-h { align-self: stretch; }
+.clock { width: 200px; height: 200px; }
+.clock-face { fill: var(--soft); }
+.clock-bar { stroke: color-mix(in srgb, var(--accent) 45%, var(--line)); stroke-width: 6; stroke-linecap: round; }
+.clock-bar.zero { stroke: var(--line); }
+.clock-bar.peak { stroke: var(--accent); }
+.clock-label { font-size: 10px; fill: var(--muted); text-anchor: middle; font-variant-numeric: tabular-nums; }
+.persona { margin: 6px 0 2px; font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-size: 20px; }
+.persona-line { margin: 2px 0; max-width: 34em; line-height: 1.6; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 16px; }
+.fact { padding: 16px 18px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
+.fact b { display: block; font-size: 26px; font-weight: 700; letter-spacing: -.01em; color: var(--accent); font-variant-numeric: tabular-nums; }
+.fact p { margin: 8px 0 0; font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-size: 14px; line-height: 1.65; color: var(--text-2); }
+.topic-map { display: flex; flex-wrap: wrap; gap: 6px; min-height: 120px; align-content: stretch; }
+.topic-tile { flex-basis: 90px; min-height: 56px; display: flex; flex-direction: column; justify-content: space-between; padding: 10px 12px; border-radius: 10px; color: var(--text); }
+.topic-tile.t0 { background: color-mix(in srgb, var(--accent) 32%, var(--panel)); }
+.topic-tile.t1 { background: color-mix(in srgb, var(--accent) 22%, var(--panel)); }
+.topic-tile.t2 { background: color-mix(in srgb, var(--accent) 15%, var(--panel)); }
+.topic-tile.t3, .topic-tile.t4, .topic-tile.t5 { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.topic-name { font-size: 13px; font-weight: 600; }
+.topic-pct { font-size: 12px; color: var(--text-2); }
+.ears { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; height: 120px; align-items: end; }
+.ears-col { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; gap: 4px; }
+.ears-bar { display: block; width: 100%; border-radius: 4px 4px 2px 2px; background: linear-gradient(to top, color-mix(in srgb, var(--accent) 55%, transparent), var(--accent)); min-height: 0; }
+.ears-x { font-size: 10px; color: var(--muted); height: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ears-note { margin: 10px 0 0; line-height: 1.6; }
+.portrait { margin-top: 16px; }
+.portrait .stats-card-h h2 { display: inline-flex; align-items: center; gap: 6px; }
+.portrait-text { font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-size: 15px; line-height: 1.8; }
+.portrait-text p { margin: 0 0 8px; }
+.portrait-cta { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.portrait-cta .muted { flex: 1 1 260px; margin: 0; }
+.stats > .stats-card:last-of-type { margin-top: 16px; }
+@container stats (max-width: 720px) { .stat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stats-grid { grid-template-columns: minmax(0, 1fr); } .stats-lede { font-size: 20px; } }

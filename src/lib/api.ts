@@ -4,7 +4,7 @@ import { tr } from "./i18n";
 
 /** A match inside one show: which part of the episode matched, a few words around it, and for subtitles the time. */
 /** One day-hour of listening to one episode (from the player; seeks don't count). */
-export interface ListenRow { day: string; hour: number; episodeId: string; showId: string; seconds: number; translated: boolean; showTitle: string; kind: string; cover: string; episodeTitle: string; video: boolean }
+export interface ListenRow { day: string; hour: number; episodeId: string; showId: string; seconds: number; translated: boolean; showTitle: string; kind: string; cover: string; episodeTitle: string; video: boolean; duration: number; progress: number; published: number }
 
 export interface ShowHit { episode: Episode; field: "title" | "notes" | "transcript"; snippet: string; time?: number | null }
 
