@@ -829,6 +829,7 @@ const dict: Record<string, string> = {
   "搜索范围是标题、简介和已有字幕的单集": "搜尋範圍是標題、簡介和已有字幕的單集",
   "校验清单里没有 {name}": "校驗清單裡沒有 {name}",
   "yt-dlp 校验失败（{base}）": "yt-dlp 校驗失敗（{base}）",
+  "更多 {n} 个": "更多 {n} 個",
 };
 
 export default dict;

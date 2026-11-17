@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Loader2, RefreshCw, Settings2, Square, SquarePen } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Loader2, RefreshCw, Settings2, Square, SquarePen } from "lucide-react";
 import { api, errorText, rawErrorText, type ChatMessage, type Episode } from "../lib/api";
 import { askEpisode, summaryPrompt, transcriptForModel } from "../lib/ai";
 import { t, tk } from "../lib/i18n";
@@ -61,6 +61,17 @@ function useSeek(ep: Episode) {
   };
 }
 
+
+// How often each quick question was used, on this computer; the most used come first.
+const USE_KEY = "subcast-prompt-use";
+function readUse(): Record<string, number> { try { return JSON.parse(localStorage.getItem(USE_KEY) || "{}"); } catch { return {}; } }
+function countUse(id: string) { try { const u = readUse(); u[id] = (u[id] ?? 0) + 1; localStorage.setItem(USE_KEY, JSON.stringify(u)); } catch { /* storage off */ } }
+/** Stable: unused prompts keep their configured order behind the used ones. */
+function byUse<T extends { id: string }>(list: T[]): T[] {
+  const u = readUse();
+  return list.map((p, i) => ({ p, i })).sort((a, b) => (u[b.p.id] ?? 0) - (u[a.p.id] ?? 0) || a.i - b.i).map((x) => x.p);
+}
+
 export function ChatPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
   const connected = useConnected();
@@ -77,7 +88,10 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   const scroller = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
-  const prompts = quickPrompts(settings).filter((p) => p.enabled);
+  // The four the listener uses most (the first four by default) are shown; the rest open with "More".
+  const [allPrompts, setAllPrompts] = useState(false);
+  const prompts = byUse(quickPrompts(settings).filter((p) => p.enabled));
+  const shownPrompts = allPrompts ? prompts : prompts.slice(0, 4);
 
   useEffect(() => {
     setMessages([]); setArchive([]);
@@ -153,17 +167,21 @@ export function ChatPanel({ ep }: { ep: Episode }) {
             </div>
             {!transcript && <p className="setup-note wait-note"><span className="wait-dots" aria-hidden><i /><i /><i /></span><span>{t("字幕准备好后就可以提问。")}</span></p>}
             <div className="prompt-list">
-              {prompts.map((p) => {
+              {shownPrompts.map((p) => {
                 const Icon = promptIcon(p.id);
                 return (
-                  <button key={p.id} type="button" className="prompt-row" title={p.body} disabled={blocked} onClick={() => send(p.body)}>
+                  <button key={p.id} type="button" className="prompt-row" title={p.body} disabled={blocked} onClick={() => { countUse(p.id); send(p.body); }}>
                     <Icon size={15} className="pr-icon" />
                     <span className="pr-text"><span className="pr-title">{p.title}</span><span className="pr-sub">{p.body}</span></span>
                   </button>
                 );
               })}
             </div>
+            <div className="prompt-foot">
+              {prompts.length > 4 && <button type="button" className="link-btn" aria-expanded={allPrompts} onClick={() => setAllPrompts(!allPrompts)}>{allPrompts ? t("收起") : t("更多 {n} 个", { n: prompts.length - 4 })}<ChevronDown size={12} className={allPrompts ? "flip" : ""} /></button>}
+              <span className="spacer" />
             <button type="button" className="link-btn" onClick={() => setPrefsOpen(true)}><Settings2 size={13} /> {t("自定义提示词和回答偏好")}</button>
+            </div>
             <NightNote />
           </div>
         )}

@@ -769,6 +769,7 @@ const dict: Record<string, string> = {
   "搜索范围是标题、简介和已有字幕的单集": "Searches titles, show notes, and subtitles of episodes that have them",
   "校验清单里没有 {name}": "{name} is missing from the checksum list",
   "yt-dlp 校验失败（{base}）": "yt-dlp failed its checksum ({base})",
+  "更多 {n} 个": "{n} more",
 };
 
 export default dict;

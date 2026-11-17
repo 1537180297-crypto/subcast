@@ -769,6 +769,7 @@ const dict: Record<string, string> = {
   "搜索范围是标题、简介和已有字幕的单集": "タイトル、概要、字幕があるエピソードの字幕を検索します",
   "校验清单里没有 {name}": "チェックサム一覧に {name} がありません",
   "yt-dlp 校验失败（{base}）": "yt-dlp のチェックサムが一致しません（{base}）",
+  "更多 {n} 个": "ほか {n} 件",
 };
 
 export default dict;
