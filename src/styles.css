@@ -1559,8 +1559,11 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
   display: grid; grid-template-rows: auto auto; row-gap: 12px; justify-items: center; text-align: center; padding: 4px 8px; width: 100%; }
 .asub-line { display: flex; flex-direction: column; gap: 3px; width: min(100%, 46em); animation: asub-in .28s var(--ease, ease) both; }
 .asub-line p { margin: 0; line-height: var(--lh); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; }
-.asub-line.now .sub-zh { font-size: var(--zh-now); font-weight: 600; color: var(--text); -webkit-line-clamp: 2; height: calc(var(--zh-now) * var(--lh) * 2); display: -webkit-box; align-content: end; }
-.asub-line.now .sub-orig { font-size: var(--or-now); color: var(--text-2); -webkit-line-clamp: 2; height: calc(var(--or-now) * var(--lh) * 2); }
+/* The sentence being spoken: its block keeps one fixed height (room for two lines of each language) and the
+   lines sit together in the middle of it, so a one-line translation doesn't leave a gap above the original. */
+.asub-line.now { height: calc((var(--zh-now) + var(--or-now)) * var(--lh) * 2 + 3px); justify-content: center; }
+.asub-line.now .sub-zh { font-size: var(--zh-now); font-weight: 600; color: var(--text); -webkit-line-clamp: 2; }
+.asub-line.now .sub-orig { font-size: var(--or-now); color: var(--text-2); -webkit-line-clamp: 2; }
 .asub-line.next { opacity: .4; }
 .asub-line.next .sub-zh { font-size: var(--zh-next); font-weight: 500; color: var(--text); -webkit-line-clamp: 1; height: calc(var(--zh-next) * var(--lh)); }
 .asub-line.next .sub-orig { font-size: var(--or-next); color: var(--text-2); -webkit-line-clamp: 1; height: calc(var(--or-next) * var(--lh)); }
@@ -1651,3 +1654,15 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .video-error.bot-check { gap: 8px; }
 .video-error.bot-check p { margin: 0; max-width: 34em; }
 .video-error.bot-check select { height: 30px; border-radius: 8px; border: 0; padding: 0 8px; font: inherit; font-size: 13px; }
+/* Subtitles on video are sized from the video's own height (BBC: line height ~8% of the picture; Chinese line a
+   little larger than the original), so a small player, the floating window and full screen all keep the same
+   proportions. `--sub-scale` (Settings › 阅读与字幕) multiplies it. */
+.video { container: vid / size; }
+.video .subtitle-overlay { bottom: 6cqh; gap: .6cqh; }
+.video .subtitle-overlay .sub-zh { font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); line-height: 1.38; }
+.video .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-scale, 1)); line-height: 1.38; }
+.video .subtitle-overlay p { padding: .25em .55em; border-radius: .3em; }
+.video.theater .subtitle-overlay .sub-zh { font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay { bottom: 9cqh; left: 10%; right: 10%; }
+.video.theater:not(.idle) .subtitle-overlay { bottom: calc(9cqh + 56px); }

@@ -45,9 +45,9 @@ export function Sidebar() {
       </div>
       <nav>
         {nav({ kind: "latest" }, <Inbox size={16} />, t("首页"))}
-        {nav({ kind: "recent" }, <History size={16} />, t("继续收听"))}
-        {nav({ kind: "stats" }, <ChartColumn size={16} />, t("我的收听"))}
         {nav({ kind: "discover" }, <Compass size={16} />, t("发现"))}
+        {nav({ kind: "recent" }, <History size={16} />, t("继续收听"))}
+        {nav({ kind: "stats" }, <ChartColumn size={16} />, t("收听统计"))}
         {(hasDownloads || view.kind === "downloads") && nav({ kind: "downloads" }, <Download size={16} />, t("已下载"))}
       </nav>
       <div className="side-sep" />

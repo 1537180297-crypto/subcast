@@ -988,7 +988,7 @@ const dict: Record<string, string> = {
   "回到这一集": "回到這一集",
   "停止播放并关闭": "停止播放並關閉",
   "YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试": "YouTube 仍然要求驗證。請在 {browser} 裡打開 youtube.com 確認已登入後再試",
-  "我的收听": "我的收聽",
+  "收听统计": "收聽統計",
   "{n} 秒": "{n} 秒",
   "{n} 分钟": "{n} 分鐘",
   "{h} 小时": "{h} 小時",

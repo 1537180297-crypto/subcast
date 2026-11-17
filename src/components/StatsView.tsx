@@ -65,7 +65,7 @@ export function StatsView() {
   if (!rows.length) {
     return (
       <div className="page stats">
-        <h1 className="page-title">{t("我的收听")}</h1>
+        <h1 className="page-title">{t("收听统计")}</h1>
         <EmptyState art={<HeadphonesArt />} title={t("还没有收听记录")} note={t("从这一版开始，听过的每一分钟都会记在这里，只存在你的电脑上。")}>
           <button className="btn primary" onClick={() => go({ kind: "latest" })}>{t("去听一集")}</button>
         </EmptyState>
@@ -78,7 +78,7 @@ export function StatsView() {
   return (
     <div className="page stats">
       <div className="stats-head">
-        <h1 className="page-title">{t("我的收听")}</h1>
+        <h1 className="page-title">{t("收听统计")}</h1>
         <div className="seg-control" role="radiogroup">
           {RANGES.map(([k, label]) => <button key={k} role="radio" aria-checked={range === k} className={range === k ? "on" : ""} onClick={() => setRange(k)}>{t(label)}</button>)}
         </div>

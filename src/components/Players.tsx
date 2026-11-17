@@ -79,6 +79,7 @@ export function AudioEngine() {
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
       toggleMute: () => { el.muted = !el.muted; return el.muted; },
+      episodeId: audio.id,
     };
     useStore.getState().set({ player: handle });
     return () => { if (useStore.getState().player === handle) useStore.getState().set({ player: null }); };
@@ -258,6 +259,7 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             useStore.getState().set({
               length: player.getDuration?.() || ep.duration || 0,
               player: {
+                episodeId: ep.id,
                 seek: (t: number) => { player.seekTo(t, true); player.playVideo(); },
                 toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : (waiting(true), player.playVideo())),
                 play: () => { waiting(true); player.playVideo(); },
@@ -334,6 +336,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
       toggleMute: () => { el.muted = !el.muted; return el.muted; },
+      episodeId: ep.id,
     };
     useStore.getState().set({ player: handle });
     return () => {

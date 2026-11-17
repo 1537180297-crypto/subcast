@@ -20,6 +20,8 @@ export interface PlayerHandle {
   setRate(rate: number): void;
   /** Mutes or unmutes; returns whether it is muted now. */
   toggleMute?(): boolean;
+  /** The episode this player plays. A video's player can be ready before the episode becomes current. */
+  episodeId?: string;
 }
 
 interface State {
@@ -130,7 +132,8 @@ export const useStore = create<State>((set, get) => ({
     get().go({ kind: "episode", id: ep.id });
   },
   load(ep) {
-    if (get().current?.id !== ep.id) set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: null });
+    // Keep a player that already belongs to this episode (a video ready before "play" was pressed).
+    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : null }); }
   },
   notify(text) {
     set({ toast: text });
