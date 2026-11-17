@@ -75,6 +75,14 @@ function byUse<T extends { id: string }>(list: T[]): T[] {
   return list.map((p, i) => ({ p, i })).sort((a, b) => (u[b.p.id] ?? 0) - (u[a.p.id] ?? 0) || a.i - b.i).map((x) => x.p);
 }
 
+/** Each episode's conversation and the answer being written, kept outside the panel: switching tabs or episodes
+ *  mid-answer neither drops the streamed text nor shows a stale copy when the panel comes back. */
+interface ChatState { messages: ChatMessage[]; streaming: string | null; loaded: boolean }
+const useChats = create<Record<string, ChatState>>(() => ({}));
+const chatAborts = new Map<string, AbortController>();
+const putChat = (id: string, p: Partial<ChatState>) => useChats.setState((s) => ({ [id]: { ...(s[id] ?? { messages: [], streaming: null, loaded: false }), ...p } }));
+const NO_MESSAGES: ChatMessage[] = [];
+
 export function ChatPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
   const connected = useConnected();
@@ -83,14 +91,13 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   useEffect(() => { warmAgent(providerFor(useStore.getState().settings, "chat")); }, [chatProvider]);
   const settings = useStore((s) => s.settings);
   const seek = useSeek(ep);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messages = useChats((s) => s[ep.id]?.messages ?? NO_MESSAGES);
+  const streaming = useChats((s) => s[ep.id]?.streaming ?? null);
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState<string | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [archive, setArchive] = useState<ArchivedChat[]>([]);
   const [atBottom, setAtBottom] = useState(true);
-  const abort = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -100,8 +107,15 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   const shownPrompts = allPrompts ? prompts : prompts.slice(0, 4);
 
   useEffect(() => {
-    setMessages([]); setArchive([]);
-    api.getBlob(ep.id, "chat").then((raw) => { if (raw) try { setMessages(JSON.parse(raw)); } catch { /* ignore */ } });
+    setArchive([]);
+    if (!useChats.getState()[ep.id]?.loaded) {
+      api.getBlob(ep.id, "chat").then((raw) => {
+        if (useChats.getState()[ep.id]?.loaded) return;
+        let list: ChatMessage[] = [];
+        try { list = raw ? JSON.parse(raw) : []; } catch { /* ignore */ }
+        putChat(ep.id, { messages: list, loaded: true });
+      });
+    }
     api.getBlob(ep.id, "chat-archive").then((raw) => { if (raw) try { setArchive(JSON.parse(raw)); } catch { /* ignore */ } });
   }, [ep.id]);
   // Follow new text only while the reader is at the bottom; scrolling up to reread is never interrupted.
@@ -110,7 +124,7 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   const toBottom = () => { end.current?.scrollIntoView({ block: "end", behavior: "smooth" }); setAtBottom(true); };
 
   // Every change is written to the episode's record in the library database right away.
-  const save = (next: ChatMessage[]) => { setMessages(next); void api.setBlob(ep.id, "chat", JSON.stringify(next)); };
+  const save = (next: ChatMessage[]) => { putChat(ep.id, { messages: next, loaded: true }); void api.setBlob(ep.id, "chat", JSON.stringify(next)); };
   const saveArchive = (next: ArchivedChat[]) => { setArchive(next); void api.setBlob(ep.id, "chat-archive", JSON.stringify(next)); };
 
   const ask = async (history: ChatMessage[]) => {
@@ -118,18 +132,22 @@ export function ChatPanel({ ep }: { ep: Episode }) {
     setSetupError(null);
     const model = `${t(provider!.name)} · ${shortModel(provider!.model)}`;
     save(history);
-    setStreaming("");
+    putChat(ep.id, { streaming: "" });
     setAtBottom(true);
-    abort.current = new AbortController();
+    const ctl = new AbortController();
+    chatAborts.set(ep.id, ctl);
     let partial = "";
     try {
-      const answer = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history, instruction: settings.chatPromptOn ? settings.chatPrompt : "", onDelta: (d) => { partial = d; setStreaming(d); }, signal: abort.current.signal });
-      save([...history, { role: "assistant", content: answer, model }]);
+      const answer = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history, instruction: settings.chatPromptOn ? settings.chatPrompt : "", onDelta: (d) => { partial = d; putChat(ep.id, { streaming: d }); }, signal: ctl.signal });
+      // Some agents only stream and return an empty final answer: keep what was shown.
+      const content = answer.trim() ? answer : partial;
+      save([...history, { role: "assistant", content: content.trim() ? content : t("出错了：{error}", { error: t("模型没有返回内容，请重试或换一个模型") }), model }]);
     } catch (e) {
-      const note = abort.current?.signal.aborted ? t("（已停止）") : t("出错了：{error}", { error: errorText(e) });
+      const note = ctl.signal.aborted ? t("（已停止）") : t("出错了：{error}", { error: errorText(e) });
       save([...history, { role: "assistant", content: partial ? `${partial}\n\n${note}` : note, model }]);
     } finally {
-      setStreaming(null);
+      putChat(ep.id, { streaming: null });
+      chatAborts.delete(ep.id);
     }
   };
   const send = (text: string) => {
@@ -230,7 +248,7 @@ export function ChatPanel({ ep }: { ep: Episode }) {
           <HistoryMenu archive={archive} ep={ep} current={messages} onRestore={restore} onDelete={(id) => saveArchive(archive.filter((x) => x.id !== id))} />
           {messages.length > 0 && streaming == null && <button type="button" className="btn ghost sm new-chat" title={t("开始新对话，当前对话存进历史")} onClick={newChat}><SquarePen size={14} /> {t("新对话")}</button>}
           {streaming != null
-            ? <button type="button" className="send" title={t("停止")} onClick={() => abort.current?.abort()}><Square size={13} fill="currentColor" /></button>
+            ? <button type="button" className="send" title={t("停止")} onClick={() => chatAborts.get(ep.id)?.abort()}><Square size={13} fill="currentColor" /></button>
             : <button type="submit" className="send" title={t("发送")} disabled={!input.trim() || blocked}><ArrowUp size={16} /></button>}
         </div>
       </form>
