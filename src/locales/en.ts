@@ -1017,6 +1017,13 @@ const dict: Record<string, string> = {
   "生成我的收听画像": "Write my listening portrait",
   "模型把篇幅都用在了思考上，没有写出正文。请重试，或换一个不带深度思考的模型": "The model spent its whole length limit thinking and wrote no answer. Try again, or pick a model without deep thinking",
   "{} 没有给出回答（可能只输出了思考过程，或被中途打断），请重试或换一个模型": "{} gave no answer (it may have only thought, or was cut off). Try again or pick another model",
+  "音量 {n}%": "Volume {n}%",
+  "取消静音（M）": "Unmute (M)",
+  "静音（M）": "Mute (M)",
+  "取消静音": "Unmute",
+  "音量": "Volume",
+  "调高音量": "Volume up",
+  "调低音量": "Volume down",
 };
 
 export default dict;
