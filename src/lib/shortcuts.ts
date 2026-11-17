@@ -6,7 +6,7 @@ import { IS_MAC } from "./i18n";
 
 export type ActionId =
   | "playPause" | "back" | "forward" | "backShort" | "forwardShort" | "prevLine" | "nextLine"
-  | "fullscreen" | "subtitleMode" | "speedUp" | "speedDown" | "mute"
+  | "fullscreen" | "subtitleMode" | "speedUp" | "speedDown" | "mute" | "volumeUp" | "volumeDown"
   | "toggleSidebar" | "togglePanel" | "search" | "settings" | "keysHelp";
 
 export interface ActionDef { id: ActionId; label: string; group: string; keys: string[]; /** Works while typing in a text box. */ global?: boolean }
@@ -22,6 +22,8 @@ export const ACTIONS: ActionDef[] = [
   { id: "speedUp", label: tk("加快播放"), group: tk("播放"), keys: ["Shift+."] },
   { id: "speedDown", label: tk("减慢播放"), group: tk("播放"), keys: ["Shift+,"] },
   { id: "mute", label: tk("静音"), group: tk("播放"), keys: ["M"] },
+  { id: "volumeUp", label: tk("调高音量"), group: tk("播放"), keys: ["Mod+ArrowUp", "="] },
+  { id: "volumeDown", label: tk("调低音量"), group: tk("播放"), keys: ["Mod+ArrowDown", "-"] },
   { id: "fullscreen", label: tk("全屏看视频"), group: tk("视频与字幕"), keys: ["F"] },
   { id: "subtitleMode", label: tk("切换字幕：双语 / 中文 / 原文"), group: tk("视频与字幕"), keys: ["C"] },
   { id: "toggleSidebar", label: tk("显示 / 收起侧栏"), group: tk("窗口"), keys: ["Mod+B"], global: true },

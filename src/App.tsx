@@ -25,6 +25,7 @@ import { actionFor, comboOf, isPlain, useKeysHelp, type ActionId } from "./lib/s
 import { useJobs } from "./lib/jobs";
 import { activeIndex } from "./components/TranscriptPanel";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { stepVolume, toggleMute } from "./lib/volume";
 import { KeysHelp } from "./components/ShortcutSettings";
 import { t, useLang } from "./lib/i18n";
 import { EqBars } from "./components/Illustrations";
@@ -54,7 +55,8 @@ export default function App() {
       const action = actionFor(combo, settings.shortcuts);
       if (!action) return;
       const typing = (e.target as HTMLElement).closest?.("input, textarea, select, [contenteditable], [role=separator], .shortcut-recorder");
-      if (typing && isPlain(combo)) return;
+      // Text boxes keep their own keys: plain ones, and arrows with modifiers (⌘↑ jumps to the top).
+      if (typing && (isPlain(combo) || combo.includes("Arrow"))) return;
       if (document.querySelector(".shortcut-recorder.recording")) return;
       const { player, time, current } = useStore.getState();
       const segs = current ? useJobs.getState().transcripts[current.id]?.segments : undefined;
@@ -75,7 +77,9 @@ export default function App() {
         nextLine: () => lineSeek(1),
         speedUp: () => stepRate(1),
         speedDown: () => stepRate(-1),
-        mute: () => { const m = player?.toggleMute?.(); if (m != null) useStore.getState().notify(m ? t("已静音") : t("已取消静音")); },
+        mute: () => { useStore.getState().notify(toggleMute() ? t("已静音") : t("已取消静音")); },
+        volumeUp: () => { useStore.getState().notify(t("音量 {n}%", { n: Math.round(stepVolume(1) * 100) })); },
+        volumeDown: () => { useStore.getState().notify(t("音量 {n}%", { n: Math.round(stepVolume(-1) * 100) })); },
         fullscreen: () => toggleTheater(),
         subtitleMode: () => cycleMode(),
         toggleSidebar: () => { const l = useLayout.getState(); l.put({ sideOpen: !l.sideOpen }); },

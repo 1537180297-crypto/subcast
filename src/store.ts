@@ -18,8 +18,6 @@ export interface PlayerHandle {
   toggle(): void;
   play(): void;
   setRate(rate: number): void;
-  /** Mutes or unmutes; returns whether it is muted now. */
-  toggleMute?(): boolean;
   /** The episode this player plays. A video's player can be ready before the episode becomes current. */
   episodeId?: string;
 }

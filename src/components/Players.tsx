@@ -2,7 +2,8 @@ import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Loader2, Minimize2, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
+import { ExternalLink, Loader2, Minimize2, Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from "lucide-react";
+import { followVolume, gainOf, setLevel, toggleMute, useVolume } from "../lib/volume";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, isBotCheck, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
@@ -78,11 +79,11 @@ export function AudioEngine() {
       toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
-      toggleMute: () => { el.muted = !el.muted; return el.muted; },
       episodeId: audio.id,
     };
     useStore.getState().set({ player: handle });
-    return () => { if (useStore.getState().player === handle) useStore.getState().set({ player: null }); };
+    const offVolume = followVolume(el);
+    return () => { offVolume(); if (useStore.getState().player === handle) useStore.getState().set({ player: null }); };
   }, [audio?.id]);
 
   useEffect(() => { if (ref.current) ref.current.playbackRate = rate; }, [rate, audio?.id]);
@@ -248,7 +249,7 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
   const [state, setState] = useState(-1);
 
   useEffect(() => {
-    let player: any, timer: number | undefined, disposed = false;
+    let player: any, timer: number | undefined, disposed = false, offVolume: (() => void) | undefined;
     loadYouTube().then((YT) => {
       if (disposed || !host.current) return;
       const mount = document.createElement("div");
@@ -272,9 +273,11 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
                 toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : (waiting(true), player.playVideo())),
                 play: () => { waiting(true); player.playVideo(); },
                 setRate: (r: number) => player.setPlaybackRate(r),
-                toggleMute: () => { if (player.isMuted?.()) { player.unMute(); return false; } player.mute(); return true; },
               },
             });
+            const applyVolume = () => { const v = useVolume.getState(); player.setVolume?.(Math.round(gainOf(v) * 100)); if (v.muted) player.mute?.(); else player.unMute?.(); };
+            applyVolume();
+            offVolume = useVolume.subscribe(applyVolume);
             timer = window.setInterval(() => {
               const t = player.getCurrentTime?.();
               if (typeof t === "number") track(ep, t, player.getDuration?.());
@@ -302,6 +305,7 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
     }).catch((e) => onError(tr(String(e.message ?? e))));
     return () => {
       disposed = true;
+      offVolume?.();
       window.clearInterval(timer);
       try { void api.setProgress(ep.id, player?.getCurrentTime?.() ?? 0); player?.destroy?.(); } catch { /* already gone */ }
       const s = useStore.getState();
@@ -343,11 +347,12 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
       toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
-      toggleMute: () => { el.muted = !el.muted; return el.muted; },
       episodeId: ep.id,
     };
     useStore.getState().set({ player: handle });
+    const offVolume = followVolume(el);
     return () => {
+      offVolume();
       hls?.destroy?.();
       void api.setProgress(ep.id, el.currentTime);
       const s = useStore.getState();
@@ -400,7 +405,25 @@ export function Controls({ compact = false }: { compact?: boolean }) {
         aria-label={t("播放进度")}
       />
       <span className="time">{length ? clock(length) : "--:--"}</span>
+      <VolumeControl />
       <button className={`rate-btn${settings.playbackRate >= 2 ? " fast" : ""}`} onClick={nextRate} title={t("播放速度（S）")}>{settings.playbackRate >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{settings.playbackRate}×</button>
+    </div>
+  );
+}
+
+/** Speaker button (click mutes) with a slider that opens on hover or keyboard focus; the wheel over it adjusts. */
+function VolumeControl() {
+  const { level, muted } = useVolume(useShallow((s) => ({ level: s.level, muted: s.muted })));
+  const shown = muted ? 0 : level;
+  const Icon = shown === 0 ? VolumeX : shown < 0.5 ? Volume1 : Volume2;
+  const pct = Math.round(shown * 100);
+  return (
+    <div className="volume" onWheel={(e) => { if (e.deltaY) setLevel(shown - Math.sign(e.deltaY) * 0.05); }}>
+      <button className="icon-btn" onClick={() => toggleMute()} title={muted ? t("取消静音（M）") : t("静音（M）")} aria-label={muted ? t("取消静音") : t("静音")}><Icon size={17} /></button>
+      <input className="seek volume-slider" type="range" min={0} max={1} step={0.01} value={shown}
+        onChange={(e) => setLevel(Number(e.target.value))}
+        style={{ "--fill": `${pct}%` } as React.CSSProperties}
+        aria-label={t("音量")} aria-valuetext={`${pct}%`} title={`${t("音量")} ${pct}%`} />
     </div>
   );
 }

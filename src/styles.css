@@ -1803,3 +1803,9 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .portrait-cta .muted { flex: 1 1 260px; margin: 0; }
 .stats > .stats-card:last-of-type { margin-top: 16px; }
 @container stats (max-width: 720px) { .stat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stats-grid { grid-template-columns: minmax(0, 1fr); } .stats-lede { font-size: 20px; } }
+
+/* Volume: the speaker button, with its slider sliding open on hover or keyboard focus */
+.volume { display: inline-flex; align-items: center; flex-shrink: 0; }
+.controls .volume .volume-slider { flex: 0 0 auto; width: 0; min-width: 0; margin: 0; opacity: 0; transition: width 0.18s ease, opacity 0.18s ease, margin 0.18s ease; }
+.controls .volume:hover .volume-slider, .controls .volume:focus-within .volume-slider { width: 72px; margin: 0 6px 0 2px; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .controls .volume .volume-slider { transition: none; } }
