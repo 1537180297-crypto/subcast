@@ -93,7 +93,7 @@ export const api = {
   qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
   listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),
   ttsSpeak: (text: string, voice: string, resource?: string) => invoke<string>("tts_speak", { text, voice, resource }),
-  youtubeStream: (videoId: string, mode: "native-hls" | "proxy-hls" | "mp4") => invoke<{ url: string; kind: "hls" | "mp4" }>("youtube_stream", { videoId, mode }),
+  youtubeStream: (videoId: string, mode: "native-hls" | "proxy-hls" | "mp4", fresh = false) => invoke<{ url: string; kind: "hls" | "mp4" }>("youtube_stream", { videoId, mode, fresh }),
   uiReady: () => invoke<{ shell: string; build: number | null }>("ui_ready"),
   shareTranslation: (episodeId: string, engine: string, model: string) => invoke<string>("share_translation", { episodeId, engine, model }),
   exportOpml: () => invoke<string>("export_opml"),

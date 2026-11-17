@@ -535,14 +535,16 @@ async fn ui_check(app: AppHandle, state: State<'_, AppState>) -> Res<String> {
 /// itself), "proxy-hls" (hls.js through the loopback proxy, for HD where HLS isn't native) or "mp4" (360p, plays
 /// anywhere). Emits `yt-stream` events ("tool" with the first-time yt-dlp download progress, then "resolve").
 #[tauri::command]
-async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, mode: Option<String>) -> Res<VideoStream> {
+async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, mode: Option<String>, fresh: Option<bool>) -> Res<VideoStream> {
+    asr::streams::init(&state.data);
+    let fresh = fresh.unwrap_or(false);
     let mode = mode.unwrap_or_else(|| if cfg!(target_os = "macos") { "native-hls".into() } else { "proxy-hls".into() });
     let hls = mode != "mp4";
     let emit = |stage: &str, progress: f64| { let _ = app.emit("yt-stream", json!({ "videoId": video_id, "stage": stage, "progress": progress })); };
     let job = async {
         asr::ytdlp_with(&state.data, |got, total| emit("tool", total.map_or(0.0, |t| got as f64 / t.max(1) as f64))).await?;
         emit("resolve", 0.0);
-        asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls).await } }).await
+        asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls, fresh).await } }).await
     };
     let url = tokio::time::timeout(std::time::Duration::from_secs(180), job).await
         .map_err(|_| "获取视频地址超时，请检查网络或代理".to_string())?
@@ -1238,9 +1240,9 @@ mod live {
         let (a, b) = tokio::join!(asr::ytdlp_with(&data, |got, total| seen = total.map_or(0.0, |t| got as f64 / t as f64)), asr::ytdlp(&data));
         assert_eq!(a.unwrap(), b.unwrap());
         assert!(seen > 0.99, "progress reached {seen}");
-        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", true).await }).await.unwrap();
+        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", true, true).await }).await.unwrap();
         assert!(url.contains("m3u8") || url.contains("hls_"));
-        let mp4 = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", false).await }).await.unwrap();
+        let mp4 = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", false, true).await }).await.unwrap();
         assert!(mp4.contains("googlevideo.com/videoplayback"), "{mp4}");
         let _ = std::fs::remove_dir_all(&data);
     }
@@ -1255,7 +1257,7 @@ mod live {
         assert!(!asr::update_ytdlp(&data, false).await.unwrap());
         // Checked just now: no second network call within the day.
         assert!(!asr::update_ytdlp(&data, false).await.unwrap());
-        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ", true).await }).await.unwrap();
+        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ", true, true).await }).await.unwrap();
         println!("stream: {}", &url[..url.len().min(80)]);
         let _ = std::fs::remove_dir_all(&data);
     }
