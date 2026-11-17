@@ -333,7 +333,7 @@ function Portrait({ rows, range, rangeName }: { rows: ListenRow[]; range: Range;
     if (!provider) return;
     setBusy(""); setError("");
     try {
-      const out = await llmChat({ provider, maxTokens: 900, onDelta: setBusy, messages: [{ role: "user", content: brief() }],
+      const out = await llmChat({ provider, maxTokens: 4000, onDelta: setBusy, messages: [{ role: "user", content: brief() }],
         system: "你是一位细腻又严谨的播客编辑。根据用户的收听数据写一段中文收听画像，只依据给出的数据，不编造未出现的节目或事实。格式：第一行是一个 4–8 字的称号（加粗）；第二行是 3 个兴趣标签，用「·」分隔；然后一段 80–140 字的画像，有文学感但每句都能在数据里找到依据；最后一行以「下一步：」开头，建议一个他可能喜欢的新方向。不要使用标题符号。" }); // i18n-ignore
       if (!out.trim()) throw new Error(t("模型没有返回内容，请重试或换一个模型"));
       setText(out); await api.setBlob("stats", `portrait-${range}`, out);

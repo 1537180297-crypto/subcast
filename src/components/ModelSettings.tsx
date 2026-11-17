@@ -198,7 +198,7 @@ function AgentDetail({ kind, found, p, onChange }: { kind: AgentKind; found?: Fo
     setBusy("test"); setResult(null);
     const t0 = performance.now();
     try {
-      const r = await llmChat({ provider: p, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 50 });
+      const r = await llmChat({ provider: p, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 1500 });
       setResult({ ok: true, text: t("可用 ✓ {reply}（{s} 秒）", { reply: r.trim().slice(0, 16), s: ((performance.now() - t0) / 1000).toFixed(1) }) });
       setLogin("ready");
     } catch (e) { setResult({ ok: false, text: errorText(e) }); } finally { setBusy(null); }

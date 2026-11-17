@@ -1015,6 +1015,7 @@ const dict: Record<string, string> = {
   "会把节目名、单集标题和收听时段发给 {name}，生成一段画像。只在你点下面的按钮时发送。": "Show names, episode titles and listening hours will be sent to {name} to write a portrait, only when you press the button below.",
   "正在读你的收听…": "Reading your listening…",
   "生成我的收听画像": "Write my listening portrait",
+  "模型把篇幅都用在了思考上，没有写出正文。请重试，或换一个不带深度思考的模型": "The model spent its whole length limit thinking and wrote no answer. Try again, or pick a model without deep thinking",
 };
 
 export default dict;

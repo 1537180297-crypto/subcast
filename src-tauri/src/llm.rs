@@ -108,6 +108,9 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
     let mut stream = res.bytes_stream();
     let mut lines = LineBuf::default();
     let mut full = String::new();
+    // Reasoning models stream their thinking separately; if that is all that came, say so (usually the
+    // length limit ran out while thinking) instead of a bare "nothing returned".
+    let (mut thought, mut cut) = (false, false);
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) { return Err(anyhow!("已停止")); }
         lines.push(&chunk.map_err(|e| anyhow!("连接中断：{e}"))?);
@@ -115,9 +118,11 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
             let line = line.trim().to_string();
             let Some(data) = line.strip_prefix("data:") else { continue };
             let data = data.trim();
-            if data == "[DONE]" { return Ok(full); }
+            if data == "[DONE]" { return finish(full, thought, cut); }
             let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
             let piece = if anthropic {
+                if v["delta"]["thinking"].is_string() { thought = true; }
+                if v["delta"]["stop_reason"].as_str() == Some("max_tokens") { cut = true; }
                 match v["type"].as_str() {
                     Some("content_block_delta") => v["delta"]["text"].as_str().map(String::from),
                     Some("error") => return Err(anyhow!("模型服务出错：{}", v["error"]["message"].as_str().unwrap_or("未知错误"))),
@@ -125,7 +130,10 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
                 }
             } else {
                 if let Some(e) = v["error"]["message"].as_str() { return Err(anyhow!("模型服务出错：{e}")); }
-                v["choices"][0]["delta"]["content"].as_str().map(String::from)
+                let d = &v["choices"][0]["delta"];
+                if d["reasoning_content"].as_str().is_some_and(|x| !x.is_empty()) || d["reasoning"].as_str().is_some_and(|x| !x.is_empty()) { thought = true; }
+                if v["choices"][0]["finish_reason"].as_str() == Some("length") { cut = true; }
+                d["content"].as_str().map(String::from)
             };
             if let Some(piece) = piece.filter(|p| !p.is_empty()) {
                 full.push_str(&piece);
@@ -133,8 +141,13 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
             }
         }
     }
-    if full.is_empty() { return Err(anyhow!("模型没有返回内容")); }
-    Ok(full)
+    finish(full, thought, cut)
+}
+
+fn finish(full: String, thought: bool, cut: bool) -> Result<String> {
+    if !full.trim().is_empty() { return Ok(full); }
+    if thought || cut { return Err(anyhow!("模型把篇幅都用在了思考上，没有写出正文。请重试，或换一个不带深度思考的模型")); }
+    Err(anyhow!("模型没有返回内容"))
 }
 
 /// Bytes from a stream, handed out as whole lines. Decoding per network chunk would split a Chinese

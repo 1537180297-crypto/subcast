@@ -53,7 +53,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
     setTesting("…"); setTestOk(false);
     try {
       if (key.trim()) await saveKey();
-      const r = await llmChat({ provider: p, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 400 });
+      const r = await llmChat({ provider: p, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 1500 });
       setTesting(t("可用 ✓ {reply}", { reply: r.slice(0, 20) })); setTestOk(true);
     } catch (e) { setTesting(errorText(e)); }
   };
