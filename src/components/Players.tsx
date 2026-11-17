@@ -7,7 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, isBotCheck, type Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
-import { useStore } from "../store";
+import { offerPlayer, useStore, withdrawPlayer } from "../store";
 import { IS_MAC, t, tr } from "../lib/i18n";
 import { audioSrc, useOffline } from "../lib/offline";
 import { playNext } from "../lib/library";
@@ -22,12 +22,28 @@ export function playSoon(id: string) {
   s.set({ playWhenReady: id });
 }
 useStore.subscribe((s, prev) => {
-  if (s.player && s.player !== prev.player && s.playWhenReady && s.current?.id === s.playWhenReady) {
-    const p = s.player;
+  if (!s.player || s.player === prev.player) return;
+  const p = s.player;
+  // A seek asked for before the player existed (a chapter link in the notes) starts playback from there.
+  if (s.seekWhenReady != null) {
+    const at = s.seekWhenReady;
+    useStore.setState({ seekWhenReady: null, playWhenReady: null });
+    window.setTimeout(() => p.seek(at), 0);
+  } else if (s.playWhenReady && s.current?.id === s.playWhenReady) {
     useStore.setState({ playWhenReady: null });
     window.setTimeout(() => p.play(), 0);
   }
 });
+
+// Videos whose owners forbid embedding, remembered so they go straight to the direct stream next time
+// instead of waiting for the embedded player to load and refuse.
+const BLOCKED_KEY = "subcast-yt-blocked";
+function blockedIds(): string[] { try { return JSON.parse(localStorage.getItem(BLOCKED_KEY) ?? "[]"); } catch { return []; } }
+export const wasBlocked = (videoId?: string) => !!videoId && blockedIds().includes(videoId);
+function markBlocked(videoId?: string) {
+  if (!videoId || wasBlocked(videoId)) return;
+  try { localStorage.setItem(BLOCKED_KEY, JSON.stringify([...blockedIds(), videoId].slice(-500))); } catch { /* storage unavailable */ }
+}
 
 /** Playback asked for, sound not there yet: the controls show it, and say more if it takes long. */
 export const waiting = (on: boolean) => { const s = useStore.getState(); if (on ? !s.loadingSince : s.loadingSince) s.set({ loadingSince: on ? Date.now() : null }); };
@@ -81,8 +97,8 @@ export function AudioEngine() {
       toggleMute: () => { el.muted = !el.muted; return el.muted; },
       episodeId: audio.id,
     };
-    useStore.getState().set({ player: handle });
-    return () => { if (useStore.getState().player === handle) useStore.getState().set({ player: null }); };
+    offerPlayer(handle);
+    return () => withdrawPlayer(handle);
   }, [audio?.id]);
 
   useEffect(() => { if (ref.current) ref.current.playbackRate = rate; }, [rate, audio?.id]);
@@ -92,7 +108,8 @@ export function AudioEngine() {
     <audio
       ref={ref}
       src={src}
-      preload="metadata"
+      // It is the current episode: start buffering now, so pressing play doesn't start from nothing.
+      preload="auto"
       onLoadedMetadata={(e) => {
         const el = e.currentTarget;
         el.playbackRate = rate;
@@ -144,8 +161,15 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     });
     // HLS where the WebView plays it (macOS); elsewhere HLS through the app's loopback proxy (hls.js), for HD.
     const nativeHls = document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
-    try { setNative(await api.youtubeStream(ep.videoId!, nativeHls ? "native-hls" : "proxy-hls")); setError(null); }
+    // Play was pressed (or it was playing): the direct stream picks up where the embed left off.
+    const wanted = () => { const s = useStore.getState(); return s.current?.id === ep.id && (!!s.loadingSince || s.playWhenReady === ep.id || s.playing); };
+    try {
+      const stream = await api.youtubeStream(ep.videoId!, nativeHls ? "native-hls" : "proxy-hls");
+      if (wanted()) useStore.getState().set({ playWhenReady: ep.id });
+      setNative(stream); setError(null);
+    }
     catch (e) {
+      if (useStore.getState().current?.id === ep.id) waiting(false);
       const msg = typeof e === "string" ? e : String((e as any)?.message ?? e);
       // YouTube wants a signed-in browser: ask once, here, instead of failing or silently falling back to audio.
       if (isBotCheck(msg)) { setBotCheck(why); return; }
@@ -157,9 +181,9 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   const retried = useRef(false);
   const failed = () => {
     const mode = native?.kind === "hls" && !retried.current ? (document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "" ? "native-hls" : "proxy-hls") : "mp4";
-    if (retried.current && native?.kind === "mp4") return setError(t("视频地址失效，请稍后再试"));
+    if (retried.current && native?.kind === "mp4") { waiting(false); return setError(t("视频地址失效，请稍后再试")); }
     retried.current = true;
-    void api.youtubeStream(ep.videoId!, mode, true).then(setNative).catch((e) => setError(tr(String(e?.message ?? e))));
+    void api.youtubeStream(ep.videoId!, mode, true).then(setNative).catch((e) => { waiting(false); setError(tr(String(e?.message ?? e))); });
   };
   const [botCheck, setBotCheck] = useState<string | null>(null);
   const [browser, setBrowser] = useState(useStore.getState().settings.ytCookiesBrowser || "chrome");
@@ -170,6 +194,9 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     void fallback(why);
   };
   useEffect(() => { setNative(null); setError(null); retried.current = false; }, [ep.id]);
+  // Known to refuse embedding: skip the embedded player and fetch the direct stream right away.
+  const [direct] = useState(() => wasBlocked(ep.videoId));
+  useEffect(() => { if (direct) void fallback(t("作者限制了嵌入播放")); }, []);
   // Have yt-dlp ready before it is needed: a first fallback would otherwise start with a 35 MB download.
   useEffect(() => { void api.prepareYoutube().catch(() => {}); }, []);
   const watchOnYouTube = () => {
@@ -194,7 +221,9 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   }, [theater]);
   return (
     <div className={`video ${theater ? "theater" : ""} ${theater && idle ? "idle" : ""}`} ref={box}>
-      {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={failed} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
+      {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={failed} />
+        : direct ? <PlayHint ep={ep} show onClick={() => { useStore.getState().load(ep); playSoon(ep.id); }} />
+        : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
       {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
       {botCheck && (
         <div className="video-error bot-check">
@@ -248,7 +277,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
   const [state, setState] = useState(-1);
 
   useEffect(() => {
-    let player: any, timer: number | undefined, disposed = false;
+    let player: any, timer: number | undefined, disposed = false, handle: any;
+    const mine = () => useStore.getState().current?.id === ep.id;
     loadYouTube().then((YT) => {
       if (disposed || !host.current) return;
       const mount = document.createElement("div");
@@ -264,17 +294,15 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             playerRef.current = player;
             hideYouTubeCaptions(player);
             player.setPlaybackRate?.(useStore.getState().settings.playbackRate);
-            useStore.getState().set({
-              length: player.getDuration?.() || ep.duration || 0,
-              player: {
-                episodeId: ep.id,
-                seek: (t: number) => { player.seekTo(t, true); player.playVideo(); },
-                toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : (waiting(true), player.playVideo())),
-                play: () => { waiting(true); player.playVideo(); },
-                setRate: (r: number) => player.setPlaybackRate(r),
-                toggleMute: () => { if (player.isMuted?.()) { player.unMute(); return false; } player.mute(); return true; },
-              },
-            });
+            handle = {
+              episodeId: ep.id,
+              seek: (t: number) => { player.seekTo(t, true); player.playVideo(); },
+              toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : (waiting(true), player.playVideo())),
+              play: () => { waiting(true); player.playVideo(); },
+              setRate: (r: number) => player.setPlaybackRate(r),
+              toggleMute: () => { if (player.isMuted?.()) { player.unMute(); return false; } player.mute(); return true; },
+            };
+            offerPlayer(handle, { length: player.getDuration?.() || ep.duration || 0 });
             timer = window.setInterval(() => {
               const t = player.getCurrentTime?.();
               if (typeof t === "number") track(ep, t, player.getDuration?.());
@@ -282,6 +310,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
           },
           onStateChange: (e: any) => {
             setState(e.data);
+            // Another episode is current (this page was opened while it plays): leave its state alone.
+            if (!mine()) return;
             // 3 = buffering; -1/5 after a play request = still starting. 1 = playing.
             if (e.data === 3) waiting(true); else if (e.data === 1 || e.data === 2 || e.data === 0) waiting(false);
             useStore.getState().set({ playing: e.data === 1 });
@@ -292,6 +322,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
           onError: (e: any) => {
             // 101/150: the owner disallows embedding. 152/153 are player/referrer problems on this side, not the owner's choice.
             console.warn("YouTube player error", e.data, ep.videoId);
+            if (e.data === 101 || e.data === 150) markBlocked(ep.videoId);
+            if (![100, 101, 150, 152, 153].includes(e.data) && mine()) waiting(false);
             if ([100, 101, 150, 152, 153].includes(e.data)) onBlocked(e.data === 100 ? t("视频不存在或已设为私享")
               : e.data === 101 || e.data === 150 ? t("作者限制了嵌入播放")
               : t("YouTube 播放器加载失败（错误 {code}）", { code: e.data }));
@@ -299,13 +331,13 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
           },
         },
       });
-    }).catch((e) => onError(tr(String(e.message ?? e))));
+    // The embedded player can't load (often no route to youtube.com): the direct stream may still work.
+    }).catch((e) => { if (!disposed) onBlocked(tr(String(e.message ?? e))); });
     return () => {
       disposed = true;
       window.clearInterval(timer);
       try { void api.setProgress(ep.id, player?.getCurrentTime?.() ?? 0); player?.destroy?.(); } catch { /* already gone */ }
-      const s = useStore.getState();
-      if (s.current?.id === ep.id) s.set({ player: null, playing: false });
+      if (handle) withdrawPlayer(handle);
     };
   }, [ep.id]);
 
@@ -329,9 +361,11 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    let hls: any;
+    let hls: any, dead = false;
+    setStarted(false);
     if (kind === "mp4" || el.canPlayType("application/vnd.apple.mpegurl")) el.src = src;
     else void import("hls.js").then(({ default: Hls }) => {
+      if (dead) return;
       if (!Hls.isSupported()) { onFail?.(); return; }
       hls = new Hls();
       hls.on(Hls.Events.ERROR, (_: unknown, d: { fatal?: boolean }) => { if (d.fatal) { hls.destroy(); hls = null; onFail?.(); } });
@@ -346,20 +380,28 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
       toggleMute: () => { el.muted = !el.muted; return el.muted; },
       episodeId: ep.id,
     };
-    useStore.getState().set({ player: handle });
+    offerPlayer(handle);
     return () => {
+      dead = true;
       hls?.destroy?.();
-      void api.setProgress(ep.id, el.currentTime);
-      const s = useStore.getState();
-      if (s.player === handle) s.set({ player: null, playing: false });
+      if (el.currentTime > 0) void api.setProgress(ep.id, el.currentTime);
+      withdrawPlayer(handle);
     };
   }, [src, ep.id]);
   useEffect(() => { if (ref.current) ref.current.playbackRate = rate; }, [rate]);
   return (
     <>
       <video ref={ref} className="video-native" playsInline preload="auto"
-        onError={() => { if (!started) onFail?.(); }}
-        onLoadedMetadata={(e) => { const el = e.currentTarget; el.playbackRate = rate; if (ep.progress > 5 && ep.progress < el.duration - 10) el.currentTime = ep.progress; track(ep, el.currentTime, el.duration); }}
+        // A stale or blocked address, before or during playback: the caller fetches a fresh one (once).
+        onError={() => onFail?.()}
+        onLoadedMetadata={(e) => {
+          const el = e.currentTarget, s = useStore.getState();
+          el.playbackRate = rate;
+          // Where it actually is now (after the embed played a while, or mid-play on a fresh address), not where the page opened.
+          const at = s.current?.id === ep.id ? s.time : ep.progress;
+          if (at > 5 && at < el.duration - 10) el.currentTime = at;
+          track(ep, el.currentTime, el.duration);
+        }}
         onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
         onPlay={(e) => { setStarted(true); useStore.getState().set({ playing: true }); if (e.currentTarget.readyState < 3) waiting(true); }}
         onWaiting={() => waiting(true)}

@@ -43,6 +43,8 @@ interface State {
   loadingSince?: number | null;
   /** Play as soon as the player for `current` is ready (it may take a few seconds to appear). */
   playWhenReady?: string | null;
+  /** Seek here as soon as the current episode's player appears. */
+  seekWhenReady?: number | null;
   /** First run: show the welcome card; shows are being subscribed in the background. */
   welcome?: boolean;
   settingUp?: boolean;
@@ -133,7 +135,7 @@ export const useStore = create<State>((set, get) => ({
   },
   load(ep) {
     // Keep a player that already belongs to this episode (a video ready before "play" was pressed).
-    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : null }); }
+    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : standby.get(ep.id) ?? null }); }
   },
   notify(text) {
     set({ toast: text });
@@ -143,6 +145,31 @@ export const useStore = create<State>((set, get) => ({
   openSettings: (section) => set({ settingsOpen: true, settingsSection: section }),
   set: (patch) => set(patch),
 }));
+
+/** Players that exist for an episode that isn't the current one (a video page opened while something else plays).
+ *  Only the current episode's player drives the global controls; another becomes current when it is loaded. */
+const standby = new Map<string, PlayerHandle>();
+
+/** A player is ready for its episode: it takes the controls if that episode is current, else waits here. */
+export function offerPlayer(h: PlayerHandle & { episodeId: string }, extra?: Partial<State>) {
+  standby.set(h.episodeId, h);
+  const s = useStore.getState();
+  if (s.current?.id === h.episodeId) s.set({ player: h, ...extra });
+}
+
+/** A player is going away: it stops being offered, and leaves the controls if it had them. */
+export function withdrawPlayer(h: PlayerHandle & { episodeId: string }) {
+  if (standby.get(h.episodeId) === h) standby.delete(h.episodeId);
+  const s = useStore.getState();
+  if (s.player === h) s.set({ player: null, playing: false });
+}
+
+/** Seeks once the current episode's player exists (a video's player takes a moment to appear). */
+export function seekSoon(seconds: number) {
+  const s = useStore.getState();
+  if (s.player) { s.player.seek(seconds); return; }
+  s.set({ time: seconds, seekWhenReady: seconds });
+}
 
 export function providerFor(settings: Settings, use: "chat" | "translate") {
   if (use === "translate") return settings.providers[settings.translateProvider];
