@@ -909,7 +909,7 @@ const dict: Record<string, string> = {
   "留空就用系统代理": "Leave blank to use the system proxy",
   "先问我": "Ask me first",
   "共享": "Sharing",
-  "匿名分享我生成的字幕和译文": "Share my subtitles and translations anonymously",
+  "匿名分享我生成的字幕、译文和导读": "Share my subtitles, translations and guides anonymously",
   "只分享文字，帮别人省去等待。关掉后照样能用别人分享的。": "Only text is shared, saving others the wait. You can still use others' shares with this off.",
   "复刻音色或其他音色的 ID": "ID of a cloned or other voice",
   "这是我复刻的声音": "This is my cloned voice",
@@ -956,6 +956,8 @@ const dict: Record<string, string> = {
   "读取 {name} 支持的模型": "Read {name}'s models",
   "手动添加模型名": "Add a model by name",
   "模型没有返回内容，请重试或换一个模型": "The model returned nothing; try again or pick another model",
+  "正在查找别人分享的导读…": "Looking for a shared guide…",
+  "来自共享导读，没有花你的额度": "From the shared library; it cost you nothing",
 };
 
 export default dict;

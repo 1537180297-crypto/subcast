@@ -259,7 +259,7 @@ export function ChatPanel({ ep }: { ep: Episode }) {
 }
 /** 导读 runs per episode outside the panel, so switching tabs or episodes mid-run neither loses the result
  *  nor offers to start (and pay for) the same run again. */
-interface GuideJob { summary?: string | null; streaming: string | null; error: string | null; needsSetup: boolean }
+interface GuideJob { summary?: string | null; streaming: string | null; error: string | null; needsSetup: boolean; shared?: boolean; checking?: boolean }
 const useGuides = create<Record<string, GuideJob>>(() => ({}));
 const putGuide = (id: string, p: Partial<GuideJob>) => useGuides.setState((s) => ({ [id]: { ...(s[id] ?? { streaming: null, error: null, needsSetup: false }), ...p } }));
 
@@ -272,10 +272,20 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
   const streaming = job?.streaming ?? null;
   const error = job?.error ?? null;
   const needsSetup = !!job?.needsSetup;
+  const checking = !!job?.checking;
 
   useEffect(() => {
     if (useGuides.getState()[ep.id]?.streaming != null) return;
-    void api.getBlob(ep.id, "summary").then((v) => { if (useGuides.getState()[ep.id]?.streaming == null) putGuide(ep.id, { summary: v || null }); });
+    void (async () => {
+      const [v, from] = await Promise.all([api.getBlob(ep.id, "summary"), api.getBlob(ep.id, "summary-from")]);
+      if (useGuides.getState()[ep.id]?.streaming != null) return;
+      if (v) { putGuide(ep.id, { summary: v, shared: from === "shared" }); return; }
+      // Someone may have shared one: checked before offering to generate (and pay for) it.
+      putGuide(ep.id, { summary: null, checking: true });
+      const hit = await api.sharedGuide(ep.id).catch(() => null);
+      if (useGuides.getState()[ep.id]?.streaming != null) return;
+      putGuide(ep.id, { checking: false, ...(hit ? { summary: hit, shared: true } : {}) });
+    })();
   }, [ep.id, transcript]);
 
   const run = async () => {
@@ -288,8 +298,9 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
       // Some agents only stream: keep what arrived if the final answer comes back empty.
       const out = text.trim() ? text : (useGuides.getState()[ep.id]?.streaming ?? "");
       if (!out.trim()) throw new Error(t("模型没有返回内容，请重试或换一个模型"));
-      putGuide(ep.id, { summary: out });
-      void api.setBlob(ep.id, "summary", out);
+      putGuide(ep.id, { summary: out, shared: false });
+      await api.setBlob(ep.id, "summary", out);
+      void api.shareGuide(ep.id, out, `${provider!.name} · ${provider!.model}`).catch(() => {});
     } catch (e) { putGuide(ep.id, { error: errorText(e), needsSetup: Boolean((e as { setup?: boolean })?.setup) || /设置|API Key/.test(rawErrorText(e)) }); }
     finally { putGuide(ep.id, { streaming: null }); }
   };
@@ -306,6 +317,7 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
       </div>
     );
   }
+  if (!text && checking) return <div className="panel-empty" role="status"><PageArt /><p className="muted"><Loader2 size={14} className="spin" /> {t("正在查找别人分享的导读…")}</p></div>;
   if (!text) {
     return (
       <div className="panel-empty">
@@ -324,7 +336,7 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
       <Markdown text={text} onSeek={seek} />
       {streaming == null && (
         <div className="summary-foot">
-          <span className="muted small">{provider ? t(provider.name) : ""} · {provider?.model}</span>
+          <span className="muted small">{job?.shared ? t("来自共享导读，没有花你的额度") : `${provider ? t(provider.name) : ""} · ${provider?.model ?? ""}`}</span>
           <ReadAloud text={() => plainText(text)} />
           <button className="btn ghost sm" onClick={run}><RefreshCw size={13} /> {t("重新生成")}</button>
         </div>

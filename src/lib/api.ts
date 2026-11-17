@@ -78,6 +78,9 @@ export const api = {
   sharedTranscript: (episodeId: string) => invoke<Transcript | null>("shared_transcript", { episodeId }),
   /** The ids (of these) the shared library has subtitles for. */
   sharedExists: (episodeIds: string[]) => invoke<string[]>("shared_exists", { episodeIds }),
+  /** A 导读 someone shared (saved as this episode's own when found). */
+  sharedGuide: (episodeId: string) => invoke<string | null>("shared_guide", { episodeId }),
+  shareGuide: (episodeId: string, text: string, model: string) => invoke<string>("share_guide", { episodeId, text, model }),
   asrElsewhere: () => invoke<{ app: string; format: string }[]>("asr_elsewhere"),
   rescanModels: () => invoke<void>("rescan_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),

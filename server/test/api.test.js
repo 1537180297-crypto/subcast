@@ -482,3 +482,36 @@ describe('exists (batch)', () => {
     assert.equal((await exists({ keys: 'yt:existsHit01' })).status, 400);
   });
 });
+
+describe('guides (导读)', () => {
+  const guideText = `# 导读\n\n${'这期节目讨论了人工智能如何改变工作方式，嘉宾分享了很多具体的例子。'.repeat(8)}`;
+  const putGuide = (json) => request(srv.port, 'POST', '/api/v1/guides', { json });
+  const getGuide = (keys) => request(srv.port, 'GET', `/api/v1/guides?${keys.map((k) => `key=${encodeURIComponent(k)}`).join('&')}`);
+  const body = (over = {}) => ({ keys: ['yt:guideGuide1'], title: 'T', show: 'S', lang: 'zh', model: 'deepseek-v4', text: guideText, client: { app: 'subcast', version: '0.2.7', install: install() }, ...over });
+
+  test('miss is 404; upload then lookup returns the text with line breaks kept', async () => {
+    assert.equal((await getGuide(['yt:guideGuide1'])).status, 404);
+    const up = await putGuide(body());
+    assert.equal(up.status, 200, up.text);
+    assert.equal(up.json.action, 'stored');
+    const r = await getGuide(['yt:guideGuide1', `guid:${sha1('other')}`]);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.text, guideText.trim());
+    assert.equal(r.json.model, 'deepseek-v4');
+  });
+
+  test('another install keeps the first; the same install may replace it', async () => {
+    const me = install();
+    const keys = ['yt:guideGuide2'];
+    assert.equal((await putGuide(body({ keys, client: { install: me } }))).json.action, 'stored');
+    assert.equal((await putGuide(body({ keys, text: `${guideText}\n\n别人`, client: { install: install() } }))).json.action, 'kept');
+    assert.equal((await putGuide(body({ keys, text: `${guideText}\n\n重写`, client: { install: me } }))).json.action, 'replaced');
+    assert.match((await getGuide(keys)).json.text, /重写$/);
+  });
+
+  test('rejects short, non-Chinese or non-zh guides', async () => {
+    assert.equal((await putGuide(body({ text: '太短了' }))).status, 400);
+    assert.equal((await putGuide(body({ text: 'english only '.repeat(40) }))).status, 400);
+    assert.equal((await putGuide(body({ lang: 'en' }))).status, 400);
+  });
+});

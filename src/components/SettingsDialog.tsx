@@ -225,7 +225,7 @@ export function SettingsDialog() {
               </section>
               <section className="setup-block">
                 <p className="setup-title">{t("共享")}</p>
-                <label className="check"><input type="checkbox" checked={settings.shareTranscripts} onChange={(e) => saveSettings({ shareTranscripts: e.target.checked })} /> {t("匿名分享我生成的字幕和译文")}</label>
+                <label className="check"><input type="checkbox" checked={settings.shareTranscripts} onChange={(e) => saveSettings({ shareTranscripts: e.target.checked })} /> {t("匿名分享我生成的字幕、译文和导读")}</label>
                 <p className="muted small">{t("只分享文字，帮别人省去等待。关掉后照样能用别人分享的。")}</p>
               </section>
               <section className="setup-block">

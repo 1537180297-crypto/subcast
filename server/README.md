@@ -79,6 +79,10 @@ npm run backup     # VACUUM INTO + gzip 快照到 data/backups/（保留最近 3
 
 请求体 `{ "keys": [...] }`，最多 400 个键 → `{ "found": [...] }`：其中已有共享字幕的键（规范化后）。格式不对的键直接跳过。客户端用它给单集列表标「有字幕」，不必逐集取整份字幕。限流 `RATE_EXISTS_PER_HOUR`（默认 120）。
 
+### `GET /api/v1/guides?key=..` / `POST /api/v1/guides`
+
+导读（中文 Markdown）。每集一份：先到的保留，同一安装（install）可以覆盖自己的。GET 未命中 404，命中返回 `{ lang, model, text, createdAt }`。POST 请求体 `{ keys, title, show, lang: "zh", model, text, client }`，`text` 200–60000 字、至少 100 个汉字 → `{ action: stored | replaced | kept }`。限流沿用查询 / 上传。
+
 ### `POST /api/v1/transcripts`
 
 ```json
@@ -235,6 +239,10 @@ Anything else is rejected with `400 invalid_key`.
 ### `POST /api/v1/transcripts/exists`
 
 Body `{ "keys": [...] }`, at most 400 keys → `{ "found": [...] }`: the (normalized) keys that already have shared subtitles. Malformed keys are skipped. The app uses it to mark episode lists without fetching each transcript. Rate limit `RATE_EXISTS_PER_HOUR` (default 120).
+
+### `GET /api/v1/guides?key=..` / `POST /api/v1/guides`
+
+Episode guides (Chinese Markdown). One per episode: the first stays, and the install that wrote it may replace it. GET → 404 or `{ lang, model, text, createdAt }`. POST `{ keys, title, show, lang: "zh", model, text, client }` with 200–60000 characters, at least 100 of them Chinese → `{ action: stored | replaced | kept }`. Uses the lookup / upload rate limits.
 
 ### `POST /api/v1/transcripts`
 

@@ -44,6 +44,8 @@
     "allow-asr-elsewhere",
     "allow-shared-transcript",
     "allow-shared-exists",
+    "allow-shared-guide",
+    "allow-share-guide",
     "allow-listening-stats",
     "allow-export-opml",
     "allow-probe-agent",

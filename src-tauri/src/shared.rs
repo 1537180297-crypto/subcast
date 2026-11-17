@@ -70,6 +70,30 @@ pub async fn existing(lists: &[Vec<String>]) -> Vec<bool> {
     out
 }
 
+const GUIDES: &str = "https://subcast.qiaomu.ai/api/v1/guides";
+
+/// Someone's 导读 for this episode (Markdown), if shared.
+pub async fn lookup_guide(keys: &[String]) -> Option<String> {
+    if keys.is_empty() { return None; }
+    let qs = keys.iter().map(|k| format!("key={}", urlencoding::encode(k))).collect::<Vec<_>>().join("&");
+    let resp = net::client().get(format!("{GUIDES}?{qs}")).timeout(Duration::from_secs(8)).send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    #[derive(Deserialize)]
+    struct Hit { text: String }
+    let hit: Hit = resp.json().await.ok()?;
+    (!hit.text.trim().is_empty()).then_some(hit.text)
+}
+
+/// Shares a 导读 we made (anonymous, like transcripts). Returns the server's action.
+pub async fn upload_guide(keys: &[String], title: &str, show: &str, model: &str, text: &str, install: String) -> anyhow::Result<String> {
+    let body = serde_json::json!({ "keys": keys, "title": title, "show": show, "lang": "zh", "model": model, "text": text,
+        "client": { "app": "subcast", "version": env!("CARGO_PKG_VERSION"), "install": install } });
+    let resp = net::client().post(GUIDES).json(&body).timeout(Duration::from_secs(20)).send().await?;
+    if !resp.status().is_success() { anyhow::bail!("shared guides: HTTP {}", resp.status()); }
+    let v: serde_json::Value = resp.json().await?;
+    Ok(v["action"].as_str().unwrap_or("").to_string())
+}
+
 #[derive(Serialize)]
 struct UploadTranslation {
     lang: String,

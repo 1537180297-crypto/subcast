@@ -86,6 +86,25 @@ export function validateKeys(list) {
   return out;
 }
 
+const GUIDE_FIELDS = new Set(['keys', 'title', 'show', 'lang', 'model', 'text', 'client']);
+
+// A 导读 (Markdown, Chinese). Line breaks are kept; control characters go.
+export function validateGuide(body) {
+  if (!isPlainObject(body)) throw invalid('body must be a JSON object');
+  checkFields(body, GUIDE_FIELDS, '');
+  const keys = validateKeys(body.keys);
+  const title = optString(body.title, 'title', 300);
+  const show = optString(body.show, 'show', 300);
+  if (typeof body.lang !== 'string' || !/^zh(-[A-Za-z]{2,4})?$/.test(body.lang)) throw invalid('lang must be zh or zh-XX');
+  if (typeof body.model !== 'string') throw invalid('model must be a string');
+  const model = body.model.replace(CONTROL, '').trim().slice(0, 120);
+  if (typeof body.text !== 'string') throw invalid('text must be a string');
+  const text = body.text.replace(CONTROL, '').trim();
+  if (text.length < 200 || text.length > 60000) throw invalid('text must be 200 to 60000 characters');
+  if ((text.match(/[\u4e00-\u9fff]/g) ?? []).length < 100) throw invalid('text must be mostly Chinese');
+  return { keys, title, show, lang: body.lang, model, text, client: validateClient(body.client) };
+}
+
 export const MAX_EXISTS_KEYS = 400;
 
 // For the batch "which of these exist" check: unknown or malformed keys are skipped, not an error,
