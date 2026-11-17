@@ -1729,3 +1729,8 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .key-saved .key-state > span:first-of-type { flex: none; }
 .key-saved .key-dots { min-width: 0; text-overflow: clip; }
 .key-saved .btn, .key-saved .icon-btn { flex: none; }
+/* A local agent's models: which ones the Q&A picker offers. */
+.agent-models { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.agent-models-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--text-2); }
+.agent-models-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.agent-models-list .check { padding: 4px 0; }

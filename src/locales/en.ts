@@ -950,6 +950,11 @@ const dict: Record<string, string> = {
   "存于系统钥匙串": "in the system keychain",
   "更换": "Replace",
   "更多（{n}）": "More ({n})",
+  "{name} 没有报出模型列表，可以手动添加。": "{name} didn't list its models; add one by name.",
+  "问答里可选的模型": "Models to offer in Q&A",
+  "重新读取": "Read again",
+  "读取 {name} 支持的模型": "Read {name}'s models",
+  "手动添加模型名": "Add a model by name",
 };
 
 export default dict;

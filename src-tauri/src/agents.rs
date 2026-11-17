@@ -174,6 +174,70 @@ pub async fn probe(kind: Kind, path: &Path) -> Result<&'static str> {
     }
 }
 
+/// A model the agent offers (its id, as passed back when asking, and a display name).
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct AgentModel { pub id: String, pub name: String }
+
+/// The models the agent itself says it can use. Claude Code has no listing (its aliases are fixed in the app).
+pub async fn models(kind: Kind, path: &Path) -> Result<Vec<AgentModel>> {
+    match kind {
+        Kind::Claude => Ok(Vec::new()),
+        Kind::Codex => {
+            let c = Codex::start(path).await?;
+            let r = c.rpc.request("model/list", json!({}), 30).await;
+            c.rpc.close().await;
+            Ok(parse_codex_models(&r?))
+        }
+        _ => {
+            let conn = Acp::start(kind, path).await?;
+            let r = conn.rpc.request("session/new", json!({ "cwd": work_dir()?.to_string_lossy(), "mcpServers": [] }), 60).await;
+            conn.close().await;
+            Ok(parse_acp_models(&r?))
+        }
+    }
+}
+
+fn parse_codex_models(v: &Value) -> Vec<AgentModel> {
+    let list = v["data"].as_array().or(v["models"].as_array()).cloned().unwrap_or_default();
+    list.iter().filter(|m| m["hidden"].as_bool() != Some(true)).filter_map(|m| {
+        let id = m["model"].as_str().or(m["id"].as_str())?.to_string();
+        let name = m["displayName"].as_str().or(m["name"].as_str()).unwrap_or(&id).to_string();
+        Some(AgentModel { id, name })
+    }).collect()
+}
+
+/// session/new answers with models.availableModels (older agents) or a configOptions entry for "model".
+fn parse_acp_models(v: &Value) -> Vec<AgentModel> {
+    let mut out: Vec<AgentModel> = Vec::new();
+    for m in v["models"]["availableModels"].as_array().into_iter().flatten() {
+        if let Some(id) = m["modelId"].as_str() { out.push(AgentModel { id: id.into(), name: m["name"].as_str().unwrap_or(id).into() }); }
+    }
+    if out.is_empty() {
+        for o in v["configOptions"].as_array().into_iter().flatten().filter(|o| o["id"].as_str() == Some("model") || o["category"].as_str() == Some("model")) {
+            let opts = o["options"].as_array().cloned().unwrap_or_default();
+            // Options may be grouped: [{ group, options: [...] }].
+            for x in opts.iter().flat_map(|x| x["options"].as_array().cloned().unwrap_or_else(|| vec![x.clone()])) {
+                if let Some(id) = x["value"].as_str() { out.push(AgentModel { id: id.into(), name: x["name"].as_str().unwrap_or(id).into() }); }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::*;
+    #[test]
+    fn reads_codex_and_acp_listings() {
+        let codex = json!({ "data": [{ "id": "a", "model": "gpt-x", "displayName": "GPT X" }, { "model": "old", "hidden": true }] });
+        assert_eq!(parse_codex_models(&codex), vec![AgentModel { id: "gpt-x".into(), name: "GPT X".into() }]);
+        let acp = json!({ "sessionId": "s", "models": { "currentModelId": "k3", "availableModels": [{ "modelId": "k3", "name": "Kimi K3" }] } });
+        assert_eq!(parse_acp_models(&acp)[0].id, "k3");
+        let cfg = json!({ "configOptions": [{ "id": "model", "options": [{ "group": "x", "options": [{ "value": "m1", "name": "M1" }] }, { "value": "m2" }] }] });
+        assert_eq!(parse_acp_models(&cfg).iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m1", "m2"]);
+    }
+}
+
 // ---- requests --------------------------------------------------------------------------------------------
 
 pub struct Request<'a> {

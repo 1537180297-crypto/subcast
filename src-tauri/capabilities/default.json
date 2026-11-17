@@ -47,6 +47,7 @@
     "allow-listening-stats",
     "allow-export-opml",
     "allow-probe-agent",
+    "allow-agent-models",
     "allow-warm-agent",
     "allow-ui-check",
     "allow-refresh-config",
