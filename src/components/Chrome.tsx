@@ -1,10 +1,10 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn } from "lucide-react";
+import { ChevronLeft, CircleArrowUp, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { ImportPanel } from "./ImportPanel";
 import { useStore, type View } from "../store";
-import { hasUpdate, useUpdate } from "../lib/updater";
+import { installUpdate, useUpdate } from "../lib/updater";
 import { PICKS, deepPickFor, isSubscribed, pickName, showName } from "../lib/picks";
 import { isChineseUi, kbd, t, tk, tr, tx, useLang } from "../lib/i18n";
 import { useShowName } from "../lib/zh";
@@ -27,7 +27,7 @@ export function Sidebar() {
   // A 精读 channel is listed once: hidden here when its show is already followed (either version).
   const curated = PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
   const { sideOpen, put: putLayout } = useLayout();
-  const updateWaiting = useUpdate(hasUpdate);
+  const update = useUpdate(useShallow((s) => ({ phase: s.phase, version: s.version, progress: s.progress, quiet: s.quiet })));
   const rail = !sideOpen;
   const hasDownloads = useOffline((s) => Object.keys(s.saved).length + Object.keys(s.active).length > 0);
   // A render function, not a component: defined inside Sidebar, a component would remount its button on
@@ -72,7 +72,8 @@ export function Sidebar() {
       </div>
       <TaskChip />
       <div className="side-foot">
-        <button className="nav settings-btn" onClick={() => useStore.getState().openSettings(updateWaiting ? "about" : undefined)} title={updateWaiting ? t("有新版本，点击更新") : rail ? t("设置") : undefined} aria-label={updateWaiting ? t("设置，有新版本") : t("设置")}><span className="cog-wrap"><Cog size={16} />{updateWaiting && <span className="update-dot" />}</span><span className="label">{t("设置")}</span>{updateWaiting && !rail && <span className="update-pill">{t("更新")}</span>}</button>
+        <button className="nav settings-btn" onClick={() => useStore.getState().openSettings()} title={rail ? t("设置") : undefined} aria-label={t("设置")}><span className="cog-wrap"><Cog size={16} /></span><span className="label">{t("设置")}</span></button>
+        <UpgradeButton {...update} />
         <button className="icon-btn side-toggle" onClick={() => putLayout({ sideOpen: rail })} title={rail ? t("展开侧栏（⌘B）") : t("收起为图标（⌘B）")} aria-label={rail ? t("展开侧栏") : t("收起侧栏")}>{rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
       </div>
     </aside>
@@ -185,6 +186,16 @@ export function MiniPlayer() {
       </div>
     </div>
   );
+}
+
+/** Next to Settings once a new version is downloaded (or waiting to be): one click installs it and restarts. */
+function UpgradeButton({ phase, version, progress, quiet }: { phase: string; version?: string; progress: number | null; quiet?: boolean }) {
+  if (phase === "installing" || (phase === "downloading" && !quiet)) {
+    return <span className="icon-btn upgrade-btn busy" title={phase === "installing" ? t("正在安装新版本…") : progress == null ? t("正在下载新版本…") : t("正在下载新版本 {pct}%", { pct: Math.round(progress * 100) })}><Loader2 size={16} className="spin" /></span>;
+  }
+  if (phase !== "ready" && phase !== "available") return null;
+  const label = phase === "ready" ? t("SubCast {version} 已下载好，点一下安装并重启", { version: version ?? "" }) : t("SubCast {version} 可以更新了，点一下下载、安装并重启", { version: version ?? "" });
+  return <button className="icon-btn upgrade-btn" onClick={() => void installUpdate()} title={label} aria-label={label}><CircleArrowUp size={17} /></button>;
 }
 
 export function Modal({ title, onClose, children, wide, head }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; head?: React.ReactNode }) {

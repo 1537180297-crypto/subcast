@@ -1,10 +1,10 @@
 // In-app updates: the signed manifest is checked a little after launch and every few hours. With
-// "autoUpdate" on (the default) a new version downloads quietly in the background and waits for a restart;
-// otherwise the user starts it. Tauri's updater downloads the whole package (about 7 MB on macOS), verifies
-// its signature, installs it and restarts the app.
+// "autoUpdate" on (the default) a new version downloads quietly in the background, from whichever of our
+// server and the GitHub release is faster (appupdate.rs), is verified, and waits: an upgrade button appears
+// next to Settings, and one click installs it and restarts.
 import { create } from "zustand";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { api, errorText } from "./api";
 import { useStore } from "../store";
 
@@ -28,7 +28,15 @@ interface UpdateState {
 export const useUpdate = create<UpdateState>(() => ({ phase: "idle", progress: null }));
 /** A version is waiting for the user: shown as a dot on the settings button. */
 export const hasUpdate = (s: UpdateState) => s.phase === "available" || s.phase === "ready";
-let pending: Update | null = null;
+let pending = false;
+let listening = false;
+function listenProgress() {
+  if (listening) return;
+  listening = true;
+  void listen<{ got: number; total: number | null }>("app-update", ({ payload: p }) => {
+    if (useUpdate.getState().phase === "downloading") useUpdate.setState({ progress: p.total ? Math.min(1, p.got / p.total) : null });
+  });
+}
 
 export async function checkForUpdate(manual = false) {
   // Interface fixes come as hot updates (ota.rs), on their own schedule: independent of whether the app
@@ -39,11 +47,11 @@ export async function checkForUpdate(manual = false) {
   if (phase === "checking" || phase === "downloading" || phase === "installing" || phase === "ready") return;
   useUpdate.setState({ phase: "checking", error: undefined });
   try {
-    const u = await check({ timeout: 20000 });
-    pending = u;
+    const u = await invoke<{ version: string; notes?: string | null; ready: boolean } | null>("app_update_check");
+    pending = !!u;
     if (!u) { useUpdate.setState({ phase: manual ? "latest" : "idle" }); return; }
-    useUpdate.setState({ phase: "available", version: u.version, notes: u.body });
-    if (useStore.getState().settings.autoUpdate) void downloadUpdate(!manual);
+    useUpdate.setState({ phase: u.ready ? "ready" : "available", version: u.version, notes: u.notes ?? undefined });
+    if (!u.ready && useStore.getState().settings.autoUpdate) void downloadUpdate(!manual);
   } catch (e) {
     // Background checks fail quietly (offline, server down); only a manual check reports it.
     useUpdate.setState({ phase: manual ? "error" : "idle", error: errorText(e) });
@@ -53,13 +61,10 @@ export async function checkForUpdate(manual = false) {
 /** Downloads and verifies the new version without installing it. */
 export async function downloadUpdate(quiet = false) {
   if (!pending) return;
-  let total = 0, got = 0;
+  listenProgress();
   useUpdate.setState({ phase: "downloading", progress: null, quiet, error: undefined });
   try {
-    await pending.download((ev) => {
-      if (ev.event === "Started") total = ev.data.contentLength ?? 0;
-      else if (ev.event === "Progress") { got += ev.data.chunkLength; useUpdate.setState({ progress: total ? Math.min(1, got / total) : null }); }
-    });
+    await invoke("app_update_download");
     useUpdate.setState({ phase: "ready", quiet: false });
   } catch (e) {
     // A failed background download goes back to "available" so the user can try it by hand.
@@ -74,8 +79,7 @@ export async function installUpdate() {
     if (useUpdate.getState().phase !== "ready") await downloadUpdate();
     if (useUpdate.getState().phase !== "ready") return;
     useUpdate.setState({ phase: "installing" });
-    await pending.install();
-    await relaunch();
+    await invoke("app_update_install");
   } catch (e) {
     useUpdate.setState({ phase: "error", error: errorText(e) });
   }

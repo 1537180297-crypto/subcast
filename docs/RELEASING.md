@@ -82,4 +82,5 @@ Keys and credentials (never in the repo or in prompts): updater key `~/.tauri/su
 - `tauri signer sign -f` refuses when `TAURI_SIGNING_PRIVATE_KEY` is in the environment: run it under `env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 - Publishing a draft release re-triggers CI; CI must never upload Mac assets (it would overwrite the notarized DMG).
 - The website deploy (`subcast-website/scripts/deploy.sh`) excludes `/download/`; keep it that way. `/tools/` (yt-dlp mirror, interface updates) lives outside the site root.
+- In-app updates download the package from whichever of `subcast.qiaomu.ai/download/<version>/` and the GitHub release `v<version>` answers faster (`src-tauri/src/appupdate.rs`), so both must carry the updater files under the same names (`release.sh --publish` attaches them). The signature check is the same either way.
 - The release build serves the interface from `http://localhost:14327` (YouTube refuses `tauri://`). That origin is allowed in `capabilities/default.json`; changing the port breaks every command.
