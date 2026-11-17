@@ -43,8 +43,11 @@ export const lang = () => current;
 /** Chinese interfaces get machine-translated titles and notes; others show the originals. */
 export const isChineseUi = () => current === "zh-CN" || current === "zh-TW";
 
+/** Shortcut labels are written with ⌘; Windows and Linux show Ctrl+ instead. */
+export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+export const kbd = (s: string) => (IS_MAC ? s : s.replace(/⌘/g, "Ctrl+"));
 const fill = (s: string, vars?: Record<string, string | number>) =>
-  vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s;
+  kbd(vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s);
 
 /** The interface text for a Chinese source string. Use `{name}` placeholders for values. */
 export function t(source: string, vars?: Record<string, string | number>): string {

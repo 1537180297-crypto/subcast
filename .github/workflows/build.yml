@@ -37,6 +37,17 @@ jobs:
       - name: Windows dependencies
         if: startsWith(matrix.platform, 'windows')
         run: choco install -y llvm cmake --no-progress
+      - name: Visual C++ runtime for CrispASR (app-local, redistributable)
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $redist = Get-ChildItem "$vs\VC\Redist\MSVC" -Directory | Where-Object Name -match '^\d' | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+          $crt = Get-ChildItem "$($redist.FullName)\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+          $omp = Get-ChildItem "$($redist.FullName)\x64" -Directory -Filter "Microsoft.VC*.OpenMP" | Select-Object -First 1
+          foreach ($f in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") { Copy-Item "$($crt.FullName)\$f" src-tauri/windows/vcrt/ }
+          Copy-Item "$($omp.FullName)\vcomp140.dll" src-tauri/windows/vcrt/
+          Get-ChildItem src-tauri/windows/vcrt
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -51,3 +62,16 @@ jobs:
           # latest.json is written by scripts/release.sh once the Mac builds are in.
           includeUpdaterJson: false
           args: ${{ matrix.args }}
+      # subcast.exe must start on a PC without the Visual C++ Redistributable, and the installer must carry the
+      # runtime CrispASR needs. Fails the build otherwise.
+      - name: Check Windows runtime dependencies
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          python scripts/pe-imports.py src-tauri/target/release/subcast.exe --forbid msvcp140.dll vcruntime140.dll vcruntime140_1.dll vcomp140.dll
+          $setup = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          $list = & 7z l $setup.FullName
+          foreach ($f in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll") {
+            if (-not ($list | Select-String -SimpleMatch $f)) { throw "installer is missing vcrt/$f" }
+          }
+          Write-Output "ok: no VC++ runtime imports; installer carries vcrt"

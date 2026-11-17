@@ -25,7 +25,7 @@ import { api, errorText, llmChat, type Episode } from "../lib/api";
 import { date, duration, notesText } from "../lib/format";
 import { showName } from "../lib/picks";
 import { isZh, useZh, useZhParagraphs } from "../lib/zh";
-import { loadTranscript, useJobs } from "../lib/jobs";
+import { autoTranslate, loadTranscript, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 import { ChatPanel, SummaryPanel } from "./AiPanels";
 import { Controls, YouTubePlayer } from "./Players";
@@ -250,6 +250,10 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   const isCurrent = current?.id === ep.id;
   const playing = useStore((s) => s.playing);
   const fav = useLibrary((s) => s.favorites.some((f) => f.id === ep.id));
+  // Translate foreign-language subtitles whichever tab is open: the video's subtitles need the Chinese too.
+  const transcript = useJobs((s) => s.transcripts[ep.id]);
+  const autoOn = useStore((s) => s.settings.autoTranslate);
+  useEffect(() => { if (transcript) autoTranslate(ep); }, [transcript, autoOn]);
   const coverToggle = () => {
     if (isCurrent) { useStore.getState().player?.toggle(); return; }
     load(ep); window.setTimeout(() => useStore.getState().player?.play(), 400);

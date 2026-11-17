@@ -2,15 +2,15 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, Loader2, Search, X } from "lucide-react";
+import { ChevronDown, Languages, Loader2, Search, X } from "lucide-react";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { bytes } from "../lib/offline";
 import { api, errorText, rawErrorText, type Episode, type ModelInfo, type Segment } from "../lib/api";
 import { clock } from "../lib/format";
-import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, translateEpisode, useJobs } from "../lib/jobs";
+import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, switchYoutubeTrack, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 import { ASR_SERVICES } from "../lib/settings";
-import { t, tk, tr } from "../lib/i18n";
+import { lang, t, tk, tr, useLang } from "../lib/i18n";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
 
@@ -103,12 +103,6 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   useEffect(() => { if (transcript) void loadTranslation(ep.id, transcript.segments.length); }, [transcript, ep.id]);
   useEffect(() => { void llmReady("translate").then(setCanUpgrade); }, [settings]);
 
-  // Foreign-language episodes are translated on open; with no model set up this uses free Google translation.
-  useEffect(() => {
-    if (!transcript || !translation || translation.running || translation.error) return;
-    if (!settings.autoTranslate || !wantsZh || translation.items.every((x) => x != null)) return;
-    translateEpisode(ep, transcript).catch((e) => setStartError(rawErrorText(e)));
-  }, [transcript, !!translation, settings.autoTranslate]);
 
   useEffect(() => {
     if (active < 0 || Date.now() - userScrolled.current < 5000 || query) return;
@@ -136,7 +130,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const done = Math.min(total, translation?.items.slice(0, total).filter((x) => x != null).length ?? 0);
   const running = !!translation?.running;
   const providerName = providerFor(settings, "translate")?.name;
-  const engineName = translation?.engine === "google" ? t("谷歌翻译") : t("{name}翻译", { name: providerName ? t(providerName) : t("模型") });
+  const engineName = translation?.engine === "youtube" ? t("节目方中文字幕") : translation?.engine === "google" ? t("谷歌翻译") : t("{name}翻译", { name: providerName ? t(providerName) : t("模型") });
   const error = startError ?? translation?.error;
   const pending = wantsZh && (running || (settings.autoTranslate && !error && done < total));
   const start = (force?: "llm" | "google") => { setStartError(null); translateEpisode(ep, transcript, force).catch((e) => setStartError(rawErrorText(e))); };
@@ -150,7 +144,10 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       ))}
     </div>
   );
-  const searchBtn = <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>;
+  const searchBtn = <>
+    {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
+    <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
+  </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
 
   let status: React.ReactNode;
@@ -189,6 +186,39 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
         )}
       </div>
     </div>
+  );
+}
+
+const trackCache = new Map<string, { language: string; auto: boolean }[]>();
+/** The subtitle language, when the video has captions in more than one. */
+function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; auto: boolean }) {
+  const [tracks, setTracks] = useState(trackCache.get(ep.id) ?? null);
+  const [busy, setBusy] = useState(false);
+  useLang((s) => s.lang);
+  useEffect(() => {
+    if (tracks) return;
+    void api.youtubeTracks(ep.id).then((list) => { trackCache.set(ep.id, list); setTracks(list); }).catch(() => {});
+  }, [ep.id]);
+  if (!tracks || tracks.length < 2) return null;
+  let names: Intl.DisplayNames | null = null;
+  try { names = new Intl.DisplayNames([lang()], { type: "language" }); } catch { /* old WebView */ }
+  const name = (l: string) => { try { return names?.of(l) ?? l; } catch { return l; } };
+  const value = `${auto ? "a" : "m"}:${language}`;
+  const pick = async (v: string) => {
+    const [kind, ...rest] = v.split(":");
+    setBusy(true);
+    try { await switchYoutubeTrack(ep, rest.join(":"), kind === "a"); }
+    catch (e) { useStore.getState().notify(t("切换字幕失败：{error}", { error: errorText(e) })); }
+    finally { setBusy(false); }
+  };
+  return (
+    <label className="track-pick" title={t("字幕语言")}>
+      {busy ? <Loader2 size={13} className="spin" /> : <Languages size={14} />}
+      <select value={value} disabled={busy} onChange={(e) => void pick(e.target.value)} aria-label={t("字幕语言")}>
+        {tracks.map((x) => <option key={`${x.auto}:${x.language}`} value={`${x.auto ? "a" : "m"}:${x.language}`}>{name(x.language)}{x.auto ? ` · ${t("自动生成")}` : ""}</option>)}
+      </select>
+      <ChevronDown size={12} />
+    </label>
   );
 }
 

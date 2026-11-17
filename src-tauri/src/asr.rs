@@ -110,10 +110,27 @@ pub fn find_ytdlp(data: &Path) -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join(exe("yt-dlp"))).find(|p| p.is_file())
 }
 
-pub async fn install_ytdlp(data: &Path, cancel: &AtomicBool, progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf> {
-    let name = if cfg!(target_os = "macos") { "yt-dlp_macos" } else if cfg!(windows) { "yt-dlp.exe" } else if cfg!(target_arch = "aarch64") { "yt-dlp_linux_aarch64" } else { "yt-dlp_linux" };
+/// Our mirror of the latest release (server/deploy/sync-ytdlp.sh), reachable where GitHub is slow or blocked.
+const YTDLP_MIRROR: &str = "https://subcast.qiaomu.ai/tools/yt-dlp";
+const YTDLP_GITHUB: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
+
+fn ytdlp_asset() -> &'static str {
+    if cfg!(target_os = "macos") { "yt-dlp_macos" } else if cfg!(windows) { "yt-dlp.exe" } else if cfg!(target_arch = "aarch64") { "yt-dlp_linux_aarch64" } else { "yt-dlp_linux" }
+}
+
+/// Downloads yt-dlp from the mirror, else GitHub, and keeps it only if it matches that release's SHA2-256SUMS.
+pub async fn install_ytdlp(data: &Path, cancel: &AtomicBool, mut progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf> {
+    let name = ytdlp_asset();
     let dest = data.join("bin").join(exe("yt-dlp"));
-    download(&format!("https://github.com/yt-dlp/yt-dlp/releases/latest/download/{name}"), &dest, cancel, progress).await?;
+    let mut failure = None;
+    for base in [YTDLP_MIRROR, YTDLP_GITHUB] {
+        match fetch_checked(base, name, &dest, cancel, &mut progress).await {
+            Ok(()) => { failure = None; break; }
+            Err(e) if e.to_string().contains("已取消") => return Err(e),
+            Err(e) => failure = Some(e),
+        }
+    }
+    if let Some(e) = failure { return Err(e); }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -122,15 +139,43 @@ pub async fn install_ytdlp(data: &Path, cancel: &AtomicBool, progress: impl FnMu
     Ok(dest)
 }
 
+async fn fetch_checked(base: &str, name: &str, dest: &Path, cancel: &AtomicBool, progress: &mut impl FnMut(u64, Option<u64>)) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let sums = net::get_text(&format!("{base}/SHA2-256SUMS")).await?;
+    let want = sums.lines().find_map(|l| {
+        let mut it = l.split_whitespace();
+        let (hash, file) = (it.next()?, it.next()?);
+        (file.trim_start_matches('*') == name).then(|| hash.to_lowercase())
+    }).ok_or_else(|| anyhow!("校验清单里没有 {name}"))?;
+    let tmp = dest.with_extension("download");
+    download(&format!("{base}/{name}"), &tmp, cancel, |a, b| progress(a, b)).await?;
+    let got = hex::encode(Sha256::digest(tokio::fs::read(&tmp).await?));
+    if got != want {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(anyhow!("yt-dlp 校验失败（{base}）"));
+    }
+    tokio::fs::rename(&tmp, dest).await?;
+    Ok(())
+}
+
 /// YouTube changes often and old yt-dlp builds stop working, so the app keeps its own copy (in `bin/`) and
 /// refreshes it at most once a day; a failed YouTube job also forces a check and retries once.
-pub async fn ytdlp(data: &Path) -> Result<PathBuf> {
+pub async fn ytdlp(data: &Path) -> Result<PathBuf> { ytdlp_with(data, |_, _| {}).await }
+
+/// Only one first-time install at a time: the video page prepares yt-dlp while the player may also need it.
+static INSTALLING: once_cell::sync::Lazy<tokio::sync::Mutex<()>> = once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// Like `ytdlp`, reporting the first-time download (about 35 MB) so the UI can show it.
+pub async fn ytdlp_with(data: &Path, progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf> {
     let own = data.join("bin").join(exe("yt-dlp"));
     if !own.is_file() {
-        match install_ytdlp(data, &AtomicBool::new(false), |_, _| {}).await {
-            Ok(p) => return Ok(p),
-            // GitHub unreachable: a system-wide copy (Homebrew, pip) is better than nothing.
-            Err(e) => return find_ytdlp(data).ok_or(e),
+        let _one = INSTALLING.lock().await;
+        if !own.is_file() {
+            match install_ytdlp(data, &AtomicBool::new(false), progress).await {
+                Ok(p) => return Ok(p),
+                // GitHub unreachable: a system-wide copy (Homebrew, pip) is better than nothing.
+                Err(e) => return find_ytdlp(data).ok_or(e),
+            }
         }
     }
     let d = data.to_path_buf();
@@ -158,10 +203,15 @@ pub async fn update_ytdlp(data: &Path, force: bool) -> Result<bool> {
     }
     if let Some(dir) = stamp.parent() { std::fs::create_dir_all(dir)?; }
     std::fs::write(&stamp, b"")?;
-    let res = net::client().get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
-        .header("User-Agent", "SubCast").header("Accept", "application/vnd.github+json").send().await?;
-    if !res.status().is_success() { return Err(anyhow!("GitHub {}", res.status().as_u16())); }
-    let latest = res.json::<serde_json::Value>().await?["tag_name"].as_str().unwrap_or_default().to_string();
+    let latest = match net::get_text(&format!("{YTDLP_MIRROR}/VERSION")).await {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => {
+            let res = net::client().get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
+                .header("User-Agent", "SubCast").header("Accept", "application/vnd.github+json").send().await?;
+            if !res.status().is_success() { return Err(anyhow!("GitHub {}", res.status().as_u16())); }
+            res.json::<serde_json::Value>().await?["tag_name"].as_str().unwrap_or_default().to_string()
+        }
+    };
     if latest.is_empty() { return Ok(false); }
     if own.is_file() && ytdlp_version(&own).await.as_deref() == Some(latest.as_str()) { return Ok(false); }
     install_ytdlp(data, &AtomicBool::new(false), |_, _| {}).await?;
@@ -219,7 +269,10 @@ pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc
 
 /// A playable address for videos whose owners block the embedded player: YouTube's HLS master playlist
 /// (adaptive quality, plays natively in WebKit) or, failing that, a single file with both audio and video.
-pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str) -> Result<String> {
+/// A stream the app's own <video> can play. `hls`: the WebView plays HLS natively (WebKit on macOS). Elsewhere
+/// (WebView2, most WebKitGTK) only a progressive MP4 works: YouTube's HLS manifests send no CORS header, so
+/// hls.js can't load them.
+pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str, hls: bool) -> Result<String> {
     let mut cmd = tokio::process::Command::new(ytdlp);
     cmd.args(["-j", "--no-playlist", "--no-warnings"]);
     let proxy = net::proxy();
@@ -232,12 +285,16 @@ pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str) -> Result<String> 
         anyhow!("无法获取视频地址：{}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("").chars().take(200).collect::<String>())
     })?;
     let formats = info["formats"].as_array().cloned().unwrap_or_default();
-    if let Some(u) = formats.iter().filter(|f| f["protocol"].as_str().is_some_and(|p| p.starts_with("m3u8"))).find_map(|f| f["manifest_url"].as_str()) {
-        return Ok(u.to_string());
+    if hls {
+        if let Some(u) = formats.iter().filter(|f| f["protocol"].as_str().is_some_and(|p| p.starts_with("m3u8"))).find_map(|f| f["manifest_url"].as_str()) {
+            return Ok(u.to_string());
+        }
     }
+    // Progressive files with both audio and video (format 18, 360p, is the one nearly every video has).
     formats.iter().rev()
         .filter(|f| f["vcodec"].as_str().is_some_and(|v| v != "none") && f["acodec"].as_str().is_some_and(|a| a != "none") && f["protocol"].as_str() == Some("https"))
-        .find_map(|f| f["url"].as_str().map(str::to_string))
+        .max_by_key(|f| (f["ext"].as_str() == Some("mp4"), f["height"].as_i64().unwrap_or(0)))
+        .and_then(|f| f["url"].as_str().map(str::to_string))
         .ok_or_else(|| anyhow!("这个视频没有可直接播放的格式"))
 }
 
@@ -308,9 +365,26 @@ pub fn write_wav(path: &Path, samples: &[f32]) -> Result<()> {
     Ok(())
 }
 
+/// Windows: the app-local Visual C++ runtime the installer ships (resources/vcrt). CrispASR's release build
+/// imports MSVCP140, VCRUNTIME140(_1) and VCOMP140, which PCs without the Redistributable lack.
+pub static VCRT_DIR: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCell::new();
+
+/// Copies the runtime DLLs next to an executable that needs them (the first place Windows looks).
+pub fn place_runtime(bin: &Path) {
+    let (Some(src), Some(dir)) = (VCRT_DIR.get(), bin.parent()) else { return };
+    for entry in std::fs::read_dir(src).into_iter().flatten().flatten() {
+        let p = entry.path();
+        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dll")) {
+            let to = dir.join(entry.file_name());
+            if !to.exists() { let _ = std::fs::copy(&p, &to); }
+        }
+    }
+}
+
 /// Runs Qwen3-ASR on a 16 kHz WAV. CrispASR transcribes in ~30 s slices; each slice is split into sentences.
 pub async fn run_crispasr(bin: &Path, model: &Path, wav: &Path, language: &str, prompt: &str, cancel: Arc<AtomicBool>, mut on_progress: impl FnMut(f64)) -> Result<Vec<Segment>> {
     let out = wav.with_extension("");
+    if cfg!(windows) { place_runtime(bin); }
     let mut cmd = tokio::process::Command::new(bin);
     cmd.arg("-m").arg(model).arg("-f").arg(wav).args(["-oj", "-np", "-pp"]).arg("-of").arg(&out);
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);

@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 
+/** A match inside one show: which part of the episode matched, a few words around it, and for subtitles the time. */
+export interface ShowHit { episode: Episode; field: "title" | "notes" | "transcript"; snippet: string; time?: number | null }
+
 export interface Show {
   id: string;
   kind: "youtube" | "podcast" | "xiaoyuzhou" | "single" | "qiaomu";
@@ -60,6 +63,7 @@ export const api = {
   getEpisode: (id: string) => invoke<Episode | null>("get_episode", { id }),
   removeShow: (id: string) => invoke<void>("remove_show", { id }),
   setProgress: (id: string, seconds: number) => invoke<void>("set_progress", { id, seconds }),
+  searchShow: (showId: string, query: string) => invoke<ShowHit[]>("search_show", { showId, query }),
   searchPodcasts: (term: string, country?: string) => invoke<SearchResult[]>("search_podcasts", { term, country }),
   loadTranscript: (episodeId: string) => invoke<Transcript | null>("load_transcript", { episodeId }),
   fetchOfficialTranscript: (episodeId: string) => invoke<Transcript | null>("fetch_official_transcript", { episodeId }),
@@ -81,7 +85,10 @@ export const api = {
   qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
   listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),
   ttsSpeak: (text: string, voice: string, resource?: string) => invoke<string>("tts_speak", { text, voice, resource }),
-  youtubeStream: (videoId: string) => invoke<string>("youtube_stream", { videoId }),
+  youtubeStream: (videoId: string, hls: boolean) => invoke<string>("youtube_stream", { videoId, hls }),
+  prepareYoutube: () => invoke<void>("prepare_youtube"),
+  youtubeTracks: (episodeId: string) => invoke<{ language: string; auto: boolean }[]>("youtube_tracks", { episodeId }),
+  useYoutubeTrack: (episodeId: string, language: string, auto: boolean) => invoke<Transcript>("use_youtube_track", { episodeId, language, auto }),
   translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
   downloadEpisode: (episodeId: string) => invoke<Saved>("download_episode", { episodeId }),
   listDownloads: () => invoke<Saved[]>("list_downloads"),

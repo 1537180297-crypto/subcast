@@ -71,3 +71,18 @@ ssh myvps 'echo "17 3 * * * root docker exec qiaomu-subcast-api node --disable-w
 ## Deploy notes (English)
 
 Docker Compose on myvps (`/opt/qiaomu-apps/subcast-api`, stock `node:22-alpine`, code mounted read-only, database in `data/` on the host), bound to 127.0.0.1:8787 and exposed as `https://subcast.qiaomu.ai/api/` through the `location /api/` block in the site's vhost. The `.env` (ADMIN_TOKEN) is generated on the server. Updates: rsync `server/` then `docker compose restart`. A daily cron runs `src/backup.js` inside the container (gzipped VACUUM INTO snapshots, 30 kept). `subcast-api.service` is the earlier systemd variant, kept for reference.
+
+## yt-dlp mirror
+
+The app downloads yt-dlp from `https://subcast.qiaomu.ai/tools/yt-dlp/` first (GitHub second) and checks it
+against `SHA2-256SUMS`. `sync-ytdlp.sh` mirrors the latest release every six hours and verifies every file before
+replacing it:
+
+```bash
+scp server/deploy/sync-ytdlp.sh myvps:/opt/qiaomu-apps/subcast-api/sync-ytdlp.sh
+# /etc/cron.d/subcast-ytdlp
+17 */6 * * * root /opt/qiaomu-apps/subcast-api/sync-ytdlp.sh >> /var/log/subcast-ytdlp.log 2>&1
+```
+
+Files live in `/www/wwwroot/subcast-tools/` (outside the website root, so website deploys never delete them),
+served by `location ^~ /tools/ { alias /www/wwwroot/subcast-tools/; }` in the subcast.qiaomu.ai vhost.
