@@ -19,6 +19,7 @@ import { useModelDownload } from "./TranscriptPanel";
 import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC } from "../lib/i18n";
 import { ModelSettings } from "./ModelSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
+import { ReadingSettings } from "./ReadingSettings";
 import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } from "../lib/updater";
 
 const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
@@ -106,7 +107,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
 
 export function SettingsDialog() {
   const { settings, saveSettings, set, notify, settingsSection } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection })));
-  type Section = "overview" | "model" | "asr" | "tts" | "shortcuts" | "general" | "storage" | "about";
+  type Section = "overview" | "model" | "asr" | "reading" | "tts" | "shortcuts" | "general" | "storage" | "about";
   const [section, setSection] = useState<Section>((settingsSection as Section) ?? "overview");
   const [chatOk, setChatOk] = useState<boolean | null>(null);
   const [trOk, setTrOk] = useState<boolean | null>(null);
@@ -119,7 +120,7 @@ export function SettingsDialog() {
   const { downloading, start, cancel } = useModelDownload(refresh);
   useEffect(() => { void refresh(); }, []);
   const updateWaiting = useUpdate(hasUpdate);
-  const NAV: [Section, string][] = [["overview", tk("概览")], ["model", tk("AI 模型")], ["asr", tk("语音识别")], ["tts", tk("朗读")], ["shortcuts", tk("快捷键")], ["general", tk("通用")], ["storage", tk("存储")], ["about", tk("关于")]];
+  const NAV: [Section, string][] = [["overview", tk("概览")], ["model", tk("AI 模型")], ["asr", tk("语音识别")], ["reading", tk("阅读与字幕")], ["tts", tk("朗读")], ["shortcuts", tk("快捷键")], ["general", tk("通用")], ["storage", tk("存储")], ["about", tk("关于")]];
 
   return (
     <Modal title={t("设置")} onClose={() => { stopSpeaking(); set({ settingsOpen: false }); }} wide>
@@ -165,6 +166,7 @@ export function SettingsDialog() {
           )}
           {section === "model" && <ModelSettings ProviderEditor={ProviderEditor} />}
           {section === "shortcuts" && <ShortcutSettings />}
+          {section === "reading" && <ReadingSettings />}
           {section === "asr" && (
             <>
               <div className="engine-switch">

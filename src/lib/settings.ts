@@ -22,6 +22,15 @@ export interface Settings {
   /** When YouTube asks to confirm "not a bot", download with this browser's YouTube sign-in ("" = never). */
   ytCookiesBrowser?: string;
   /** Shortcuts the listener changed (Settings › 快捷键); the rest use the defaults in lib/shortcuts.ts. */
+  /** Reading: subtitle size step, font, video subtitle look, Q&A text size, the next line on audio, skips, auto-next. */
+  subtitleSize?: "s" | "m" | "l" | "xl";
+  subtitleFont?: "system" | "serif" | "kai" | "sans";
+  subtitleLook?: "box" | "outline";
+  chatSize?: "m" | "l";
+  audioNextLine?: boolean;
+  skipBack?: number;
+  skipForward?: number;
+  autoNext?: boolean;
   shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;
   /** The local agent SubCast switched in on its own (shown as such in settings). */
   autoPicked?: string;

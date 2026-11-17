@@ -342,11 +342,11 @@ export function Controls({ compact = false }: { compact?: boolean }) {
   const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
-      <button className="icon-btn" title={t("后退 15 秒（←）")} onClick={() => player?.seek(Math.max(0, time - 15))} disabled={!player}><RotateCcw size={18} /></button>
+      <button className="icon-btn" title={t("后退 {n} 秒（←）", { n: settings.skipBack ?? 15 })} onClick={() => player?.seek(Math.max(0, time - (settings.skipBack ?? 15)))} disabled={!player}><RotateCcw size={18} /></button>
       <button className={`play-btn ${loadingSince ? "loading" : ""}`} title={loadingSince ? t("正在加载…") : playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loadingSince}>
         {loadingSince ? <Loader2 size={20} className="spin" /> : playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
-      <button className="icon-btn" title={t("前进 30 秒（→）")} onClick={() => player?.seek(time + 30)} disabled={!player}><RotateCw size={18} /></button>
+      <button className="icon-btn" title={t("前进 {n} 秒（→）", { n: settings.skipForward ?? 30 })} onClick={() => player?.seek(time + (settings.skipForward ?? 30))} disabled={!player}><RotateCw size={18} /></button>
       <span className="time">{clock(shown)}</span>
       <input
         className="seek"

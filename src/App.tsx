@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
 import { detectAgents } from "./lib/agents";
+import { useReadingSettings } from "./lib/reading";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
@@ -27,6 +28,7 @@ import { t, useLang } from "./lib/i18n";
 import { EqBars } from "./components/Illustrations";
 
 export default function App() {
+  useReadingSettings();
   const { ready, view, settingsOpen, addOpen, init } = useStore(useShallow((s) => ({ ready: s.ready, view: s.view, settingsOpen: s.settingsOpen, addOpen: s.addOpen, init: s.init })));
 
   useEffect(() => {
@@ -62,8 +64,8 @@ export default function App() {
       };
       const run: Record<ActionId, () => boolean | void> = {
         playPause: () => player?.toggle(),
-        back: () => player?.seek(Math.max(0, time - 15)),
-        forward: () => player?.seek(time + 30),
+        back: () => player?.seek(Math.max(0, time - (settings.skipBack ?? 15))),
+        forward: () => player?.seek(time + (settings.skipForward ?? 30)),
         backShort: () => player?.seek(Math.max(0, time - 5)),
         forwardShort: () => player?.seek(time + 5),
         prevLine: () => lineSeek(-1),
