@@ -140,6 +140,17 @@ export function SettingsDialog() {
                   ))}
                 </div>
                 <label className="check"><input type="checkbox" checked={settings.autoTranslate} onChange={(e) => saveSettings({ autoTranslate: e.target.checked })} /> {t("打开外语节目时自动翻译字幕")}</label>
+                {trOk && settings.translateMode !== "google" && (
+                  <div className="ov-row">
+                    <span className="small">{t("用模型翻译时")}</span>
+                    <div className="seg-control">
+                      {([["fast", t("快速")], ["best", t("精翻")]] as const).map(([k, label]) => (
+                        <button key={k} className={settings.translateQuality === k ? "on" : ""} title={k === "best" ? t("多一遍润色，读起来更像中文口语；花费约为两倍") : t("一遍翻译，最快出字幕")} onClick={() => saveSettings({ translateQuality: k })}>{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <label className="check" title={t("把标题和节目简介里的人名、公司和术语告诉识别与翻译模型，名字更少写错")}><input type="checkbox" checked={settings.useShowNotes} onChange={(e) => saveSettings({ useShowNotes: e.target.checked })} /> {t("用节目简介辅助识别和翻译")}</label>
                 </div>
               <div className="ov-card">
                 <div className="ov-head"><p className="ov-title">{t("AI 问答与导读")}</p><span className={`pill ${chatOk ? "ok" : ""}`}>{chatOk ? t(settings.providers[settings.chatProvider]?.name ?? "") : t("未连接")}</span></div>

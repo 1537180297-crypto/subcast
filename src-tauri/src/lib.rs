@@ -661,13 +661,14 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
     if let Some(mut hit) = shared::lookup(&share_keys).await {
         let translation = hit.translation.take();
         let t = shared::into_transcript(&ep.id, hit);
-        if let Some(tr) = &translation {
-            let conn = state.db.lock().unwrap();
-            for (seg, item) in t.segments.iter().zip(tr.items.iter()) {
-                if let Some(v) = item { let _ = db::tr_put(&conn, &short_hash(&format!("{}|{}", tr.lang, seg.text), 24), v); }
-            }
-        }
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
+        // The shared Chinese lines become this episode's translation (engine "shared"); the subtitle view only
+        // machine-translates the gaps. Saved after the transcript, which clears an episode's old blobs.
+        if let Some(tr) = translation.filter(|tr| tr.items.len() == t.segments.len() && tr.lang.starts_with("zh")) {
+            let conn = state.db.lock().unwrap();
+            let _ = db::set_blob(&conn, &ep.id, "zh", &serde_json::to_string(&tr.items).unwrap_or_default());
+            let _ = db::set_blob(&conn, &ep.id, "zh-engine", "shared");
+        }
         asr_emit(&app, &episode_id, "done", 1.0, None, None);
         return Ok(t);
     }
@@ -759,6 +760,10 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         if segments.is_empty() { return Err("没有识别出文字（可能是纯音乐或静音）".to_string()); }
         let t = Transcript { episode_id: ep.id.clone(), source: if cloud.is_some() { "cloud" } else { "whisper" }.into(), language: out.language, segments };
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
+        // What made it, for sharing the translation later (share_translation).
+        let made_by = json!({ "source": if cloud.is_some() { "cloud" } else if spec.engine == "qwen3" { "qwen3" } else { "whisper" },
+            "model": cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.to_string()) });
+        let _ = db::set_blob(&state.db.lock().unwrap(), &ep.id, "asr-meta", &made_by.to_string());
         Ok(t)
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
@@ -805,6 +810,43 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
 }
 
 /// A random id for this install; the server stores only a salted hash of it, for vote/report dedupe.
+/// Shares an episode's finished Chinese translation with its recognised transcript, so the next listener gets
+/// bilingual subtitles at once. Only transcripts the shared library takes (speech recognition, ours or shared)
+/// and only with the "shareTranscripts" setting on. `engine`: llm | google. Returns the server's action.
+#[tauri::command]
+async fn share_translation(state: State<'_, AppState>, episode_id: String, engine: String, model: String) -> Res<String> {
+    let (ep, t, items, made_by, share_on, install) = {
+        let conn = state.db.lock().unwrap();
+        let ep = db::get_episode(&conn, &episode_id).map_err(e)?.ok_or("节目不存在")?;
+        let t = db::get_transcript(&conn, &episode_id).map_err(e)?.ok_or("没有字幕")?;
+        let items: Vec<Option<String>> = db::get_blob(&conn, &episode_id, "zh").map_err(e)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let made_by = db::get_blob(&conn, &episode_id, "asr-meta").ok().flatten().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let on = db::get_setting(&conn, "app").ok().flatten().and_then(|r| serde_json::from_str::<Value>(&r).ok())
+            .and_then(|s| s["shareTranscripts"].as_bool()).unwrap_or(true);
+        (ep, t, items, made_by, on, install_id(&conn))
+    };
+    if !share_on || !matches!(engine.as_str(), "llm" | "google") { return Ok("skipped".into()); }
+    // Shared hits carry their origin in the source ("shared:qwen3"); an unknown model scores lowest, so the
+    // server keeps the existing segments and only takes the translation.
+    let (source, asr_model) = match (t.source.as_str(), &made_by) {
+        ("whisper" | "cloud", Some(m)) => (m["source"].as_str().unwrap_or("whisper").to_string(), m["model"].as_str().unwrap_or("").to_string()),
+        (s, _) if s.starts_with("shared:") => (s.trim_start_matches("shared:").to_string(), String::new()),
+        _ => return Ok("skipped".into()),
+    };
+    if !matches!(source.as_str(), "whisper" | "qwen3" | "cloud") || items.len() != t.segments.len() { return Ok("skipped".into()); }
+    let filled = items.iter().filter(|i| i.as_ref().is_some_and(|s| !s.is_empty())).count();
+    if filled * 10 < items.len() * 9 { return Ok("skipped".into()); }
+    let keys = shared::keys(&ep);
+    if keys.is_empty() { return Ok("skipped".into()); }
+    let meta = shared::UploadMeta {
+        title: ep.title.clone(), show: ep.show_title.clone().unwrap_or_default(),
+        duration: ep.duration.unwrap_or(0.0).max(t.segments.last().map(|s| s.end).unwrap_or(0.0)).max(1.0),
+        source, model: asr_model, language: t.language.clone(), install,
+        translation: Some(("zh-CN".to_string(), items)),
+    };
+    shared::upload_with(&keys, meta, &t.segments, &engine, &model).await.map_err(e)
+}
+
 fn install_id(conn: &Connection) -> String {
     if let Ok(Some(id)) = db::get_setting(conn, "install") { return id; }
     let id = uuid::Uuid::new_v4().to_string();
@@ -992,7 +1034,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

@@ -72,7 +72,7 @@ pub fn background(m: &Meta, limit: usize) -> String {
     let (head, chapters, description) = compose(m);
     let mut parts = Vec::new();
     if !head.is_empty() { parts.push(head.join("。")); }
-    if !chapters.is_empty() { parts.push(format!("章节：{}", chapters.join("；"))); }
+    if !chapters.is_empty() { parts.push(format!("章节：{}", chapters.join("；"))); } // i18n-ignore (sent to the recogniser)
     parts.extend(description);
     let mut out = String::new();
     for part in parts {

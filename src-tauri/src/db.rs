@@ -147,7 +147,7 @@ pub fn save_transcript(conn: &Connection, t: &Transcript) -> Result<()> {
         params![t.episode_id, t.source, t.language, serde_json::to_string(&t.segments)?, now_ms()],
     )?;
     // A new transcript invalidates translations and summaries made from the old one.
-    conn.execute("DELETE FROM blobs WHERE episode_id=?1 AND kind NOT IN ('chat', 'chat-archive', 'notes-full')", [&t.episode_id])?;
+    conn.execute("DELETE FROM blobs WHERE episode_id=?1 AND kind NOT IN ('chat', 'chat-archive', 'notes-full', 'ctx')", [&t.episode_id])?;
     Ok(())
 }
 

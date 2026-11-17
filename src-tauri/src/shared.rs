@@ -56,6 +56,8 @@ pub async fn lookup(keys: &[String]) -> Option<Shared> {
 struct UploadTranslation {
     lang: String,
     engine: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    model: String,
     items: Vec<Option<String>>,
 }
 
@@ -100,6 +102,11 @@ pub struct UploadMeta {
 
 /// Upload the transcript we just made. Returns the server's action ("created", "confirmed", …).
 pub async fn upload(keys: &[String], meta: UploadMeta, segments: &[Segment]) -> anyhow::Result<String> {
+    upload_with(keys, meta, segments, "google", "").await
+}
+
+/// Like `upload`, naming the translation's engine (llm | google) and model.
+pub async fn upload_with(keys: &[String], meta: UploadMeta, segments: &[Segment], engine: &str, tr_model: &str) -> anyhow::Result<String> {
     let body = Upload {
         keys,
         title: &meta.title,
@@ -109,7 +116,7 @@ pub async fn upload(keys: &[String], meta: UploadMeta, segments: &[Segment]) -> 
         model: &meta.model,
         language: &meta.language,
         segments,
-        translation: meta.translation.map(|(lang, items)| UploadTranslation { lang, engine: "google".into(), items }),
+        translation: meta.translation.map(|(lang, items)| UploadTranslation { lang, engine: engine.into(), model: tr_model.into(), items }),
         client: ClientInfo { app: "subcast", version: env!("CARGO_PKG_VERSION"), install: meta.install },
     };
     let resp = net::client().post(API).json(&body).timeout(Duration::from_secs(30)).send().await?;
