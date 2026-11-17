@@ -37,7 +37,7 @@ import { YtVideoStrip } from "./YtPromo";
 import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 
 type Tab = "transcript" | "deep" | "chat" | "summary";
-const TAB_NAMES: Record<Tab, string> = { transcript: tk("字幕"), deep: tk("乔木精读"), chat: tk("AI 问答"), summary: tk("导读 · 节目简介与 AI 总结") };
+const TAB_NAMES: Record<Tab, string> = { transcript: tk("字幕"), deep: tk("乔木精读"), chat: tk("AI 问答"), summary: tk("AI 导读") };
 
 /** Splits a subtitle block into reading-sized pieces: at the end of each sentence, at a comma once a piece is
  *  long enough, and between words only when a sentence runs on too long. */
@@ -131,8 +131,10 @@ function SubtitleOverlay({ ep }: { ep: Episode }) {
   const cjk = /[\u4e00-\u9fff]/.test(seg.text);
   return (
     <div className="subtitle-overlay">
-      {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
-      {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
+      <div className="sub-box">
+        {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
+        {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
+      </div>
     </div>
   );
 }
@@ -215,21 +217,6 @@ function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; d
     </div>
   );
 }
-/** The AI summary of the whole episode, folded under the show notes until asked for. */
-function GuideCard({ ep }: { ep: Episode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className={`notes guide-card ${open ? "open" : ""}`}>
-      <div className="notes-head" role="button" tabIndex={0} onClick={() => setOpen(!open)} onKeyDown={(e) => e.key === "Enter" && setOpen(!open)}>
-        <span><ScrollText size={14} className="accent" /> {t("AI 导读")}</span>
-        <span className="muted small guide-hint">{t("要点与时间线")}</span>
-        <ChevronDown size={14} className={open ? "flip" : ""} />
-      </div>
-      {open && <div className="guide-body"><SummaryPanel ep={ep} /></div>}
-    </div>
-  );
-}
-
 /** Save for offline listening; shows progress while saving and the saved state after. */
 function DownloadButton({ ep }: { ep: Episode }) {
   const [menu, setMenu] = useState(false);
@@ -368,8 +355,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             <button className="btn primary" onClick={() => { load(ep); playSoon(ep.id); }}><Play size={14} /> {t("播放这一集")}</button>
           )}
           {ytPromo && ytChannel && <YtVideoStrip channel={ytChannel} name={showName(epShow?.title ?? "")} cover={epShow?.cover} />}
-          {notes && <Notes ep={ep} text={notes} />}
-          <GuideCard ep={ep} />
+          {notes && <Notes ep={ep} text={notes} defaultOpen />}
           {isCurrent && docked && <div className="controls-dock"><Controls /></div>}
         </section>
         </div>
@@ -378,6 +364,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
           <div className="tabs" role="tablist" data-tauri-drag-region>
             <button role="tab" title={t(TAB_NAMES.transcript)} aria-label={t(TAB_NAMES.transcript)} aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /><span className="tab-label">{t("字幕")}</span></button>
             {ep.deep && noDeep !== ep.id && <button role="tab" title={t(TAB_NAMES.deep)} aria-label={t(TAB_NAMES.deep)} aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /><span className="tab-label">{t("精读")}</span></button>}
+            <button role="tab" title={t(TAB_NAMES.summary)} aria-label={t(TAB_NAMES.summary)} aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /><span className="tab-label">{t("导读")}</span></button>
             <button role="tab" title={t(TAB_NAMES.chat)} aria-label={t(TAB_NAMES.chat)} aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /><span className="tab-label">{t("问答")}</span></button>
             <span className="spacer" data-tauri-drag-region />
             <button className="icon-btn tabs-close" title={t("收起字幕栏（⌘\\）")} onClick={() => put({ panelOpen: false })}><PanelRightClose size={16} /></button>
@@ -386,6 +373,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             <PanelBoundary key={tab}>
               {tab === "transcript" && <TranscriptPanel ep={ep} />}
               {tab === "chat" && <ChatPanel ep={ep} />}
+              {tab === "summary" && <SummaryPanel ep={ep} />}
               {tab === "deep" && <DeepRead ep={ep} onMissing={() => { setNoDeep(ep.id); setTab("transcript"); }}><EmptyState art={<BookArt />} title={t("这一集还没有精读")} note={t("这期没有精读长文，字幕和 AI 导读依然可以帮你")} /></DeepRead>}
 
             </PanelBoundary>

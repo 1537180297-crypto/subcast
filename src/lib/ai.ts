@@ -147,7 +147,7 @@ export async function makeEpisodeContext(provider: Provider, o: { title: string;
   const notes = o.notes.replace(/<[^>]+>/g, " ").replace(/https?:\/\/\S+/g, " ").replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim().slice(0, 3000);
   let opening = "";
   for (const s of o.segments.slice(0, 150)) { if (opening.length + s.text.length > 6000) break; opening += s.text + "\n"; }
-  const answer = await llmChat({ provider, system: CONTEXT_SYSTEM, messages: [{ role: "user", content: JSON.stringify({ title: o.title, show: o.show, notes, transcriptStart: opening }) }], maxTokens: 2000, jsonMode: provider.protocol === "openai", signal: o.signal });
+  const answer = await llmChat({ provider, system: CONTEXT_SYSTEM, messages: [{ role: "user", content: JSON.stringify({ title: o.title, show: o.show, notes, transcriptStart: opening }) }], maxTokens: 6000, jsonMode: provider.protocol === "openai", signal: o.signal });
   const v = parseJson(answer) as Partial<EpisodeContext>;
   const str = (x: unknown) => (typeof x === "string" ? x.trim() : "");
   const ctx: EpisodeContext = {

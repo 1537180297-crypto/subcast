@@ -4,7 +4,7 @@ import { tr } from "./i18n";
 
 /** A match inside one show: which part of the episode matched, a few words around it, and for subtitles the time. */
 /** One day-hour of listening to one episode (from the player; seeks don't count). */
-export interface ListenRow { day: string; hour: number; episodeId: string; showId: string; seconds: number; translated: boolean; showTitle: string; kind: string; cover: string; episodeTitle: string; video: boolean }
+export interface ListenRow { day: string; hour: number; episodeId: string; showId: string; seconds: number; translated: boolean; showTitle: string; kind: string; cover: string; episodeTitle: string; video: boolean; duration: number; progress: number; published: number }
 
 export interface ShowHit { episode: Episode; field: "title" | "notes" | "transcript"; snippet: string; time?: number | null }
 
@@ -76,6 +76,11 @@ export const api = {
   logListen: (episodeId: string, showId: string, seconds: number, translated: boolean) => invoke<void>("log_listen", { episodeId, showId, seconds, translated }),
   listeningStats: (since: string) => invoke<ListenRow[]>("listening_stats", { since }),
   sharedTranscript: (episodeId: string) => invoke<Transcript | null>("shared_transcript", { episodeId }),
+  /** The ids (of these) the shared library has subtitles for. */
+  sharedExists: (episodeIds: string[]) => invoke<string[]>("shared_exists", { episodeIds }),
+  /** A 导读 someone shared (saved as this episode's own when found). */
+  sharedGuide: (episodeId: string) => invoke<string | null>("shared_guide", { episodeId }),
+  shareGuide: (episodeId: string, text: string, model: string) => invoke<string>("share_guide", { episodeId, text, model }),
   asrElsewhere: () => invoke<{ app: string; format: string }[]>("asr_elsewhere"),
   rescanModels: () => invoke<void>("rescan_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),

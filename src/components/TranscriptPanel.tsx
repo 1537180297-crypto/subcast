@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { BookA, ChevronDown, Ellipsis, Languages, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { BookA, Check, ChevronDown, Ellipsis, Languages, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Modal } from "./Chrome";
 import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
@@ -11,7 +11,7 @@ import { api, errorText, rawErrorText, type Episode, type ModelInfo, type Segmen
 import { clock, sizeMb } from "../lib/format";
 import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, switchYoutubeTrack, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
-import { ASR_SERVICES } from "../lib/settings";
+import { ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { lang, t, tk, tr, useLang } from "../lib/i18n";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
@@ -73,9 +73,9 @@ export function useModelDownload(onDone: () => void) {
 }
 
 /** The one line under the tabs that says how this episode's subtitles stand, with the one action that applies. */
-function StatusLine({ left, text, spin, progress, action, right }: { left?: React.ReactNode; text: React.ReactNode; spin?: boolean; progress?: number; action?: React.ReactNode; right?: React.ReactNode }) {
+function StatusLine({ left, text, spin, progress, action, right, title }: { left?: React.ReactNode; text: React.ReactNode; spin?: boolean; progress?: number; action?: React.ReactNode; right?: React.ReactNode; title?: string }) {
   return (
-    <div className="status-line">
+    <div className="status-line" title={title}>
       {left}
       <span className="status-text" key={typeof text === "string" ? text : undefined}>{spin && <Loader2 size={13} className="spin" />}{text}</span>
       {progress != null && <div className="bar slim"><div style={{ width: `${Math.max(2, progress * 100)}%` }} /></div>}
@@ -164,7 +164,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   else if (error && /设置|API Key|模型/.test(error)) status = <StatusLine left={modeControl} text={tr(error)} action={<button className="btn primary sm" onClick={() => openSettings("model")}>{t("去设置")}</button>} right={searchBtn} />;
   else if (done < total && (error || translation?.failed)) status = <StatusLine left={modeControl} text={`${t("已翻译 {done}/{total}", { done, total })}${error ? ` · ${tr(error).slice(0, 40)}` : ""}`} action={<button className="btn primary sm" onClick={() => start()}>{t("重试")}</button>} right={searchBtn} />;
   else if (done < total) status = <StatusLine left={modeControl} text={done ? t("已翻译 {done}/{total}", { done, total }) : source} action={<button className="btn primary sm" onClick={() => start()}>{done ? t("继续翻译") : t("翻译成中文")}</button>} right={searchBtn} />;
-  else status = <StatusLine left={modeControl} text={`${source} · ${engineName}`} action={translation?.engine === "google" && canUpgrade ? <button className="btn ghost sm" onClick={() => start("llm")}>{t("用模型重译")}</button> : undefined} right={searchBtn} />;
+  else status = <StatusLine left={modeControl} text="" title={`${source} · ${engineName}`} action={translation?.engine === "google" && canUpgrade ? <button className="btn ghost sm" onClick={() => start("llm")}>{t("用模型重译")}</button> : undefined} right={searchBtn} />;
 
   const rows = matches ?? segments.map((_, i) => i);
   return (
@@ -278,7 +278,16 @@ const trackCache = new Map<string, { language: string; auto: boolean }[]>();
 function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; auto: boolean }) {
   const [tracks, setTracks] = useState(trackCache.get(ep.id) ?? null);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   useLang((s) => s.lang);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", h); document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("pointerdown", h); document.removeEventListener("keydown", k); };
+  }, [open]);
   useEffect(() => {
     if (tracks) return;
     void api.youtubeTracks(ep.id).then((list) => { trackCache.set(ep.id, list); setTracks(list); }).catch(() => {});
@@ -287,24 +296,38 @@ function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; au
   let names: Intl.DisplayNames | null = null;
   try { names = new Intl.DisplayNames([lang()], { type: "language" }); } catch { /* old WebView */ }
   const name = (l: string) => { try { return names?.of(l) ?? l; } catch { return l; } };
-  const value = `${auto ? "a" : "m"}:${language}`;
-  const pick = async (v: string) => {
-    const [kind, ...rest] = v.split(":");
+  const label = (x: { language: string; auto: boolean }) => `${name(x.language)}${x.auto ? ` · ${t("自动生成")}` : ""}`;
+  const pick = async (x: { language: string; auto: boolean }) => {
+    setOpen(false);
+    if (x.language === language && x.auto === auto) return;
     setBusy(true);
-    try { await switchYoutubeTrack(ep, rest.join(":"), kind === "a"); }
+    try { await switchYoutubeTrack(ep, x.language, x.auto); }
     catch (e) { useStore.getState().notify(t("切换字幕失败：{error}", { error: errorText(e) })); }
     finally { setBusy(false); }
   };
   return (
-    <label className="track-pick" title={t("字幕语言")}>
-      {busy ? <Loader2 size={13} className="spin" /> : <Languages size={14} />}
-      <select value={value} disabled={busy} onChange={(e) => void pick(e.target.value)} aria-label={t("字幕语言")}>
-        {tracks.map((x) => <option key={`${x.auto}:${x.language}`} value={`${x.auto ? "a" : "m"}:${x.language}`}>{name(x.language)}{x.auto ? ` · ${t("自动生成")}` : ""}</option>)}
-      </select>
-      <ChevronDown size={12} />
-    </label>
+    <div className="panel-menu" ref={box}>
+      <button className="track-pick" title={t("字幕语言")} aria-label={t("字幕语言")} aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen(!open)}>
+        {busy ? <Loader2 size={13} className="spin" /> : <Languages size={14} />}
+        <span>{label({ language, auto })}</span>
+        <ChevronDown size={12} className={open ? "flip" : ""} />
+      </button>
+      {open && (
+        <div className="panel-menu-pop" role="menu">
+          {tracks.map((x) => {
+            const on = x.language === language && x.auto === auto;
+            return <button key={`${x.auto}:${x.language}`} role="menuitemradio" aria-checked={on} className={on ? "on" : ""} onClick={() => void pick(x)}><Check size={14} className="pick-check" />{label(x)}</button>;
+          })}
+        </div>
+      )}
+    </div>
   );
 }
+
+/** What the episode's pickers offer: Qwen3-ASR, models already on this computer, the main cloud services and
+ *  whatever is in use. The rest are in Settings (the 「更多…」 entry opens it). */
+const pickerModels = (models: ModelInfo[], s: Settings) => models.filter((m) => m.id === "qwen3-asr" || m.installed || (s.asrEngine === "local" && s.asrModel === m.id));
+const pickerCloud = (s: Settings) => ASR_SERVICES.filter((a) => CLOUD_ASR_MAIN.includes(a.id) || s.asrEngine === a.id);
 
 /** Episodes transcription was started for automatically this session (never twice). */
 const autoStarted = new Set<string>();
@@ -326,6 +349,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   }, [cloud?.id, settingsOpen]);
   const missingKey = !!cloud?.needsKey && cloudKey === false;
   const pickEngine = (value: string) => {
+    if (value === "more") { useStore.getState().openSettings("asr"); return; }
     const [kind, id] = value.split(":");
     void saveSettings(kind === "cloud" ? { asrEngine: id } : { asrEngine: "local", asrModel: id });
   };
@@ -352,6 +376,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   };
   /** Mid-way, switch to another way of transcribing: the running one stops, the new one starts from the beginning. */
   const switchEngine = async (value: string) => {
+    if (value === "more") { useStore.getState().openSettings("asr"); return; }
     const [kind, id] = value.split(":");
     await saveSettings(kind === "cloud" ? { asrEngine: id } : { asrEngine: "local", asrModel: id });
     await stopRunning();
@@ -391,11 +416,12 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
             <select className="engine-switch-mini" aria-label={t("换一种识别方式")} title={t("换一种识别方式（从头开始）")} value="" onChange={(e) => e.target.value && void switchEngine(e.target.value)}>
               <option value="">{t("换一种方式…")}</option>
               <optgroup label={t("本机模型 · 音频不出本机")}>
-                {models.filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
+                {pickerModels(models, settings).filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
               </optgroup>
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
-                {ASR_SERVICES.filter((a) => settings.asrEngine !== a.id).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
+                {pickerCloud(settings).filter((a) => settings.asrEngine !== a.id).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
               </optgroup>
+              <option value="more">{t("更多")}…</option>
             </select>
             <button className="btn ghost sm" onClick={() => void stopRunning()}>{t("取消")}</button>
           </span>
@@ -438,11 +464,12 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
           <label><span>{t("识别方式")}</span>
             <select value={cloud ? `cloud:${cloud.id}` : `local:${model?.id}`} onChange={(e) => pickEngine(e.target.value)}>
               <optgroup label={t("本机模型 · 音频不出本机")}>
-                {models.map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
+                {pickerModels(models, settings).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
               </optgroup>
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
-                {ASR_SERVICES.map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
+                {pickerCloud(settings).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
               </optgroup>
+              <option value="more">{t("更多")}…</option>
             </select>
           </label>
         </div>

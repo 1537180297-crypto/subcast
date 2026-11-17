@@ -2,9 +2,9 @@ import { sizeMb } from "../lib/format";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
-import { BookOpen, Check, ChevronDown, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
-import { ASR_SERVICES } from "../lib/settings";
+import { ASR_SERVICES, CLOUD_ASR_MAIN } from "../lib/settings";
 import { stopSpeaking } from "../lib/tts";
 import logoUrl from "../assets/logo.png";
 import wechatQr from "../assets/about-wechat-qr.jpg";
@@ -53,7 +53,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
     setTesting("…"); setTestOk(false);
     try {
       if (key.trim()) await saveKey();
-      const r = await llmChat({ provider: p, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 400 });
+      const r = await llmChat({ provider: p, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 1500 });
       setTesting(t("可用 ✓ {reply}", { reply: r.slice(0, 20) })); setTestOk(true);
     } catch (e) { setTesting(errorText(e)); }
   };
@@ -63,14 +63,10 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
       {p.needsKey && (
         <div className="setup-block">
           <div className="setup-head">
-            <p className="setup-title">API Key{hasKey && <span className="ok-text small"> · {t("已保存")}</span>}</p>
+            <p className="setup-title">API Key</p>
             {p.keyUrl && <button className="link-btn" onClick={() => openUrl(p.keyUrl!)}>{t("去官网申请")} <ExternalLink size={11} /></button>}
           </div>
-          <div className="key-row">
-            <input {...NO_AUTO} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={hasKey ? t("已保存（存于系统钥匙串）") : t("粘贴 API Key")} />
-            <button className="btn sm" onClick={saveKey} disabled={!key.trim()}>{t("保存")}</button>
-            {hasKey && <button className="icon-btn" title={t("删除 Key")} onClick={async () => { await api.setApiKey(p.id, ""); setHasKey(false); }}><Trash2 size={14} /></button>}
-          </div>
+          <KeyRow key={p.id} has={hasKey} value={key} onValue={setKey} onSave={saveKey} onDelete={async () => { await api.setApiKey(p.id, ""); setHasKey(false); }} />
         </div>
       )}
       <div className="setup-block">
@@ -122,12 +118,10 @@ export function SettingsDialog() {
   useEffect(() => { void refresh(); }, []);
   const updateWaiting = useUpdate(hasUpdate);
   const [moreLocal, setMoreLocal] = useState(false);
-  const [cloudOpen, setCloudOpen] = useState(settings.asrEngine !== "local");
   const [moreCloud, setMoreCloud] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
   const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["general", tk("通用"), SlidersHorizontal], ["about", tk("关于"), Info]];
-  const CLOUD_MAIN = ["doubao", "siliconflow", "groq"];
   const modelRow = (m: ModelInfo) => (
     <div key={m.id} className={`model-item ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`}>
       <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrEngine: "local", asrModel: m.id })}>
@@ -157,30 +151,37 @@ export function SettingsDialog() {
             <>
               <ReadingSettings />
               <section className="setup-block">
-                <p className="setup-title">{t("没有字幕的节目")}</p>
+                <p className="setup-title">{t("如果没有字幕时")}</p>
                 <p className="muted small">{t("先查节目自带的和别人分享的字幕，都没有时才听写。")}</p>
-                <div className="model-list">{models.filter((m) => m.id === "qwen3-asr").map(modelRow)}</div>
-                <p className="muted small">{t("本机识别：免费，音频不出本机。")}</p>
-                {elsewhere.length > 0 && !models.find((m) => m.id === "qwen3-asr")?.installed && (
-                  <p className="model-elsewhere small">{t("在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。", { where: [...new Set(elsewhere.map((e) => tr(e.app)))].join("、"), format: [...new Set(elsewhere.map((e) => tr(e.format)))].join(" / ") })}</p>
-                )}
-                <button className="adv-toggle" aria-expanded={moreLocal} onClick={() => setMoreLocal(!moreLocal)}><ChevronDown size={12} className={moreLocal ? "flip" : ""} /> {t("其他模型")}</button>
-                {moreLocal && (
+                <div className="engine-switch">
+                  <button className={`engine ${settings.asrEngine === "local" ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: "local" })}>
+                    <Cpu size={18} /><div><p>{t("本机模型")}</p><p className="muted small">{t("免费，音频不出本机")}</p></div>
+                  </button>
+                  <button className={`engine ${settings.asrEngine !== "local" ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: settings.asrEngine !== "local" ? settings.asrEngine : "doubao" })}>
+                    <Cloud size={18} /><div><p>{t("云端服务")}</p><p className="muted small">{t("更快，需要 Key，按量付费")}</p></div>
+                  </button>
+                </div>
+                {settings.asrEngine === "local" ? (
                   <>
-                    <div className="model-list">{models.filter((m) => m.id !== "qwen3-asr").map(modelRow)}</div>
-                    <button className="link-btn small" onClick={async () => { await api.rescanModels(); void refresh(); notify(t("已重新查找本机的识别模型")); }}><RefreshCw size={12} /> {t("重新查找本机已有的模型")}</button>
+                    <div className="model-list">{models.filter((m) => m.id === "qwen3-asr").map(modelRow)}</div>
+                    {elsewhere.length > 0 && !models.find((m) => m.id === "qwen3-asr")?.installed && (
+                      <p className="model-elsewhere small">{t("在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。", { where: [...new Set(elsewhere.map((e) => tr(e.app)))].join("、"), format: [...new Set(elsewhere.map((e) => tr(e.format)))].join(" / ") })}</p>
+                    )}
+                    <button className="adv-toggle" aria-expanded={moreLocal} onClick={() => setMoreLocal(!moreLocal)}><ChevronDown size={12} className={moreLocal ? "flip" : ""} /> {t("其他模型")}</button>
+                    {moreLocal && (
+                      <>
+                        <div className="model-list">{models.filter((m) => m.id !== "qwen3-asr").map(modelRow)}</div>
+                        <button className="link-btn small" onClick={async () => { await api.rescanModels(); void refresh(); notify(t("已重新查找本机的识别模型")); }}><RefreshCw size={12} /> {t("重新查找本机已有的模型")}</button>
+                      </>
+                    )}
                   </>
-                )}
-                <button className="adv-toggle" aria-expanded={cloudOpen} onClick={() => setCloudOpen(!cloudOpen)}><ChevronDown size={12} className={cloudOpen ? "flip" : ""} /> {t("改用云端识别")}{settings.asrEngine !== "local" && <span className="muted small"> · {t(settings.cloudAsr[settings.asrEngine]?.name ?? "")}</span>}</button>
-                {cloudOpen && (
+                ) : (
                   <>
                     <div className="provider-tabs">
-                      {ASR_SERVICES.filter((a) => moreCloud || CLOUD_MAIN.includes(a.id) || settings.asrEngine === a.id).map((a) => <button key={a.id} className={`chip ${settings.asrEngine === a.id ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: a.id })}>{t(a.name)}</button>)}
+                      {ASR_SERVICES.filter((a) => moreCloud || CLOUD_ASR_MAIN.includes(a.id) || settings.asrEngine === a.id).map((a) => <button key={a.id} className={`chip ${settings.asrEngine === a.id ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: a.id })}>{t(a.name)}</button>)}
                       {!moreCloud && <button className="chip" onClick={() => setMoreCloud(true)}>{t("更多")}</button>}
-                      {settings.asrEngine !== "local" && <button className="chip" onClick={() => saveSettings({ asrEngine: "local" })}>{t("用回本机")}</button>}
                     </div>
-                    {settings.asrEngine !== "local" && <p className="muted small">{t("识别时音频会发送到 {name}。", { name: t(settings.cloudAsr[settings.asrEngine]?.name ?? "") })}</p>}
-                    {settings.asrEngine !== "local" && settings.cloudAsr[settings.asrEngine] && <CloudAsrEditor key={settings.asrEngine} a={settings.cloudAsr[settings.asrEngine]} onChange={(na) => saveSettings({ cloudAsr: { ...settings.cloudAsr, [na.id]: na } })} />}
+                    {settings.cloudAsr[settings.asrEngine] && <CloudAsrEditor key={settings.asrEngine} a={settings.cloudAsr[settings.asrEngine]} onChange={(na) => saveSettings({ cloudAsr: { ...settings.cloudAsr, [na.id]: na } })} />}
                   </>
                 )}
               </section>
@@ -224,7 +225,7 @@ export function SettingsDialog() {
               </section>
               <section className="setup-block">
                 <p className="setup-title">{t("共享")}</p>
-                <label className="check"><input type="checkbox" checked={settings.shareTranscripts} onChange={(e) => saveSettings({ shareTranscripts: e.target.checked })} /> {t("匿名分享我生成的字幕和译文")}</label>
+                <label className="check"><input type="checkbox" checked={settings.shareTranscripts} onChange={(e) => saveSettings({ shareTranscripts: e.target.checked })} /> {t("匿名分享我生成的字幕、译文和导读")}</label>
                 <p className="muted small">{t("只分享文字，帮别人省去等待。关掉后照样能用别人分享的。")}</p>
               </section>
               <section className="setup-block">
@@ -246,11 +247,29 @@ export function KeyField({ account, placeholder }: { account: string; placeholde
   const [key, setKey] = useState("");
   const [has, setHas] = useState(false);
   useEffect(() => { setKey(""); api.hasApiKey(account).then(setHas); }, [account]);
+  return <KeyRow key={account} has={has} value={key} onValue={setKey} placeholder={placeholder}
+    onSave={async () => { await api.setApiKey(account, key); setHas(!!key.trim()); setKey(""); }}
+    onDelete={async () => { await api.setApiKey(account, ""); setHas(false); }} />;
+}
+
+/** A saved key reads as saved (a tinted row with a check and masked dots), not as an empty field;
+ *  「更换」 opens the field again. */
+function KeyRow({ has, value, onValue, onSave, onDelete, placeholder }: { has: boolean; value: string; onValue: (v: string) => void; onSave: () => Promise<void>; onDelete: () => Promise<void>; placeholder?: string }) {
+  const [editing, setEditing] = useState(false);
+  if (has && !editing) {
+    return (
+      <div className="key-row key-saved" title={t("存于系统钥匙串")}>
+        <span className="key-state"><Check size={14} /><span>{t("已保存")}</span><span className="key-dots" aria-hidden>••••••••</span></span>
+        <button className="btn sm" onClick={() => setEditing(true)}>{t("更换")}</button>
+        <button className="icon-btn" title={t("删除 Key")} aria-label={t("删除 Key")} onClick={() => void onDelete()}><Trash2 size={14} /></button>
+      </div>
+    );
+  }
   return (
     <div className="key-row">
-      <input {...NO_AUTO} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={has ? t("已保存（存于系统钥匙串）") : placeholder ?? t("粘贴 API Key")} />
-      <button className="btn sm" onClick={async () => { await api.setApiKey(account, key); setHas(!!key.trim()); setKey(""); }} disabled={!key.trim()}>{t("保存")}</button>
-      {has && <button className="icon-btn" title={t("删除 Key")} onClick={async () => { await api.setApiKey(account, ""); setHas(false); }}><Trash2 size={14} /></button>}
+      <input {...NO_AUTO} type="password" autoFocus={editing} value={value} onChange={(e) => onValue(e.target.value)} placeholder={placeholder ?? t("粘贴 API Key")} />
+      <button className="btn sm" onClick={async () => { await onSave(); setEditing(false); }} disabled={!value.trim()}>{t("保存")}</button>
+      {has && <button className="btn ghost sm" onClick={() => { onValue(""); setEditing(false); }}>{t("取消")}</button>}
     </div>
   );
 }

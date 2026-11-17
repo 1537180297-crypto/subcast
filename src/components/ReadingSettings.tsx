@@ -29,10 +29,12 @@ export function ReadingSettings() {
 
   return (
     <div className="reading">
-      <div className={`reading-preview look-${settings.subtitleLook ?? "box"}`} aria-hidden>
+      <div className={`reading-preview look-${settings.subtitleLook ?? "outline"}`} aria-hidden>
         <div className="subtitle-overlay">
-          {settings.subtitleMode !== "original" && <p className="sub-zh">{zh}</p>}
-          {settings.subtitleMode !== "translation" && <p className="sub-orig">{orig}</p>}
+          <div className="sub-box">
+            {settings.subtitleMode !== "original" && <p className="sub-zh">{zh}</p>}
+            {settings.subtitleMode !== "translation" && <p className="sub-orig">{orig}</p>}
+          </div>
         </div>
       </div>
 
@@ -42,15 +44,12 @@ export function ReadingSettings() {
           <Seg value={settings.subtitleSize ?? "m"} options={[["s", t("小")], ["m", t("标准")], ["l", t("大")], ["xl", t("特大")]]} onChange={(v) => save({ subtitleSize: v })} />
         </div>
         <div className="reading-row"><span>{t("字体")}</span>
-          <Seg value={settings.subtitleFont ?? "system"} options={(Object.keys(SUB_FONTS) as (keyof typeof SUB_FONTS)[]).map((id) => [id, fontName(id)])} onChange={(v) => save({ subtitleFont: v })} />
-        </div>
-        <div className="reading-row"><span>{t("默认显示")}</span>
-          <Seg value={settings.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")]]} onChange={(v) => save({ subtitleMode: v })} />
+          <Seg value={settings.subtitleFont ?? "sans"} options={(Object.keys(SUB_FONTS) as (keyof typeof SUB_FONTS)[]).map((id) => [id, fontName(id)])} onChange={(v) => save({ subtitleFont: v })} />
         </div>
         <div className="reading-row"><span>{t("视频上的字幕")}</span>
-          <Seg value={settings.subtitleLook ?? "box"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => save({ subtitleLook: v })} />
+          <Seg value={settings.subtitleLook ?? "outline"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => save({ subtitleLook: v })} />
         </div>
-        <label className="check"><input type="checkbox" checked={settings.audioNextLine !== false} onChange={(e) => save({ audioNextLine: e.target.checked })} /> {t("音频节目提前显示下一句")}</label>
+        <label className="check"><input type="checkbox" checked={settings.audioNextLine === true} onChange={(e) => save({ audioNextLine: e.target.checked })} /> {t("音频节目提前显示下一句")}</label>
       </section>
 
       <section className="setup-block">

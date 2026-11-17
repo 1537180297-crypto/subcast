@@ -123,6 +123,9 @@ export const GROUPS: { id: NonNullable<G>; name: string; note: string }[] = [
   { id: "local", name: tk("本机运行"), note: tk("不需要 Key") },
 ];
 
+/** The cloud services shown up front (Settings and the episode's pickers); the rest sit behind 「更多」. */
+export const CLOUD_ASR_MAIN = ["doubao", "siliconflow", "groq"];
+
 /** Cloud transcription services, ported from Capwise. */
 export const ASR_SERVICES: CloudAsr[] = [
   { id: "doubao", name: tk("豆包语音（极速版）"), note: tk("中文最准，5 分钟一段，速度快"), protocol: "doubao", baseUrl: "https://openspeech.bytedance.com/api/v3", model: "bigmodel", models: ["bigmodel"], keyUrl: "https://console.volcengine.com/speech/new/experience/asr", needsKey: true, chunkSecs: 300 },

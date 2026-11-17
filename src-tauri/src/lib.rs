@@ -680,6 +680,18 @@ async fn shared_transcript(state: State<'_, AppState>, episode_id: String) -> Re
     Ok(take_shared(&state, &ep).await)
 }
 
+/// The episodes (of these ids) someone already shared subtitles for, so lists can mark and sort them.
+#[tauri::command]
+async fn shared_exists(state: State<'_, AppState>, episode_ids: Vec<String>) -> Res<Vec<String>> {
+    let eps: Vec<Episode> = {
+        let conn = state.db.lock().unwrap();
+        episode_ids.iter().take(200).filter_map(|id| db::get_episode(&conn, id).ok().flatten()).collect()
+    };
+    let lists: Vec<Vec<String>> = eps.iter().map(shared::keys).collect();
+    let hits = shared::existing(&lists).await;
+    Ok(eps.into_iter().zip(hits).filter(|(_, h)| *h).map(|(ep, _)| ep.id).collect())
+}
+
 #[tauri::command]
 async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String, cloud: Option<cloud::CloudAsr>) -> Res<Transcript> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
@@ -865,6 +877,33 @@ async fn share_translation(state: State<'_, AppState>, episode_id: String, engin
     shared::upload_with(&keys, meta, &t.segments, &engine, &model).await.map_err(e)
 }
 
+/// A 导读 someone shared for this episode; kept as this episode's own (blob "summary") when found.
+#[tauri::command]
+async fn shared_guide(state: State<'_, AppState>, episode_id: String) -> Res<Option<String>> {
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    let Some(text) = shared::lookup_guide(&shared::keys(&ep)).await else { return Ok(None) };
+    let conn = state.db.lock().unwrap();
+    let _ = db::set_blob(&conn, &episode_id, "summary", &text);
+    let _ = db::set_blob(&conn, &episode_id, "summary-from", "shared");
+    Ok(Some(text))
+}
+
+/// Shares a 导读 made here, when 「匿名分享」 is on.
+#[tauri::command]
+async fn share_guide(state: State<'_, AppState>, episode_id: String, text: String, model: String) -> Res<String> {
+    let (ep, on, install) = {
+        let conn = state.db.lock().unwrap();
+        let ep = db::get_episode(&conn, &episode_id).map_err(e)?.ok_or("节目不存在")?;
+        let on = db::get_setting(&conn, "app").ok().flatten().and_then(|r| serde_json::from_str::<Value>(&r).ok())
+            .and_then(|s| s["shareTranscripts"].as_bool()).unwrap_or(true);
+        let _ = db::set_blob(&conn, &episode_id, "summary-from", "");
+        (ep, on, install_id(&conn))
+    };
+    let keys = shared::keys(&ep);
+    if !on || keys.is_empty() { return Ok("skipped".into()); }
+    shared::upload_guide(&keys, &ep.title, ep.show_title.as_deref().unwrap_or(""), &model, &text, install).await.map_err(e)
+}
+
 fn install_id(conn: &Connection) -> String {
     if let Ok(Some(id)) = db::get_setting(conn, "install") { return id; }
     let id = uuid::Uuid::new_v4().to_string();
@@ -1013,6 +1052,14 @@ async fn probe_agent(kind: String) -> Res<String> {
     agents::probe(k, &path).await.map(str::to_string).map_err(e)
 }
 
+/// The models a local agent says it supports (for the 「问答里可选的模型」 checklist).
+#[tauri::command]
+async fn agent_models(kind: String) -> Res<Vec<agents::AgentModel>> {
+    let k = agents::Kind::parse(&kind).ok_or("未知的本机 AI")?;
+    let path = agents::path_of(k).ok_or("没有找到")?;
+    agents::models(k, &path).await.map_err(e)
+}
+
 /// Starts an agent in the background (opening Q&A), so the first answer doesn't wait for it.
 #[tauri::command]
 async fn warm_agent(kind: String) {
@@ -1131,7 +1178,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

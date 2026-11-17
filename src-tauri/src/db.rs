@@ -205,12 +205,14 @@ pub fn log_listen(conn: &Connection, episode_id: &str, show_id: &str, seconds: f
 /// Every listening row since a day (YYYY-MM-DD), with the episode's show and kind for grouping.
 pub fn listens_since(conn: &Connection, since: &str) -> Result<Vec<serde_json::Value>> {
     let mut st = conn.prepare(
-        "SELECT l.day, l.hour, l.episode_id, l.show_id, l.seconds, l.translated, COALESCE(s.title,''), COALESCE(s.kind,''), COALESCE(s.cover,''), COALESCE(e.title,''), COALESCE(e.video_id,'')
+        "SELECT l.day, l.hour, l.episode_id, l.show_id, l.seconds, l.translated, COALESCE(s.title,''), COALESCE(s.kind,''), COALESCE(s.cover,''), COALESCE(e.title,''), COALESCE(e.video_id,''),
+                COALESCE(e.duration,0), COALESCE(e.progress,0), COALESCE(e.published,0)
          FROM listens l LEFT JOIN shows s ON s.id = l.show_id LEFT JOIN episodes e ON e.id = l.episode_id WHERE l.day >= ?1 ORDER BY l.day")?;
     let rows = st.query_map([since], |r| Ok(serde_json::json!({
         "day": r.get::<_, String>(0)?, "hour": r.get::<_, i64>(1)?, "episodeId": r.get::<_, String>(2)?, "showId": r.get::<_, String>(3)?,
         "seconds": r.get::<_, f64>(4)?, "translated": r.get::<_, i64>(5)? == 1, "showTitle": r.get::<_, String>(6)?, "kind": r.get::<_, String>(7)?,
         "cover": r.get::<_, String>(8)?, "episodeTitle": r.get::<_, String>(9)?, "video": !r.get::<_, String>(10)?.is_empty(),
+        "duration": r.get::<_, f64>(11)?, "progress": r.get::<_, f64>(12)?, "published": r.get::<_, i64>(13)?,
     })))?;
     Ok(rows.collect::<std::result::Result<_, _>>()?)
 }

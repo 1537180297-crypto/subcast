@@ -23,6 +23,8 @@ function Mark({ id, name, size = 28 }: { id: string; name: string; size?: number
 }
 
 const RECOMMENDED = ["deepseek", "siliconflow", "openrouter"];
+/** How many entries each list shows before 「更多」. */
+const SHOWN = 3;
 
 const STATUS: Record<FoundAgent["login"], { text: string; tone: "ok" | "warn" | "idle" }> = {
   ready: { text: tk("可用"), tone: "ok" },
@@ -36,6 +38,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
   useLang((s) => s.lang);
   const [editing, setEditing] = useState<string>(settings.chatProvider);
   const [more, setMore] = useState(false);
+  const [moreAgents, setMoreAgents] = useState(false);
   const [keys, setKeys] = useState<Record<string, boolean>>({});
   useEffect(() => { if (found == null) void detectAgents(); }, []);
   const apiProviders = useMemo(() => Object.values(settings.providers).filter((p) => p.protocol !== "cli"), [settings.providers]);
@@ -45,8 +48,17 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
 
   const used = (id: string) => (settings.translateProvider === id && settings.translateMode !== "google" ? t("默认") : "");
   const ready = (p: Provider) => !p.needsKey || keys[p.id];
-  const mine = apiProviders.filter((p) => RECOMMENDED.includes(p.id) || (p.needsKey && keys[p.id]) || settings.chatProvider === p.id || settings.translateProvider === p.id);
-  const rest = apiProviders.filter((p) => !mine.includes(p));
+  const inUse = (id: string) => settings.chatProvider === id || settings.translateProvider === id;
+  // Up front: what's in use, then what has a key, then the recommended ones; three at most (plus the open one).
+  const rank = (p: Provider) => (inUse(p.id) ? 0 : p.needsKey && keys[p.id] ? 1 : RECOMMENDED.includes(p.id) ? 2 + RECOMMENDED.indexOf(p.id) : 9);
+  const ranked = apiProviders.filter((p) => p.id !== "custom" && rank(p) < 9).sort((a, b) => rank(a) - rank(b));
+  const mine = ranked.filter((p, i) => i < SHOWN || p.id === editing);
+  const rest = apiProviders.filter((p) => !mine.includes(p) && p.id !== "custom");
+  const custom = settings.providers.custom;
+  // Local agents: the one in use, then ready, then needing login, then unconfirmed.
+  const order = { ready: 1, needsLogin: 2, unknown: 3 } as const;
+  const agents = [...(found ?? [])].sort((a, b) => (inUse(agentProviderId(a.kind)) ? 0 : order[a.login]) - (inUse(agentProviderId(b.kind)) ? 0 : order[b.login]));
+  const shownAgents = moreAgents ? agents : agents.filter((f, i) => i < SHOWN || agentProviderId(f.kind) === editing);
   const p = settings.providers[editing];
   const agent = agentOf(p);
   const update = (np: Provider) => void saveSettings({ providers: { ...settings.providers, [np.id]: np }, ...(np.id === settings.chatProvider && np.model !== p?.model ? { chatModel: "" } : {}) });
@@ -82,7 +94,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
           </div>
           {found == null ? <p className="muted small ms-empty"><Loader2 size={12} className="spin" /> {t("正在查找本机的 AI 工具…")}</p>
             : found.length === 0 ? <p className="muted small ms-empty">{t("没有找到。装好 Claude Code 或 Codex 并登录后，点上面的刷新。")}</p>
-            : found.map((f) => {
+            : shownAgents.map((f) => {
               const id = agentProviderId(f.kind);
               const st = STATUS[f.login];
               return (
@@ -93,6 +105,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
                 </button>
               );
             })}
+          {(moreAgents ? agents.length > SHOWN : agents.length > shownAgents.length) && <button className="ms-more" aria-expanded={moreAgents} onClick={() => setMoreAgents(!moreAgents)}><ChevronDown size={13} className={moreAgents ? "flip" : ""} /> {moreAgents ? t("收起") : t("更多（{n}）", { n: agents.length - shownAgents.length })}</button>}
           <div className="ms-group-h"><span>{t("API 模型")}<em>{t("填 Key 使用，按量付费")}</em></span></div>
           {mine.map((x) => (
             <button key={x.id} className={`ms-item ${editing === x.id ? "on" : ""}`} onClick={() => setEditing(x.id)}>
@@ -101,6 +114,12 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
               <span className={`ms-dot ${ready(x) ? "ok" : "idle"}`} />
             </button>
           ))}
+          {custom && (
+            <button className={`ms-item slim ${editing === custom.id ? "on" : ""}`} onClick={() => setEditing(custom.id)}>
+              <Mark id={custom.id} name={tr(custom.name)} size={20} />
+              <span className="ms-item-name">{tr(custom.name)}</span>
+            </button>
+          )}
           <button className="ms-more" aria-expanded={more} onClick={() => setMore(!more)}><ChevronDown size={13} className={more ? "flip" : ""} /> {more ? t("收起") : t("更多服务商（{n}）", { n: rest.length })}</button>
           {more && GROUPS.map((g) => {
             const list = rest.filter((x) => (x.group ?? "provider") === g.id);
@@ -165,6 +184,8 @@ function AgentDetail({ kind, found, p, onChange }: { kind: AgentKind; found?: Fo
   const [busy, setBusy] = useState<"probe" | "test" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const nameOf = (m: string) => names[m] && names[m] !== m ? `${names[m]}（${m}）` : m;
   useEffect(() => { setLogin(found?.login ?? "unknown"); setResult(null); }, [kind, found?.login]);
   const id = agentProviderId(kind);
   const forTranslate = settings.translateProvider === id && settings.translateMode !== "google";
@@ -177,7 +198,7 @@ function AgentDetail({ kind, found, p, onChange }: { kind: AgentKind; found?: Fo
     setBusy("test"); setResult(null);
     const t0 = performance.now();
     try {
-      const r = await llmChat({ provider: p, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 50 });
+      const r = await llmChat({ provider: p, system: "Reply with one short word.", messages: [{ role: "user", content: "ping" }], maxTokens: 1500 });
       setResult({ ok: true, text: t("可用 ✓ {reply}（{s} 秒）", { reply: r.trim().slice(0, 16), s: ((performance.now() - t0) / 1000).toFixed(1) }) });
       setLogin("ready");
     } catch (e) { setResult({ ok: false, text: errorText(e) }); } finally { setBusy(null); }
@@ -209,9 +230,10 @@ function AgentDetail({ kind, found, p, onChange }: { kind: AgentKind; found?: Fo
         <div className="ms-model">
           <select value={p.model || ""} onChange={(e) => onChange({ ...p, model: e.target.value })}>
             <option value="">{t("跟随 {name} 的设置（推荐）", { name: info.name })}</option>
-            {[...new Set([...(info.models ?? []), ...(p.model ? [p.model] : [])])].map((m) => <option key={m} value={m}>{m}</option>)}
+            {[...new Set([...(p.models ?? []), ...(p.model ? [p.model] : [])])].map((m) => <option key={m} value={m}>{nameOf(m)}</option>)}
           </select>
         </div>
+        <AgentModelPicks kind={kind} p={p} onChange={onChange} names={names} setNames={setNames} />
       </div>
       <div className="row-actions">
         <button className="btn sm" onClick={test} disabled={busy != null}>{busy === "test" && <Loader2 size={13} className="spin" />} {t("试一下")}</button>
@@ -221,6 +243,49 @@ function AgentDetail({ kind, found, p, onChange }: { kind: AgentKind; found?: Fo
         <button className="link-btn small" onClick={() => void openUrl(info.install)}>{t("关于 {name}", { name: info.name })}</button>
       </div>
       <p className="muted small ms-foot">{t("字幕和你的问题会交给本机的 {name}，由它连接 {vendor} 的服务。它在一个空文件夹里运行，不能读写你的文件，也不能执行命令。", { name: info.name, vendor: info.vendor })}</p>
+    </div>
+  );
+}
+
+/** Which of the agent's models show up in the Q&A model picker. The list comes from the agent itself
+ *  (read on demand); the ticked ones are kept as the provider's models. */
+function AgentModelPicks({ kind, p, onChange, names, setNames }: { kind: AgentKind; p: Provider; onChange: (p: Provider) => void; names: Record<string, string>; setNames: (n: Record<string, string>) => void }) {
+  const [list, setList] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [extra, setExtra] = useState("");
+  useEffect(() => { setList(null); setError(""); }, [kind]);
+  const picked = p.models ?? [];
+  const load = async () => {
+    setBusy(true); setError("");
+    try {
+      const r = await invoke<{ id: string; name: string }[]>("agent_models", { kind });
+      setNames({ ...names, ...Object.fromEntries(r.map((m) => [m.id, m.name])) });
+      setList(r.map((m) => m.id));
+      if (!r.length) setError(t("{name} 没有报出模型列表，可以手动添加。", { name: AGENTS[kind].name }));
+    } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
+  };
+  const all = [...new Set([...(list ?? []), ...AGENTS[kind].models, ...picked])];
+  const toggle = (m: string) => onChange({ ...p, models: picked.includes(m) ? picked.filter((x) => x !== m) : [...picked, m] });
+  const add = () => { const m = extra.trim(); if (m && !picked.includes(m)) onChange({ ...p, models: [...picked, m] }); setExtra(""); };
+  return (
+    <div className="agent-models">
+      <div className="agent-models-h">
+        <span>{t("问答里可选的模型")}</span>
+        <button className="link-btn small" onClick={() => void load()} disabled={busy}>{busy ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {list ? t("重新读取") : t("读取 {name} 支持的模型", { name: AGENTS[kind].name })}</button>
+      </div>
+      {all.length > 0 && (
+        <div className="agent-models-list">
+          {all.map((m) => (
+            <label key={m} className="check"><input type="checkbox" checked={picked.includes(m)} onChange={() => toggle(m)} /> <span>{names[m] && names[m] !== m ? <>{names[m]} <span className="muted small">{m}</span></> : m}</span></label>
+          ))}
+        </div>
+      )}
+      {error && <p className="muted small">{error}</p>}
+      <div className="key-row">
+        <input value={extra} onChange={(e) => setExtra(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder={t("手动添加模型名")} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
+        <button className="btn sm" onClick={add} disabled={!extra.trim()}>{t("添加")}</button>
+      </div>
     </div>
   );
 }
