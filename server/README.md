@@ -27,6 +27,7 @@ npm run backup     # VACUUM INTO + gzip 快照到 data/backups/（保留最近 3
 | `MAX_BODY_BYTES` | `6291456` | 请求体上限（解压后 6 MB） |
 | `RATE_UPLOADS_PER_HOUR` | `30` | 每 IP 每小时上传上限 |
 | `RATE_LOOKUPS_PER_HOUR` | `600` | 每 IP 每小时查询上限 |
+| `RATE_EXISTS_PER_HOUR` | `120` | 每 IP 每小时批量查询上限 |
 | `RATE_REPORTS_PER_HOUR` | `60` | 每 IP 每小时举报上限 |
 | `RATE_WINDOW_MS` | `3600000` | 限流窗口（固定窗口，内存计数） |
 | `CORS_ORIGINS` | 见下 | 逗号分隔的来源白名单 |
@@ -73,6 +74,10 @@ npm run backup     # VACUUM INTO + gzip 快照到 data/backups/（保留最近 3
 ```
 
 `translation.items` 与 `segments` 一一对齐，`null` 表示该行未翻译；整集无翻译时 `translation` 为 `null`。
+
+### `POST /api/v1/transcripts/exists`
+
+请求体 `{ "keys": [...] }`，最多 400 个键 → `{ "found": [...] }`：其中已有共享字幕的键（规范化后）。格式不对的键直接跳过。客户端用它给单集列表标「有字幕」，不必逐集取整份字幕。限流 `RATE_EXISTS_PER_HOUR`（默认 120）。
 
 ### `POST /api/v1/transcripts`
 
@@ -179,6 +184,7 @@ npm run backup     # VACUUM INTO + gzip snapshot to data/backups/ (keeps 30)
 | `MAX_BODY_BYTES` | `6291456` | Request body limit (6 MB after decompression) |
 | `RATE_UPLOADS_PER_HOUR` | `30` | Uploads per IP per hour |
 | `RATE_LOOKUPS_PER_HOUR` | `600` | Lookups per IP per hour |
+| `RATE_EXISTS_PER_HOUR` | `120` | Batch existence checks per IP per hour |
 | `RATE_REPORTS_PER_HOUR` | `60` | Reports per IP per hour |
 | `RATE_WINDOW_MS` | `3600000` | Rate limit window (fixed window, in memory) |
 | `CORS_ORIGINS` | see below | Comma-separated origin allowlist |
@@ -225,6 +231,10 @@ Anything else is rejected with `400 invalid_key`.
 ```
 
 `translation.items` is aligned 1:1 with `segments`; `null` means that line is untranslated. `translation` is `null` when the episode has no translation.
+
+### `POST /api/v1/transcripts/exists`
+
+Body `{ "keys": [...] }`, at most 400 keys → `{ "found": [...] }`: the (normalized) keys that already have shared subtitles. Malformed keys are skipped. The app uses it to mark episode lists without fetching each transcript. Rate limit `RATE_EXISTS_PER_HOUR` (default 120).
 
 ### `POST /api/v1/transcripts`
 

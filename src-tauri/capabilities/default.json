@@ -43,6 +43,7 @@
     "allow-log-listen",
     "allow-asr-elsewhere",
     "allow-shared-transcript",
+    "allow-shared-exists",
     "allow-listening-stats",
     "allow-export-opml",
     "allow-probe-agent",

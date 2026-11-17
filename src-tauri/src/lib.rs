@@ -680,6 +680,18 @@ async fn shared_transcript(state: State<'_, AppState>, episode_id: String) -> Re
     Ok(take_shared(&state, &ep).await)
 }
 
+/// The episodes (of these ids) someone already shared subtitles for, so lists can mark and sort them.
+#[tauri::command]
+async fn shared_exists(state: State<'_, AppState>, episode_ids: Vec<String>) -> Res<Vec<String>> {
+    let eps: Vec<Episode> = {
+        let conn = state.db.lock().unwrap();
+        episode_ids.iter().take(200).filter_map(|id| db::get_episode(&conn, id).ok().flatten()).collect()
+    };
+    let lists: Vec<Vec<String>> = eps.iter().map(shared::keys).collect();
+    let hits = shared::existing(&lists).await;
+    Ok(eps.into_iter().zip(hits).filter(|(_, h)| *h).map(|(ep, _)| ep.id).collect())
+}
+
 #[tauri::command]
 async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String, cloud: Option<cloud::CloudAsr>) -> Res<Transcript> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
@@ -1131,7 +1143,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

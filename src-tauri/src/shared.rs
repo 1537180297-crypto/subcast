@@ -52,6 +52,24 @@ pub async fn lookup(keys: &[String]) -> Option<Shared> {
     (!hit.segments.is_empty()).then_some(hit)
 }
 
+/// Which of these key lists (one per episode) the shared library has subtitles for, by index. One
+/// request for a whole list of episodes; an older server or a network problem just means "none known".
+pub async fn existing(lists: &[Vec<String>]) -> Vec<bool> {
+    let mut out = vec![false; lists.len()];
+    let all: Vec<&String> = lists.iter().flatten().collect();
+    for chunk in all.chunks(400) {
+        let body = serde_json::json!({ "keys": chunk });
+        let Ok(resp) = net::client().post(format!("{API}/exists")).json(&body).timeout(Duration::from_secs(8)).send().await else { break };
+        if !resp.status().is_success() { break; }
+        #[derive(Deserialize)]
+        struct Found { found: Vec<String> }
+        let Ok(f) = resp.json::<Found>().await else { break };
+        // The server normalizes keys (lowercased hashes); ours are already in that form.
+        for (i, keys) in lists.iter().enumerate() { if keys.iter().any(|k| f.found.contains(k)) { out[i] = true; } }
+    }
+    out
+}
+
 #[derive(Serialize)]
 struct UploadTranslation {
     lang: String,

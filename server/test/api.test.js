@@ -462,3 +462,23 @@ describe('rate limiting', () => {
     assert.equal((await request(limited.port, 'GET', '/api/v1/stats', { headers: { Authorization: 'Bearer x' } })).status, 404);
   });
 });
+
+describe('exists (batch)', () => {
+  const exists = (json) => request(srv.port, 'POST', '/api/v1/transcripts/exists', { json });
+
+  test('returns only the keys that have shared subtitles, normalized, skipping bad ones', async () => {
+    const keys = ['yt:existsHit01', `guid:${sha1('exists-hit')}`];
+    assert.equal((await post(makeUpload({ keys }))).status, 200);
+    const r = await exists({ keys: ['yt:existsMis01', keys[0], `guid:${sha1('exists-hit').toUpperCase()}`, 'nope', 42] });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.headers['cache-control'], 'no-store');
+    assert.deepEqual(r.json.found.sort(), [...keys].sort());
+  });
+
+  test('empty list is fine; too many keys or a non-array is 400', async () => {
+    assert.deepEqual((await exists({ keys: [] })).json, { found: [] });
+    const many = Array.from({ length: 401 }, (_, i) => `guid:${sha1(`k${i}`)}`);
+    assert.equal((await exists({ keys: many })).status, 400);
+    assert.equal((await exists({ keys: 'yt:existsHit01' })).status, 400);
+  });
+});

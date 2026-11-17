@@ -86,6 +86,18 @@ export function validateKeys(list) {
   return out;
 }
 
+export const MAX_EXISTS_KEYS = 400;
+
+// For the batch "which of these exist" check: unknown or malformed keys are skipped, not an error,
+// so one odd episode never hides the answer for the rest of a list.
+export function validateExistsKeys(list) {
+  if (!Array.isArray(list)) throw new HttpError(400, 'invalid_key', 'keys must be an array');
+  if (list.length > MAX_EXISTS_KEYS) throw new HttpError(400, 'invalid_key', `at most ${MAX_EXISTS_KEYS} keys are allowed`);
+  const out = new Set();
+  for (const raw of list) { const k = normalizeKey(raw); if (k) out.add(k); }
+  return [...out];
+}
+
 export function validateVersionId(id) {
   if (!VERSION_ID_RE.test(id)) throw new HttpError(404, 'not_found', 'unknown transcript id');
   return id;

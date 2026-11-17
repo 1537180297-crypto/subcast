@@ -157,6 +157,8 @@ export class Store {
         FROM versions v JOIN episodes e ON e.id = v.episode_id
         WHERE v.episode_id IN (SELECT episode_id FROM episode_keys WHERE key IN (?, ?, ?, ?)) AND v.hidden = 0
         ORDER BY v.score DESC, v.votes DESC, v.created_at DESC, v.id DESC LIMIT 1`),
+      keyHasVersion: p(`SELECT 1 AS ok FROM episode_keys k JOIN versions v ON v.episode_id = k.episode_id
+        WHERE k.key = ? AND v.hidden = 0 LIMIT 1`),
       countEpisodeVersions: p('SELECT COUNT(*) AS n FROM versions WHERE episode_id = ? AND hidden = 0'),
       countVersions: p('SELECT COUNT(*) AS n FROM versions'),
       stats: p(`SELECT (SELECT COUNT(*) FROM episodes) AS episodes, (SELECT COUNT(*) FROM episode_keys) AS keys,
@@ -186,6 +188,11 @@ export class Store {
 
   countTranscripts() {
     return this.q.countVersions.get().n;
+  }
+
+  // The keys (of those given) that lead to at least one visible version.
+  existing(keys) {
+    return keys.filter((k) => this.q.keyHasVersion.get(k));
   }
 
   // Returns { etag, json } or null. json is assembled from the stored JSON so the segment

@@ -1,5 +1,6 @@
 import { playSoon } from "./Players";
 import { ask } from "../lib/confirm";
+import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Search, Trash2, X, Youtube } from "lucide-react";
@@ -172,13 +173,26 @@ function ShowTile({ show }: { show: Show }) {
 
 /** A compact episode card for the home rows: picture, show and date, title, and a play button on hover. */
 /** Subtitles open with the episode, no transcription: already made here, the publisher's (YouTube captions,
- *  a feed transcript) or a 精读 transcript. Shared-library hits aren't known until opened. */
-const hasSubs = (e: Episode) => !!(e.hasTranscript || e.transcriptUrl || e.deep || e.videoId);
+ *  a feed transcript), a 精读 transcript, or one someone shared (asked for in one batch, see checkShared). */
+const ownSubs = (e: Episode) => !!(e.hasTranscript || e.transcriptUrl || e.deep || e.videoId);
+const useSharedHits = create<{ ids: Record<string, true> }>(() => ({ ids: {} }));
+const hasSubs = (e: Episode, shared: Record<string, true>) => ownSubs(e) || !!shared[e.id];
+/** Episodes already asked about this session (an answer doesn't change often enough to ask again). */
+const askedShared = new Set<string>();
+function checkShared(eps: Episode[]) {
+  const ids = eps.filter((e) => !ownSubs(e) && !askedShared.has(e.id)).map((e) => e.id).slice(0, 100);
+  if (!ids.length) return;
+  ids.forEach((id) => askedShared.add(id));
+  void api.sharedExists(ids).then((hit) => {
+    if (hit.length) useSharedHits.setState((s) => ({ ids: { ...s.ids, ...Object.fromEntries(hit.map((id) => [id, true as const])) } }));
+  }).catch(() => {});
+}
 
 function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const zh = useZh(ep.title);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
+  const shared = useSharedHits((s) => !!s.ids[ep.id]);
   const left = ep.duration && pct > 0 ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
   const play = (e: React.MouseEvent) => { e.stopPropagation(); playAll([ep]); };
   return (
@@ -187,7 +201,7 @@ function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
         {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" /> : <div className="cover-fallback" />}
         {pct > 0 && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
-        {hasSubs(ep) && <span className="thumb-subs">{t("有字幕")}</span>}
+        {(ownSubs(ep) || shared) && <span className="thumb-subs">{t("有字幕")}</span>}
         <button type="button" className="card-play" title={t("播放")} aria-label={t("播放")} onClick={play}><Play size={16} fill="currentColor" /></button>
       </div>
       <p className="ep-kicker">{ep.showId !== "single" && <ShowName title={ep.showTitle} />}<span>{left ? t("剩 {n} 分钟", { n: left }) : date(ep.published)}</span></p>
@@ -236,7 +250,9 @@ export function LatestView() {
     .filter((e, i, a) => a.findIndex((x) => x.id === e.id) === i).slice(0, 12);
   // Latest first, but in the top grid episodes that open with subtitles come before ones that need transcribing.
   const unheard = (eps ?? []).filter((e) => !(e.duration && e.progress >= e.duration * 0.97));
-  const fresh = [...unheard.slice(0, 18).filter(hasSubs), ...unheard.slice(0, 18).filter((e) => !hasSubs(e)), ...unheard.slice(18)];
+  const shared = useSharedHits((s) => s.ids);
+  useEffect(() => { checkShared(unheard.slice(0, 18)); }, [eps]);
+  const fresh = [...unheard.slice(0, 18).filter((e) => hasSubs(e, shared)), ...unheard.slice(0, 18).filter((e) => !hasSubs(e, shared)), ...unheard.slice(18)];
   const recs = useMemo(() => recommend({ shows, recent, favorites: favEps, downloads: dlEps }, 6), [shows, recent, favEps, dlEps]);
   const subscribe = async (input: string, name: string) => {
     setAdding(input);

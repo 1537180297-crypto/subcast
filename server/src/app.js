@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { Store } from './store.js';
 import { RateLimiter } from './ratelimit.js';
 import { VERSION } from './config.js';
-import { HttpError, validateKeys, validateReport, validateUpload, validateVersionId } from './validate.js';
+import { HttpError, validateExistsKeys, validateKeys, validateReport, validateUpload, validateVersionId } from './validate.js';
 
 const gzipAsync = promisify(gzipCb);
 const GZIP_MIN = 1024;
@@ -166,6 +166,15 @@ export function createApp(config) {
     return send(req, res, 200, entry.json, headers);
   }
 
+  // POST { keys: [...] } -> { found: [...] }: which keys already have shared subtitles, so a list of
+  // episodes can be marked without fetching every transcript.
+  async function exists(req, res) {
+    limit(req, 'exists');
+    const body = await readJson(req, res, 64 * 1024);
+    const keys = validateExistsKeys(body?.keys);
+    return send(req, res, 200, { found: store.existing(keys) }, { 'Cache-Control': 'no-store' });
+  }
+
   async function upload(req, res) {
     limit(req, 'upload');
     const body = await readJson(req, res, config.maxBodyBytes);
@@ -188,6 +197,8 @@ export function createApp(config) {
   const routes = [
     { path: /^\/api\/health$/, methods: { GET: (req, res) => send(req, res, 200, { ok: true, version: VERSION, transcripts: store.countTranscripts() }, { 'Cache-Control': 'no-store' }) } },
     { path: /^\/api\/v1\/transcripts$/, methods: { GET: lookup, POST: upload } },
+    { path: /^\/api\/v1\/transcripts\/exists$/, methods: { POST: exists } },
+    { path: /^\/api\/v1\/transcripts\/exists$/, methods: { POST: exists } },
     { path: /^\/api\/v1\/transcripts\/([^/]+)\/report$/, methods: { POST: (req, res, m) => report(req, res, m[1]) } },
     {
       path: /^\/api\/v1\/transcripts\/([^/]+)$/,

@@ -76,6 +76,8 @@ export const api = {
   logListen: (episodeId: string, showId: string, seconds: number, translated: boolean) => invoke<void>("log_listen", { episodeId, showId, seconds, translated }),
   listeningStats: (since: string) => invoke<ListenRow[]>("listening_stats", { since }),
   sharedTranscript: (episodeId: string) => invoke<Transcript | null>("shared_transcript", { episodeId }),
+  /** The ids (of these) the shared library has subtitles for. */
+  sharedExists: (episodeIds: string[]) => invoke<string[]>("shared_exists", { episodeIds }),
   asrElsewhere: () => invoke<{ app: string; format: string }[]>("asr_elsewhere"),
   rescanModels: () => invoke<void>("rescan_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),

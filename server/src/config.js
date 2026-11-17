@@ -32,6 +32,7 @@ export function loadConfig(env = process.env) {
       windowMs: int(env, 'RATE_WINDOW_MS', 60 * 60 * 1000, 1000),
       upload: int(env, 'RATE_UPLOADS_PER_HOUR', 30),
       lookup: int(env, 'RATE_LOOKUPS_PER_HOUR', 600),
+      exists: int(env, 'RATE_EXISTS_PER_HOUR', 120),
       report: int(env, 'RATE_REPORTS_PER_HOUR', 60),
     },
     responseCacheSize: int(env, 'RESPONSE_CACHE_SIZE', 64),
