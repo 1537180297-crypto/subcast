@@ -134,13 +134,15 @@ export async function llmChat(opts: {
   const requestId = `llm-${Date.now()}-${llmCounter++}`;
   let full = "";
   let unlisten: UnlistenFn | undefined;
+  // Pieces arrive faster than the screen redraws: hand the text over at most every 40 ms. A timer, not a frame
+  // callback, so it still runs with the window hidden; cancelled at the end, so a late one can't bring back
+  // "streaming" after the answer is done.
+  let pending = 0;
   if (opts.onDelta) {
-    // Pieces arrive faster than the screen redraws: hand the text over at most once a frame.
-    let frame = 0;
     unlisten = await listen<{ requestId: string; delta: string }>("llm", (ev) => {
       if (ev.payload.requestId !== requestId) return;
       full += ev.payload.delta;
-      if (!frame) frame = requestAnimationFrame(() => { frame = 0; opts.onDelta!(full); });
+      if (!pending) pending = window.setTimeout(() => { pending = 0; opts.onDelta!(full); }, 40);
     });
   }
   const abort = () => void api.cancelJob(requestId);
@@ -156,6 +158,8 @@ export async function llmChat(opts: {
       jsonMode: opts.jsonMode,
     });
   } finally {
+    // The last pieces go out now, before the caller sees the result (it keeps them if the reply fails).
+    if (pending) { window.clearTimeout(pending); opts.onDelta?.(full); }
     unlisten?.();
     opts.signal?.removeEventListener("abort", abort);
   }
