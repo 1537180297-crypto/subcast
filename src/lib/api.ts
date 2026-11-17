@@ -3,6 +3,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 
 /** A match inside one show: which part of the episode matched, a few words around it, and for subtitles the time. */
+/** One day-hour of listening to one episode (from the player; seeks don't count). */
+export interface ListenRow { day: string; hour: number; episodeId: string; showId: string; seconds: number; translated: boolean; showTitle: string; kind: string; cover: string; episodeTitle: string; video: boolean }
+
 export interface ShowHit { episode: Episode; field: "title" | "notes" | "transcript"; snippet: string; time?: number | null }
 
 export interface Show {
@@ -70,6 +73,8 @@ export const api = {
   transcribe: (episodeId: string, model: string, language: string, cloud?: CloudAsr) => invoke<Transcript>("transcribe", { episodeId, model, language, cloud: cloud ?? null }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   asrModels: () => invoke<ModelInfo[]>("asr_models"),
+  logListen: (episodeId: string, showId: string, seconds: number, translated: boolean) => invoke<void>("log_listen", { episodeId, showId, seconds, translated }),
+  listeningStats: (since: string) => invoke<ListenRow[]>("listening_stats", { since }),
   rescanModels: () => invoke<void>("rescan_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),
   deleteModel: (id: string) => invoke<void>("delete_model", { id }),

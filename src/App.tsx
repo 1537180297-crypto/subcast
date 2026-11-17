@@ -16,8 +16,9 @@ import { loadFavorites } from "./lib/library";
 import { startUpdateChecks } from "./lib/updater";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { EpisodeView } from "./components/EpisodeView";
+import { StatsView } from "./components/StatsView";
 import { VideoDock } from "./components/VideoDock";
-import { AudioEngine, cycleMode, stepRate, toggleTheater } from "./components/Players";
+import { AudioEngine, cycleMode, noteListening, stepRate, toggleTheater } from "./components/Players";
 import { actionFor, comboOf, isPlain, type ActionId } from "./lib/shortcuts";
 import { useJobs } from "./lib/jobs";
 import { activeIndex } from "./components/TranscriptPanel";
@@ -33,6 +34,9 @@ export default function App() {
     void startOffline();
     void loadFavorites();
     startUpdateChecks();
+    // Listening time is flushed when playback stops, not only every 20 s.
+    const offPlaying = useStore.subscribe((s, prev) => { if (prev.playing && !s.playing && s.current) noteListening(s.current, false); });
+    window.addEventListener("beforeunload", () => { const c = useStore.getState().current; if (c) noteListening(c, false); });
     // Local AI agents (Claude Code and the like): found once settings are loaded, put to work if nothing else is set up.
     void init().then(() => detectAgents());
     // Rendered: tells the app a hot-updated interface works (otherwise it falls back on its own; see ota.rs).
@@ -93,7 +97,7 @@ export default function App() {
       localStorage.setItem("sharedNoticeShown", "1");
       useStore.getState().notify(t("你的字幕已匿名分享给其他听友（设置 › 通用 可关闭）"));
     });
-    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("scroll", onScroll, { capture: true }); void offMenu.then((f) => f()); void offShared.then((f) => f()); };
+    return () => { offPlaying(); window.removeEventListener("keydown", onKey); document.removeEventListener("scroll", onScroll, { capture: true }); void offMenu.then((f) => f()); void offShared.then((f) => f()); };
   }, []);
 
   const { sidebar, sideOpen, put: putLayout } = useLayout();
@@ -107,6 +111,7 @@ export default function App() {
         {view.kind !== "episode" && <TopBar />}
         {view.kind === "latest" && <LatestView />}
         {view.kind === "recent" && <RecentView />}
+        {view.kind === "stats" && <StatsView />}
         {view.kind === "discover" && <DiscoverView />}
         {view.kind === "downloads" && <DownloadsView />}
         {view.kind === "show" && <ShowView key={view.id} id={view.id} />}

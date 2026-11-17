@@ -20,7 +20,10 @@ pub fn open(path: &Path) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS blobs(
             episode_id TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(episode_id, kind));
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS tr_cache(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        CREATE TABLE IF NOT EXISTS tr_cache(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        -- Time actually spent listening (playing, not seeking), per local day and hour, for 我的收听.
+        CREATE TABLE IF NOT EXISTS listens(day TEXT NOT NULL, hour INTEGER NOT NULL, episode_id TEXT NOT NULL, show_id TEXT NOT NULL,
+            seconds REAL NOT NULL, translated INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, hour, episode_id));",
     )?;
     let has_deep: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('episodes') WHERE name='deep'", [], |r| r.get::<_, i64>(0))? > 0;
     if !has_deep {
@@ -186,6 +189,30 @@ pub fn tr_get(conn: &Connection, key: &str) -> Result<Option<String>> {
 pub fn tr_put(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute("INSERT OR REPLACE INTO tr_cache(key,value) VALUES(?1,?2)", params![key, value])?;
     Ok(())
+}
+
+/// Adds listening time to today's row for this hour (local time).
+pub fn log_listen(conn: &Connection, episode_id: &str, show_id: &str, seconds: f64, translated: bool) -> Result<()> {
+    let now = chrono::Local::now();
+    conn.execute(
+        "INSERT INTO listens(day,hour,episode_id,show_id,seconds,translated) VALUES(?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(day,hour,episode_id) DO UPDATE SET seconds = seconds + excluded.seconds, translated = MAX(translated, excluded.translated)",
+        params![now.format("%Y-%m-%d").to_string(), now.format("%H").to_string().parse::<i64>().unwrap_or(0), episode_id, show_id, seconds.clamp(0.0, 120.0), translated as i64],
+    )?;
+    Ok(())
+}
+
+/// Every listening row since a day (YYYY-MM-DD), with the episode's show and kind for grouping.
+pub fn listens_since(conn: &Connection, since: &str) -> Result<Vec<serde_json::Value>> {
+    let mut st = conn.prepare(
+        "SELECT l.day, l.hour, l.episode_id, l.show_id, l.seconds, l.translated, COALESCE(s.title,''), COALESCE(s.kind,''), COALESCE(s.cover,''), COALESCE(e.title,''), COALESCE(e.video_id,'')
+         FROM listens l LEFT JOIN shows s ON s.id = l.show_id LEFT JOIN episodes e ON e.id = l.episode_id WHERE l.day >= ?1 ORDER BY l.day")?;
+    let rows = st.query_map([since], |r| Ok(serde_json::json!({
+        "day": r.get::<_, String>(0)?, "hour": r.get::<_, i64>(1)?, "episodeId": r.get::<_, String>(2)?, "showId": r.get::<_, String>(3)?,
+        "seconds": r.get::<_, f64>(4)?, "translated": r.get::<_, i64>(5)? == 1, "showTitle": r.get::<_, String>(6)?, "kind": r.get::<_, String>(7)?,
+        "cover": r.get::<_, String>(8)?, "episodeTitle": r.get::<_, String>(9)?, "video": !r.get::<_, String>(10)?.is_empty(),
+    })))?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
 }
 
 #[cfg(test)]

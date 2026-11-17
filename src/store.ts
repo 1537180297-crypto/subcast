@@ -6,6 +6,7 @@ import { setLang, t } from "./lib/i18n";
 export type View =
   | { kind: "latest" }
   | { kind: "recent" }
+  | { kind: "stats" }
   | { kind: "discover" }
   | { kind: "downloads" }
   | { kind: "show"; id: string }

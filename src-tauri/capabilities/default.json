@@ -40,6 +40,8 @@
     "allow-local-agents",
     "allow-youtube-subscriptions",
     "allow-rescan-models",
+    "allow-log-listen",
+    "allow-listening-stats",
     "allow-export-opml",
     "allow-probe-agent",
     "allow-warm-agent",

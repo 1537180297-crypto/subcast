@@ -14,9 +14,26 @@ import { playNext } from "../lib/library";
 
 const SAVE_EVERY = 10;
 let lastSaved = 0;
+// Listening time: wall-clock time while playing, at most 2 s per tick (a seek or a sleeping laptop adds
+// nothing), flushed every 20 s and on pause.
+let heard = { id: "", show: "", secs: 0, at: 0, translated: false };
+function flushHeard() {
+  if (heard.secs >= 1) void api.logListen(heard.id, heard.show, heard.secs, heard.translated).catch(() => {});
+  heard.secs = 0;
+}
+export function noteListening(ep: Episode, playing: boolean) {
+  const now = performance.now();
+  if (heard.id !== ep.id) { flushHeard(); heard = { id: ep.id, show: ep.showId, secs: 0, at: now, translated: false }; }
+  if (playing && heard.at) heard.secs += Math.min(2, (now - heard.at) / 1000);
+  heard.at = playing ? now : 0;
+  heard.translated ||= useStore.getState().settings.subtitleMode !== "original";
+  if (heard.secs >= 20 || (!playing && heard.secs > 0)) flushHeard();
+}
+
 function track(ep: Episode, time: number, length?: number) {
   const s = useStore.getState();
   if (s.current?.id !== ep.id) return;
+  noteListening(ep, s.playing);
   s.set({ time, ...(length ? { length } : {}) });
   if (Math.abs(time - lastSaved) > SAVE_EVERY) { lastSaved = time; void api.setProgress(ep.id, time); }
 }
