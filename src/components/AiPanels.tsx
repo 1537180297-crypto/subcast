@@ -265,7 +265,7 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
   };
 
   const text = streaming ?? summary;
-  if (!text && connected === false) return <div className="panel-empty"><ConnectCard what={tk("伴读")} /></div>;
+  if (!text && connected === false) return <div className="panel-empty"><ConnectCard what={tk("导读")} /></div>;
   if (!text && streaming != null) {
     return (
       <div className="panel-empty guide-wait" role="status">
@@ -280,11 +280,11 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
     return (
       <div className="panel-empty">
         <PageArt />
-        <p className="es-title">{t("一键中文伴读")}</p>
+        <p className="es-title">{t("一键中文导读")}</p>
         <p className="muted">{t("一句话总结、时间线、核心观点、原话和推荐片段，都带时间戳。")}</p>
         {error && <p className="error-text">{error}</p>}
         {error && needsSetup && <button className="btn" onClick={() => useStore.getState().openSettings("model")}>{t("去设置")}</button>}
-        <button className="btn primary" onClick={run} disabled={!transcript || streaming != null}>{streaming != null ? t("正在生成…") : t("生成伴读")}</button>
+        <button className="btn primary" onClick={run} disabled={!transcript || streaming != null}>{streaming != null ? t("正在生成…") : t("生成导读")}</button>
         {!transcript && <p className="muted small">{t("字幕准备好后可以生成。")}</p>}
       </div>
     );

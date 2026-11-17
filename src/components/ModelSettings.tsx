@@ -80,7 +80,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
         <div className="ms-use">
           {split
             ? <b>{t("问答：{a} · 字幕翻译：{b}", { a: nameOf(settings.chatProvider) || t("没有设置"), b: translateName })}</b>
-            : <b>{t("当前：{name}", { name: nameOf(settings.chatProvider) || t("没有设置") })}<span className="muted small"> · {t("管问答、伴读和翻译")}</span></b>}
+            : <b>{t("当前：{name}", { name: nameOf(settings.chatProvider) || t("没有设置") })}<span className="muted small"> · {t("管问答、导读和翻译")}</span></b>}
         </div>
         {settings.autoPicked && settings.chatProvider === settings.autoPicked && !settings.modelChosen && (
           <p className="ms-auto small">{t("检测到你已登录 {name}，已自动设为默认模型。", { name: nameOf(settings.autoPicked) })}</p>
@@ -150,7 +150,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
       {advanced && (
         <div className="setup-block ms-adv-body">
           <div className="reading-row">
-            <span>{t("问答和伴读")}</span>
+            <span>{t("问答和导读")}</span>
             <select value={settings.chatProvider} onChange={(e) => void saveSettings({ chatProvider: e.target.value, chatModel: "", modelChosen: true })}>
               {withCurrent(settings.chatProvider).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
