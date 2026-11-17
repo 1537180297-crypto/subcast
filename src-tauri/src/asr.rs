@@ -443,8 +443,10 @@ pub fn ytdlp_command(ytdlp: &Path) -> tokio::process::Command {
     cmd.env("PATH", crate::agents::child_path());
     // Older copies (a system-wide yt-dlp used as a fallback) don't know the option and would refuse to run.
     if knows_js_runtimes(ytdlp) { cmd.args(["--js-runtimes", "deno", "--js-runtimes", "node", "--js-runtimes", "bun"]); }
-    let proxy = net::proxy();
+    let proxy = net::effective_proxy();
     if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
+    // A dead connection fails in seconds instead of hanging the player on "正在获取视频地址".
+    cmd.args(["--socket-timeout", "20"]);
     #[cfg(windows)]
     { cmd.creation_flags(0x08000000); }
     cmd.kill_on_drop(true);

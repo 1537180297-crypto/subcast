@@ -95,7 +95,7 @@ fn command(path: &Path) -> Command {
     #[cfg(windows)]
     { c.creation_flags(0x08000000); }
     // CLIs only honour HTTPS_PROXY; apps opened from the Dock don't inherit it from the shell.
-    let proxy = crate::net::proxy();
+    let proxy = crate::net::effective_proxy();
     if !proxy.is_empty() { c.env("HTTPS_PROXY", &proxy).env("HTTP_PROXY", &proxy); }
     c
 }
