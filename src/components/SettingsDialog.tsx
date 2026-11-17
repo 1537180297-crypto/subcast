@@ -1,7 +1,7 @@
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
-import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, Play, RefreshCw, Square, Trash2, X } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, Play, RefreshCw, Square, Trash2, X, AudioLines, Captions, HardDrive, Info, Keyboard, LayoutGrid, SlidersHorizontal, Sparkles, Volume2, type LucideIcon } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { ASR_SERVICES, VOICES } from "../lib/settings";
 import { speak, stopSpeaking } from "../lib/tts";
@@ -24,8 +24,17 @@ import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } fr
 
 const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
 
+/** One default model for translation and the guide; Q&A starts with it and can switch in the chat box. */
+export function DefaultButton({ id, isDefault }: { id: string; isDefault: boolean }) {
+  const saveSettings = useStore((s) => s.saveSettings);
+  const mode = useStore((s) => s.settings.translateMode);
+  return isDefault
+    ? <p className="default-on small"><Check size={13} /> {t("当前默认模型")}</p>
+    : <button className="btn primary sm" onClick={() => void saveSettings({ translateProvider: id, chatProvider: id, chatModel: "", modelChosen: true, ...(mode === "google" ? { translateMode: "auto" } : {}) })}>{t("设为默认模型")}</button>;
+}
+
 function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) => void }) {
-  const { settings, saveSettings } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })));
+  const settings = useStore((s) => s.settings);
   const [key, setKey] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
@@ -48,8 +57,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
       setTesting(t("可用 ✓ {reply}", { reply: r.slice(0, 20) })); setTestOk(true);
     } catch (e) { setTesting(errorText(e)); }
   };
-  const forChat = settings.chatProvider === p.id;
-  const forTranslate = settings.translateProvider === p.id;
+  const forTranslate = settings.translateProvider === p.id && settings.translateMode !== "google";
   return (
     <div className="provider-form">
       {p.needsKey && (
@@ -66,12 +74,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
         </div>
       )}
       <div className="setup-block">
-        <p className="setup-title">{t("用它做什么")}</p>
-        <div className="use-picks">
-          <button className={`chip sm ${forChat ? "on" : ""}`} aria-pressed={forChat} onClick={() => !forChat && saveSettings({ chatProvider: p.id, chatModel: "", modelChosen: true })}>{forChat && <Check size={12} />}{t("问答与导读")}</button>
-          <button className={`chip sm ${forTranslate ? "on" : ""}`} aria-pressed={forTranslate} onClick={() => !forTranslate && saveSettings({ translateProvider: p.id, modelChosen: true })}>{forTranslate && <Check size={12} />}{t("字幕翻译")}</button>
-        </div>
-        <p className="muted small">{t("每项用途只能交给一个服务，选中后原来的会自动换下。")}</p>
+        <DefaultButton id={p.id} isDefault={forTranslate} />
       </div>
       <div className="row-actions">
         <button className="btn sm" onClick={test} disabled={testing === "…"}>{testing === "…" && <Loader2 size={13} className="spin" />} {t("测试连接")}</button>
@@ -114,53 +117,53 @@ export function SettingsDialog() {
   useEffect(() => { void llmReady("chat").then(setChatOk); void llmReady("translate").then(setTrOk); }, [settings, section]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
-  const proxyHint = t("留空使用系统代理，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"); // i18n-ignore: scripts/i18n.mjs reads the URL's "//" as a comment; the key is still extracted
   const [elsewhere, setElsewhere] = useState<{ app: string; format: string }[]>([]);
-  const refresh = () => api.asrModels().then((m) => { setModels(m); void api.asrElsewhere().then(setElsewhere).catch(() => {}); });
+  const refresh = () => api.asrModels().then((m) => { setModels(m); void api.asrElsewhere().then((x) => setElsewhere(x ?? [])).catch(() => {}); });
   const { downloading, start, cancel } = useModelDownload(refresh);
   useEffect(() => { void refresh(); }, []);
   const updateWaiting = useUpdate(hasUpdate);
-  const NAV: [Section, string][] = [["overview", tk("概览")], ["model", tk("AI 模型")], ["asr", tk("语音识别")], ["reading", tk("阅读与字幕")], ["tts", tk("朗读")], ["shortcuts", tk("快捷键")], ["general", tk("通用")], ["storage", tk("存储")], ["about", tk("关于")]];
+  const NAV: [Section, string, LucideIcon][] = [["overview", tk("概览"), LayoutGrid], ["model", tk("AI 模型"), Sparkles], ["asr", tk("语音识别"), AudioLines], ["reading", tk("阅读与字幕"), Captions], ["tts", tk("朗读"), Volume2], ["shortcuts", tk("快捷键"), Keyboard], ["general", tk("通用"), SlidersHorizontal], ["storage", tk("存储"), HardDrive], ["about", tk("关于"), Info]];
 
   return (
     <Modal title={t("设置")} onClose={() => { stopSpeaking(); set({ settingsOpen: false }); }} wide>
       <div className="settings">
         <nav className="settings-nav">
-          {NAV.map(([k, label]) => <button key={k} className={section === k ? "on" : ""} onClick={() => setSection(k)}>{t(label)}{k === "about" && updateWaiting && <span className="update-dot" aria-label={t("有新版本")} />}</button>)}
+          {NAV.map(([k, label, Icon]) => <button key={k} className={section === k ? "on" : ""} onClick={() => setSection(k)}><Icon size={15} aria-hidden />{t(label)}{k === "about" && updateWaiting && <span className="update-dot" aria-label={t("有新版本")} />}</button>)}
         </nav>
         <div className="settings-body">
           {section === "overview" && (
             <div className="overview">
               <div className="ov-card">
-                <div className="ov-head"><p className="ov-title">{t("字幕翻译")}</p><span className={`pill ok`}>{trOk ? t(settings.providers[settings.translateProvider]?.name ?? "") : t("谷歌翻译 · 免费")}</span></div>
-                <p className="muted small">{trOk ? t("用你的模型翻译，译文更通顺、术语更准。") : t("无需设置即可使用；连接自己的模型可获得更好的译文。")}</p>
-                <div className="seg-control">
-                  {([["auto", t("自动")], ["google", t("谷歌翻译")], ["llm", t("我的模型")]] as const).map(([k, label]) => (
-                    <button key={k} className={settings.translateMode === k ? "on" : ""} onClick={() => saveSettings({ translateMode: k })}>{label}</button>
-                  ))}
-                </div>
-                <label className="check"><input type="checkbox" checked={settings.autoTranslate} onChange={(e) => saveSettings({ autoTranslate: e.target.checked })} /> {t("打开外语节目时自动翻译字幕")}</label>
-                {trOk && settings.translateMode !== "google" && (
+                <div className="ov-head"><p className="ov-title">{t("AI 模型")}</p><span className={`pill ${chatOk || trOk ? "ok" : ""}`}>{trOk || chatOk ? t(settings.providers[settings.translateProvider]?.name ?? "") : t("未设置")}</span></div>
+                <p className="muted small">{trOk || chatOk ? t("翻译字幕、写导读、回答问题都用它。") : t("不设置也能用：字幕会用免费的谷歌翻译。设置后翻译更准，还能问答和导读。")}</p>
+                <button className={`btn sm ${trOk || chatOk ? "" : "primary"}`} onClick={() => setSection("model")}>{trOk || chatOk ? t("更换") : t("设置模型")}</button>
+              </div>
+              <div className="ov-card">
+                <div className="ov-head"><p className="ov-title">{t("字幕翻译")}</p></div>
+                <label className="check"><input type="checkbox" checked={settings.autoTranslate} onChange={(e) => saveSettings({ autoTranslate: e.target.checked })} /> {t("打开外语节目时自动翻译")}</label>
+                {trOk && (
                   <div className="ov-row">
-                    <span className="small">{t("用模型翻译时")}</span>
+                    <span className="small">{t("翻译用")}</span>
                     <div className="seg-control">
-                      {([["fast", t("快速")], ["best", t("精翻")]] as const).map(([k, label]) => (
-                        <button key={k} className={settings.translateQuality === k ? "on" : ""} title={k === "best" ? t("多一遍润色，读起来更像中文口语；花费约为两倍") : t("一遍翻译，最快出字幕")} onClick={() => saveSettings({ translateQuality: k })}>{label}</button>
+                      {([["auto", t("AI 模型")], ["google", t("谷歌翻译")]] as const).map(([k, label]) => (
+                        <button key={k} className={(settings.translateMode === "google" ? "google" : "auto") === k ? "on" : ""} onClick={() => saveSettings({ translateMode: k })}>{label}</button>
                       ))}
                     </div>
+                    {settings.translateMode !== "google" && (
+                      <div className="seg-control">
+                        {([["fast", t("快速")], ["best", t("精翻")]] as const).map(([k, label]) => (
+                          <button key={k} className={settings.translateQuality === k ? "on" : ""} title={k === "best" ? t("多一遍润色，读起来更像中文口语；花费约为两倍") : t("一遍翻译，最快出字幕")} onClick={() => saveSettings({ translateQuality: k })}>{label}</button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
-                <label className="check" title={t("把标题和节目简介里的人名、公司和术语告诉识别与翻译模型，名字更少写错")}><input type="checkbox" checked={settings.useShowNotes} onChange={(e) => saveSettings({ useShowNotes: e.target.checked })} /> {t("用节目简介辅助识别和翻译")}</label>
-                </div>
-              <div className="ov-card">
-                <div className="ov-head"><p className="ov-title">{t("AI 问答与导读")}</p><span className={`pill ${chatOk ? "ok" : ""}`}>{chatOk ? t(settings.providers[settings.chatProvider]?.name ?? "") : t("未连接")}</span></div>
-                <p className="muted small">{t("基于整期文字稿回答问题、生成中文导读。推荐 DeepSeek，国内直连，一集约 ¥0.1。")}</p>
-                <button className="btn sm primary" onClick={() => setSection("model")}>{chatOk ? t("管理模型") : t("连接模型")}</button>
+                <label className="check" title={t("把标题和节目简介里的人名、公司和术语告诉识别与翻译模型，名字更少写错")}><input type="checkbox" checked={settings.useShowNotes} onChange={(e) => saveSettings({ useShowNotes: e.target.checked })} /> {t("参考节目简介，人名术语更准")}</label>
               </div>
               <div className="ov-card">
                 <div className="ov-head"><p className="ov-title">{t("语音识别")}</p><span className={`pill ${settings.asrEngine !== "local" || models.find((m) => m.id === settings.asrModel)?.installed ? "ok" : ""}`}>{settings.asrEngine !== "local" ? t(settings.cloudAsr[settings.asrEngine]?.name ?? "") : models.find((m) => m.id === settings.asrModel)?.installed ? t("本机 · 已下载") : t("本机 · 未下载")}</span></div>
-                <p className="muted small">{t("没有字幕的节目用它生成。本机模型音频不出本机；云端服务更快，适合长节目。")}</p>
-                <button className="btn sm" onClick={() => setSection("asr")}>{t("管理")}</button>
+                <p className="muted small">{t("节目没有字幕时，用它听写出来。")}</p>
+                <button className="btn sm" onClick={() => setSection("asr")}>{t("更换")}</button>
               </div>
             </div>
           )}
@@ -239,40 +242,45 @@ export function SettingsDialog() {
           {section === "tts" && <TtsSettings />}
           {section === "general" && (
             <>
-              <div className="setup-block">
+              <section className="setup-block">
+                <p className="setup-title">{t("界面")}</p>
+                <label><span>{t("界面语言")}</span>
+                  <select value={settings.uiLang} onChange={(e) => void saveSettings({ uiLang: e.target.value as LangSetting })}>
+                    <option value="auto">{t("跟随系统（{name}）", { name: LANGS.find((l) => l.id === systemLang())?.name ?? "" })}</option>
+                    {LANGS.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                </label>
+                <label className="check"><input type="checkbox" checked={settings.youtubePromo} onChange={(e) => saveSettings({ youtubePromo: e.target.checked })} /> {t("显示节目的 YouTube 订阅按钮")}</label>
+                {settings.youtubePromo && <label className="check"><input type="checkbox" checked={!settings.homeBannerHidden} onChange={(e) => saveSettings({ homeBannerHidden: !e.target.checked })} /> {t("在发现页顶部推荐「词元之外」")}</label>}
+              </section>
+              <section className="setup-block">
                 <p className="setup-title">{t("订阅")}</p>
                 <div className="row-actions">
                   <button className="btn sm" onClick={() => { set({ settingsOpen: false, addOpen: true, addTab: "import" }); }}>{t("导入订阅…")}</button>
                   <button className="btn sm" onClick={async () => { try { const path = await api.exportOpml(); notify(t("已导出到「下载」：{name}", { name: path.split(/[\\/]/).pop() ?? "" })); void revealItemInDir(path).catch(() => {}); } catch (e) { notify(errorText(e)); } }}>{t("导出 OPML")}</button>
                 </div>
-                <p className="muted small">{t("从 YouTube、小宇宙和其他播客 App 导入；导出的 OPML 可以在其他播客 App 里打开。")}</p>
-              </div>
-              <label><span>{t("YouTube 要求验证时")}</span>
-                <select value={settings.ytCookiesBrowser ?? ""} onChange={(e) => void saveSettings({ ytCookiesBrowser: e.target.value })}>
-                  <option value="">{t("不借用浏览器登录")}</option>
-                  {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{t("借用 {name} 的 YouTube 登录", { name: b[0].toUpperCase() + b.slice(1) })}</option>)}
-                </select>
-              </label>
-              <p className="muted small">{t("下载音频或生成字幕时，YouTube 有时会要求「确认不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 会在那时借用它的登录，只在本机读取，不保存。")}</p>
-              <label><span>{t("界面语言")}</span>
-                <select value={settings.uiLang} onChange={(e) => void saveSettings({ uiLang: e.target.value as LangSetting })}>
-                  <option value="auto">{t("跟随系统（{name}）", { name: LANGS.find((l) => l.id === systemLang())?.name ?? "" })}</option>
-                  {LANGS.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-              </label>
-              <p className="muted small">{t("切换后立即生效。字幕仍翻译成中文。")}</p>
-              <label className="check"><input type="checkbox" checked={settings.youtubePromo} onChange={(e) => saveSettings({ youtubePromo: e.target.checked })} /> {t("推荐节目的 YouTube 频道")}</label>
-              {settings.youtubePromo && <label className="check"><input type="checkbox" checked={!settings.homeBannerHidden} onChange={(e) => saveSettings({ homeBannerHidden: !e.target.checked })} /> {t("在发现页顶部推荐「词元之外」")}</label>}
-              <p className="muted small">{t("节目有官方 YouTube 频道时，在节目页和单集页显示订阅入口，不影响 App 内播放。")}</p>
-              <label className="check"><input type="checkbox" checked={settings.shareTranscripts} onChange={(e) => saveSettings({ shareTranscripts: e.target.checked })} /> {t("分享识别好的字幕")}</label>
-              <p className="muted small">{t("字幕匿名上传到公共库，别人打开同一集就能直接用，帮他们省一次识别。只上传字幕文本，不含音频。关闭后仍能使用别人分享的字幕。")}</p>
-              <label><span>{t("网络代理")}</span>
-                <div className="key-row">
-                  <input {...NO_AUTO} value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder={proxyHint} />
-                  <button className="btn sm" onClick={async () => { try { await saveSettings({ proxy }); notify(t("代理已保存")); } catch (e) { notify(errorText(e)); } }}>{t("保存")}</button>
-                </div>
-              </label>
-              <p className="muted small">{t("在国内访问 YouTube 需要代理。视频画面由系统浏览器内核播放，使用系统代理设置。谷歌翻译连不上时会自动改走国内中转。")}</p>
+              </section>
+              <section className="setup-block">
+                <p className="setup-title">{t("网络")}</p>
+                <label><span>{t("代理")}</span>
+                  <div className="key-row">
+                    <input {...NO_AUTO} value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder={t("留空就用系统代理")} />
+                    <button className="btn sm" onClick={async () => { try { await saveSettings({ proxy }); notify(t("代理已保存")); } catch (e) { notify(errorText(e)); } }}>{t("保存")}</button>
+                  </div>
+                </label>
+                <p className="muted small">{t("一般不用填：开着 Clash 等代理软件时会自动使用。")}</p>
+                <label><span>{t("YouTube 要求验证时")}</span>
+                  <select value={settings.ytCookiesBrowser ?? ""} onChange={(e) => void saveSettings({ ytCookiesBrowser: e.target.value })}>
+                    <option value="">{t("先问我")}</option>
+                    {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{t("借用 {name} 的 YouTube 登录", { name: b[0].toUpperCase() + b.slice(1) })}</option>)}
+                  </select>
+                </label>
+              </section>
+              <section className="setup-block">
+                <p className="setup-title">{t("共享")}</p>
+                <label className="check"><input type="checkbox" checked={settings.shareTranscripts} onChange={(e) => saveSettings({ shareTranscripts: e.target.checked })} /> {t("匿名分享我生成的字幕和译文")}</label>
+                <p className="muted small">{t("只分享文字，帮别人省去等待。关掉后照样能用别人分享的。")}</p>
+              </section>
             </>
           )}
           {section === "storage" && <Storage onAsr={() => setSection("asr")} />}
@@ -320,32 +328,34 @@ function TtsSettings() {
   const { settings, saveSettings, speaking } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, speaking: s.speaking })));
   const [error, setError] = useState<string | null>(null);
   const known = VOICES.some(([id]) => id === settings.ttsVoice);
+  const [advanced, setAdvanced] = useState(!known || settings.ttsResource === "seed-icl-2.0");
   const sample = settings.ttsVoice.startsWith("en_") ? "Hi, this is SubCast. Your podcasts, now with subtitles and AI notes." : "你好，这里是 SubCast。海外好播客，配上中文字幕和精读，也可以听。"; // i18n-ignore
   return (
     <>
-      <p className="muted small">{t("用豆包语音（seed-tts-2.0）把精读、导读朗读出来，适合通勤时「听中文版」。Key 与豆包语音识别共用，填一个即可。")}</p>
+      <p className="muted small">{t("把精读和导读读给你听，用的是豆包语音。")}</p>
       <div className="provider-form">
-        <label><span>API Key</span><KeyField account="tts.doubao" placeholder={t("粘贴火山引擎语音 API Key（留空则用语音识别的 Key）")} /></label>
+        <label><span>API Key</span><KeyField account="tts.doubao" placeholder={t("豆包语音的 Key（填过语音识别的可以留空）")} /></label>
         <label><span>{t("音色")}</span>
           <div className="model-chips">
-            {VOICES.map(([id, name]) => <button key={id} className={`chip sm ${settings.ttsVoice === id ? "on" : ""}`} onClick={() => saveSettings({ ttsVoice: id })}>{t(name)}</button>)}
-          </div>
-        </label>
-        <label><span>{t("音色 ID")}</span><input {...NO_AUTO} value={settings.ttsVoice} onChange={(e) => saveSettings({ ttsVoice: e.target.value.trim() })} placeholder={t("可填复刻音色或其他音色 ID")} /></label>
-        <label><span>{t("模型")}</span>
-          <div className="seg-control">
-            {(["seed-tts-2.0", "seed-icl-2.0"] as const).map((r) => <button key={r} className={settings.ttsResource === r ? "on" : ""} onClick={() => saveSettings({ ttsResource: r })}>{r === "seed-tts-2.0" ? t("标准音色") : t("声音复刻")}</button>)}
+            {VOICES.map(([id, name]) => <button key={id} className={`chip sm ${settings.ttsVoice === id ? "on" : ""}`} onClick={() => saveSettings({ ttsVoice: id, ttsResource: "seed-tts-2.0" })}>{t(name)}</button>)}
           </div>
         </label>
         <div className="row-actions">
           {speaking
             ? <button className="btn sm" onClick={stopSpeaking}><Square size={12} /> {t("停止")}</button>
-            : <button className="btn primary sm" onClick={() => { setError(null); void speak(sample, setError); }}><Play size={12} /> {known ? t("试听") : t("试听（自定义音色）")}</button>}
+            : <button className="btn primary sm" onClick={() => { setError(null); void speak(sample, setError); }}><Play size={12} /> {t("试听")}</button>}
           {error && <span className="error-text small">{error}</span>}
           <span className="spacer" />
           <button className="btn ghost sm" onClick={() => openUrl("https://console.volcengine.com/speech/new/setting/apikeys?projectName=default")}><ExternalLink size={13} /> {t("获取 Key")}</button>
-          <button className="btn ghost sm" onClick={() => openUrl("https://docs.volcengine.com/docs/doubao-voice/tone-list-3?lang=zh")}><ExternalLink size={13} /> {t("全部音色")}</button>
+          <button className="adv-toggle" onClick={() => setAdvanced(!advanced)}><ChevronDown size={12} className={advanced ? "flip" : ""} /> {t("高级设置")}</button>
         </div>
+        {advanced && (
+          <div className="adv-body">
+            <label><span>{t("自定义音色 ID")}</span><input {...NO_AUTO} value={settings.ttsVoice} onChange={(e) => saveSettings({ ttsVoice: e.target.value.trim() })} placeholder={t("复刻音色或其他音色的 ID")} /></label>
+            <label className="check"><input type="checkbox" checked={settings.ttsResource === "seed-icl-2.0"} onChange={(e) => saveSettings({ ttsResource: e.target.checked ? "seed-icl-2.0" : "seed-tts-2.0" })} /> {t("这是我复刻的声音")}</label>
+            <button className="link-btn small" onClick={() => openUrl("https://docs.volcengine.com/docs/doubao-voice/tone-list-3?lang=zh")}><ExternalLink size={12} /> {t("查看全部音色")}</button>
+          </div>
+        )}
       </div>
     </>
   );
