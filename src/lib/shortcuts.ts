@@ -1,12 +1,13 @@
 // Keyboard shortcuts: one registry of actions with defaults (YouTube's where they overlap, so they feel familiar),
 // overridable in Settings › 快捷键. A shortcut is "Mod+Shift+K" style text; Mod is ⌘ on macOS and Ctrl elsewhere.
+import { create } from "zustand";
 import { tk } from "./i18n";
 import { IS_MAC } from "./i18n";
 
 export type ActionId =
   | "playPause" | "back" | "forward" | "backShort" | "forwardShort" | "prevLine" | "nextLine"
   | "fullscreen" | "subtitleMode" | "speedUp" | "speedDown" | "mute"
-  | "toggleSidebar" | "togglePanel" | "search" | "settings";
+  | "toggleSidebar" | "togglePanel" | "search" | "settings" | "keysHelp";
 
 export interface ActionDef { id: ActionId; label: string; group: string; keys: string[]; /** Works while typing in a text box. */ global?: boolean }
 
@@ -27,7 +28,11 @@ export const ACTIONS: ActionDef[] = [
   { id: "togglePanel", label: tk("显示 / 收起字幕栏"), group: tk("窗口"), keys: ["Mod+\\"], global: true },
   { id: "search", label: tk("搜索节目"), group: tk("窗口"), keys: ["Mod+L"], global: true },
   { id: "settings", label: tk("打开设置"), group: tk("窗口"), keys: ["Mod+,"], global: true },
+  { id: "keysHelp", label: tk("查看快捷键"), group: tk("窗口"), keys: ["Mod+/"], global: true },
 ];
+
+/** Whether the shortcut cheat sheet (⌘/) is showing. */
+export const useKeysHelp = create<{ open: boolean }>(() => ({ open: false }));
 
 /** The system's own: never assignable (quit, close, hide, minimise, copy/paste/select all/undo). */
 const RESERVED = new Set(["Mod+Q", "Mod+W", "Mod+H", "Mod+M", "Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Z", "Mod+Shift+Z", "Mod+Tab", "Alt+F4", "Mod+F", "Escape", "Tab", "Enter"]);

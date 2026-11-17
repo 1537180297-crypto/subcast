@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Plus, RotateCcw, X } from "lucide-react";
-import { ACTIONS, checkCombo, comboOf, keymap, prettyCombo, type ActionId } from "../lib/shortcuts";
+import { ACTIONS, checkCombo, comboOf, keymap, prettyCombo, useKeysHelp, type ActionId } from "../lib/shortcuts";
+import { Modal } from "./Chrome";
 import { useStore } from "../store";
 import { t, useLang } from "../lib/i18n";
 
@@ -57,7 +58,7 @@ export function ShortcutSettings() {
           <p className="setup-title">{t(g)}</p>
           {ACTIONS.filter((a) => a.group === g).map((a) => (
             <div key={a.id} className="shortcut-row">
-              <span className="shortcut-label">{t(a.label)}</span>
+              <span className="shortcut-label">{a.id === "back" || a.id === "forward" ? <SkipLabel id={a.id} /> : t(a.label)}</span>
               <span className="shortcut-keys">
                 {map[a.id].map((k, i) => (
                   <button key={k + i} className={`shortcut-recorder ${rec?.id === a.id && rec.index === i ? "recording" : ""}`} onClick={() => setRec({ id: a.id, index: i })} title={t("点击后按下新的组合")}>
@@ -81,5 +82,47 @@ export function ShortcutSettings() {
         </section>
       ))}
     </div>
+  );
+}
+
+const SKIPS = { back: [5, 10, 15, 30], forward: [10, 15, 30, 60] } as const;
+
+/** 后退 / 前进 with how far, chosen right in the shortcut row. */
+function SkipLabel({ id }: { id: "back" | "forward" }) {
+  const { settings, saveSettings } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })));
+  const key = id === "back" ? "skipBack" : "skipForward";
+  const value = settings[key] ?? (id === "back" ? 15 : 30);
+  return (
+    <span className="skip-label">
+      {id === "back" ? t("后退") : t("前进")}
+      <select value={value} aria-label={t("秒数")} onChange={(e) => void saveSettings({ [key]: Number(e.target.value) })}>
+        {SKIPS[id].map((n) => <option key={n} value={n}>{t("{n} 秒", { n })}</option>)}
+      </select>
+    </span>
+  );
+}
+
+/** ⌘/: every shortcut at a glance, read-only. */
+export function KeysHelp() {
+  const custom = useStore((s) => s.settings.shortcuts);
+  const skip = useStore(useShallow((s) => [s.settings.skipBack ?? 15, s.settings.skipForward ?? 30] as const));
+  useLang((s) => s.lang);
+  const map = keymap(custom);
+  const close = () => useKeysHelp.setState({ open: false });
+  const label = (a: (typeof ACTIONS)[number]) => a.id === "back" ? t("后退 {n} 秒", { n: skip[0] }) : a.id === "forward" ? t("前进 {n} 秒", { n: skip[1] }) : t(a.label);
+  return (
+    <Modal title={t("快捷键")} onClose={close}>
+      <div className="keys-help">
+        {[...new Set(ACTIONS.map((a) => a.group))].map((g) => (
+          <section key={g}>
+            <p className="setup-title">{t(g)}</p>
+            {ACTIONS.filter((a) => a.group === g && map[a.id].length).map((a) => (
+              <div key={a.id} className="keys-help-row"><span>{label(a)}</span><span>{map[a.id].map((k) => <kbd key={k}>{prettyCombo(k)}</kbd>)}</span></div>
+            ))}
+          </section>
+        ))}
+      </div>
+      <div className="row-actions"><span className="spacer" /><button className="btn ghost sm" onClick={() => { close(); useStore.getState().openSettings("general"); }}>{t("修改快捷键…")}</button></div>
+    </Modal>
   );
 }

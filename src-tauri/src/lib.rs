@@ -535,14 +535,16 @@ async fn ui_check(app: AppHandle, state: State<'_, AppState>) -> Res<String> {
 /// itself), "proxy-hls" (hls.js through the loopback proxy, for HD where HLS isn't native) or "mp4" (360p, plays
 /// anywhere). Emits `yt-stream` events ("tool" with the first-time yt-dlp download progress, then "resolve").
 #[tauri::command]
-async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, mode: Option<String>) -> Res<VideoStream> {
+async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, mode: Option<String>, fresh: Option<bool>) -> Res<VideoStream> {
+    asr::streams::init(&state.data);
+    let fresh = fresh.unwrap_or(false);
     let mode = mode.unwrap_or_else(|| if cfg!(target_os = "macos") { "native-hls".into() } else { "proxy-hls".into() });
     let hls = mode != "mp4";
     let emit = |stage: &str, progress: f64| { let _ = app.emit("yt-stream", json!({ "videoId": video_id, "stage": stage, "progress": progress })); };
     let job = async {
         asr::ytdlp_with(&state.data, |got, total| emit("tool", total.map_or(0.0, |t| got as f64 / t.max(1) as f64))).await?;
         emit("resolve", 0.0);
-        asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls).await } }).await
+        asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls, fresh).await } }).await
     };
     let url = tokio::time::timeout(std::time::Duration::from_secs(180), job).await
         .map_err(|_| "获取视频地址超时，请检查网络或代理".to_string())?
@@ -654,23 +656,37 @@ fn clear_temp(state: State<'_, AppState>) -> Res<()> {
     Ok(())
 }
 
+/// Someone else's subtitles for this episode from the shared library, saved as this episode's transcript (and
+/// their Chinese as its translation). None when the library hasn't got it.
+async fn take_shared(state: &AppState, ep: &Episode) -> Option<Transcript> {
+    let mut hit = shared::lookup(&shared::keys(ep)).await?;
+    let translation = hit.translation.take();
+    let t = shared::into_transcript(&ep.id, hit);
+    db::save_transcript(&state.db.lock().unwrap(), &t).ok()?;
+    // The shared Chinese lines become this episode's translation (engine "shared"); the subtitle view only
+    // machine-translates the gaps. Saved after the transcript, which clears an episode's old blobs.
+    if let Some(tr) = translation.filter(|tr| tr.items.len() == t.segments.len() && tr.lang.starts_with("zh")) {
+        let conn = state.db.lock().unwrap();
+        let _ = db::set_blob(&conn, &ep.id, "zh", &serde_json::to_string(&tr.items).unwrap_or_default());
+        let _ = db::set_blob(&conn, &ep.id, "zh-engine", "shared");
+    }
+    Some(t)
+}
+
+/// Checked when an episode opens, before it is called "no subtitles", so no model is downloaded for it.
+#[tauri::command]
+async fn shared_transcript(state: State<'_, AppState>, episode_id: String) -> Res<Option<Transcript>> {
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    Ok(take_shared(&state, &ep).await)
+}
+
 #[tauri::command]
 async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String, cloud: Option<cloud::CloudAsr>) -> Res<Transcript> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
     // Someone else may have shared this episode's subtitles; a hit skips the download + ASR pass
     // entirely (and works even without a local model).
     let share_keys = shared::keys(&ep);
-    if let Some(mut hit) = shared::lookup(&share_keys).await {
-        let translation = hit.translation.take();
-        let t = shared::into_transcript(&ep.id, hit);
-        db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
-        // The shared Chinese lines become this episode's translation (engine "shared"); the subtitle view only
-        // machine-translates the gaps. Saved after the transcript, which clears an episode's old blobs.
-        if let Some(tr) = translation.filter(|tr| tr.items.len() == t.segments.len() && tr.lang.starts_with("zh")) {
-            let conn = state.db.lock().unwrap();
-            let _ = db::set_blob(&conn, &ep.id, "zh", &serde_json::to_string(&tr.items).unwrap_or_default());
-            let _ = db::set_blob(&conn, &ep.id, "zh-engine", "shared");
-        }
+    if let Some(t) = take_shared(&state, &ep).await {
         asr_emit(&app, &episode_id, "done", 1.0, None, None);
         return Ok(t);
     }
@@ -1115,7 +1131,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())
@@ -1224,9 +1240,9 @@ mod live {
         let (a, b) = tokio::join!(asr::ytdlp_with(&data, |got, total| seen = total.map_or(0.0, |t| got as f64 / t as f64)), asr::ytdlp(&data));
         assert_eq!(a.unwrap(), b.unwrap());
         assert!(seen > 0.99, "progress reached {seen}");
-        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", true).await }).await.unwrap();
+        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", true, true).await }).await.unwrap();
         assert!(url.contains("m3u8") || url.contains("hls_"));
-        let mp4 = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", false).await }).await.unwrap();
+        let mp4 = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "tBMlXQIrYK4", false, true).await }).await.unwrap();
         assert!(mp4.contains("googlevideo.com/videoplayback"), "{mp4}");
         let _ = std::fs::remove_dir_all(&data);
     }
@@ -1241,9 +1257,23 @@ mod live {
         assert!(!asr::update_ytdlp(&data, false).await.unwrap());
         // Checked just now: no second network call within the day.
         assert!(!asr::update_ytdlp(&data, false).await.unwrap());
-        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ", true).await }).await.unwrap();
+        let url = asr::with_ytdlp(&data, |b| async move { asr::youtube_stream_url(&b, "dQw4w9WgXcQ", true, true).await }).await.unwrap();
         println!("stream: {}", &url[..url.len().min(80)]);
         let _ = std::fs::remove_dir_all(&data);
+    }
+    /// SUBCAST_DB: a copy of a real library. Every transcribed episode in it should come back from the shared library.
+    #[tokio::test]
+    #[ignore]
+    async fn shared_library_hits() {
+        let conn = rusqlite::Connection::open(std::env::var("SUBCAST_DB").unwrap()).unwrap();
+        let ids: Vec<(String, String)> = conn.prepare("SELECT episode_id, source FROM transcripts WHERE source NOT LIKE 'youtube%'").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        for (id, source) in ids {
+            let Some(ep) = db::get_episode(&conn, &id).unwrap() else { continue };
+            let hit = shared::lookup(&shared::keys(&ep)).await;
+            println!("{source:>14} {:<40} shared: {}", ep.title.chars().take(40).collect::<String>(),
+                hit.map(|h| format!("{} lines, zh {}", h.segments.len(), h.translation.map(|t| t.items.len()).unwrap_or(0))).unwrap_or("none".into()));
+        }
     }
     /// SUBCAST_DB: a copy of a real library.
     #[test]

@@ -20,10 +20,11 @@ import { EpisodeView } from "./components/EpisodeView";
 import { StatsView } from "./components/StatsView";
 import { VideoDock } from "./components/VideoDock";
 import { AudioEngine, cycleMode, noteListening, stepRate, toggleTheater } from "./components/Players";
-import { actionFor, comboOf, isPlain, type ActionId } from "./lib/shortcuts";
+import { actionFor, comboOf, isPlain, useKeysHelp, type ActionId } from "./lib/shortcuts";
 import { useJobs } from "./lib/jobs";
 import { activeIndex } from "./components/TranscriptPanel";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { KeysHelp } from "./components/ShortcutSettings";
 import { t, useLang } from "./lib/i18n";
 import { EqBars } from "./components/Illustrations";
 
@@ -79,6 +80,7 @@ export default function App() {
         togglePanel: () => { const l = useLayout.getState(); l.put({ panelOpen: !l.panelOpen }); },
         search: () => { const box = document.querySelector<HTMLInputElement>(".top-search input"); if (!box) return false; box.focus(); box.select(); },
         settings: () => useStore.getState().openSettings(),
+        keysHelp: () => useKeysHelp.setState((s) => ({ open: !s.open })),
       };
       if (run[action]() !== false) e.preventDefault();
     };
@@ -103,6 +105,7 @@ export default function App() {
   }, []);
 
   const { sidebar, sideOpen, put: putLayout } = useLayout();
+  const keysHelp = useKeysHelp((s) => s.open);
   useLang(); // re-render the tree when the interface language changes
   if (!ready) return <div className="boot" role="status" aria-label={t("正在启动")}><EqBars /></div>;
   return (
@@ -124,6 +127,7 @@ export default function App() {
       <AudioEngine />
       <VideoDock />
       {settingsOpen && <SettingsDialog />}
+      {keysHelp && <KeysHelp />}
       {addOpen && <AddDialog />}
       <SelectionTools />
       <UpdateBanner />

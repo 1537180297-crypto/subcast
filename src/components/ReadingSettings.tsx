@@ -7,7 +7,7 @@ import { SUB_FONTS } from "../lib/reading";
 import { POSTER_FONTS } from "../lib/poster";
 import type { Settings } from "../lib/settings";
 
-function Seg<T extends string | number>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
+export function Seg<T extends string | number>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
   return (
     <div className="seg-control" role="radiogroup">
       {options.map(([k, label]) => <button key={String(k)} role="radio" aria-checked={value === k} className={value === k ? "on" : ""} onClick={() => onChange(k)}>{label}</button>)}
@@ -51,7 +51,6 @@ export function ReadingSettings() {
           <Seg value={settings.subtitleLook ?? "box"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => save({ subtitleLook: v })} />
         </div>
         <label className="check"><input type="checkbox" checked={settings.audioNextLine !== false} onChange={(e) => save({ audioNextLine: e.target.checked })} /> {t("音频节目提前显示下一句")}</label>
-        <p className="muted small">{t("字体从网上加载一次后会缓存；没加载出来时用系统字体。")}</p>
       </section>
 
       <section className="setup-block">
@@ -63,12 +62,6 @@ export function ReadingSettings() {
 
       <section className="setup-block">
         <p className="setup-title">{t("播放")}</p>
-        <div className="reading-row"><span>{t("后退")}</span>
-          <Seg value={settings.skipBack ?? 15} options={[[5, t("{n} 秒", { n: 5 })], [10, t("{n} 秒", { n: 10 })], [15, t("{n} 秒", { n: 15 })], [30, t("{n} 秒", { n: 30 })]]} onChange={(v) => save({ skipBack: v })} />
-        </div>
-        <div className="reading-row"><span>{t("前进")}</span>
-          <Seg value={settings.skipForward ?? 30} options={[[10, t("{n} 秒", { n: 10 })], [15, t("{n} 秒", { n: 15 })], [30, t("{n} 秒", { n: 30 })], [60, t("{n} 秒", { n: 60 })]]} onChange={(v) => save({ skipForward: v })} />
-        </div>
         <label className="check"><input type="checkbox" checked={!!settings.autoNext} onChange={(e) => save({ autoNext: e.target.checked })} /> {t("播完一集，自动接着播同一节目的下一集")}</label>
       </section>
     </div>

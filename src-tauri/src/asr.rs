@@ -530,16 +530,67 @@ async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Ar
 /// A stream the app's own <video> can play. `hls`: the WebView plays HLS natively (WebKit on macOS). Elsewhere
 /// (WebView2, most WebKitGTK) only a progressive MP4 works: YouTube's HLS manifests send no CORS header, so
 /// hls.js can't load them.
-pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str, hls: bool) -> Result<String> {
-    // Addresses stay valid for hours: reopening a video doesn't ask YouTube again.
+pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str, hls: bool, fresh: bool) -> Result<String> {
+    // An address is reused until 20 minutes before YouTube's own expiry (about 6 hours), across restarts.
     let key = format!("{video_id}|{hls}");
-    if let Some((url, at)) = STREAMS.lock().unwrap().get(&key).cloned() { if at.elapsed().as_secs() < 4 * 3600 { return Ok(url); } }
+    if !fresh { if let Some(url) = streams::get(&key) { return Ok(url); } }
     let url = with_bot_fallback(|extra| async move { stream_once(ytdlp, video_id, hls, &extra).await }).await?;
-    STREAMS.lock().unwrap().insert(key, (url.clone(), std::time::Instant::now()));
+    streams::put(&key, &url);
     Ok(url)
 }
 
-static STREAMS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant)>>> = once_cell::sync::Lazy::new(Default::default);
+/// Resolved video addresses, kept in memory and in `streams.json` next to the app's data.
+pub mod streams {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCell::new();
+    static MAP: once_cell::sync::Lazy<Mutex<HashMap<String, (String, u64)>>> = once_cell::sync::Lazy::new(|| {
+        let saved = FILE.get().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        Mutex::new(saved)
+    });
+    const MARGIN: u64 = 20 * 60;
+    const DEFAULT_LIFE: u64 = 4 * 3600;
+
+    fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
+
+    /// Where to persist; call once before the first lookup.
+    pub fn init(data: &std::path::Path) { let _ = FILE.set(data.join("streams.json")); }
+
+    /// YouTube's expiry time in a stream address: `expire=1700000000` in the query or `/expire/1700000000/` in an HLS path.
+    pub fn expiry(url: &str) -> Option<u64> {
+        let tail = url.split_once("expire=").or_else(|| url.split_once("/expire/"))?.1;
+        let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().ok()
+    }
+
+    pub fn get(key: &str) -> Option<String> {
+        let map = MAP.lock().unwrap();
+        map.get(key).filter(|(_, until)| *until > now()).map(|(u, _)| u.clone())
+    }
+
+    pub fn put(key: &str, url: &str) {
+        let t = now();
+        let until = expiry(url).map(|e| e.saturating_sub(MARGIN)).unwrap_or(t + DEFAULT_LIFE);
+        let mut map = MAP.lock().unwrap();
+        map.retain(|_, (_, u)| *u > t);
+        if until > t { map.insert(key.to_string(), (url.to_string(), until)); }
+        if let (Some(f), Ok(b)) = (FILE.get(), serde_json::to_vec(&*map)) { let _ = std::fs::write(f, b); }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::expiry;
+        #[test]
+        fn reads_expiry() {
+            assert_eq!(expiry("https://rr1.googlevideo.com/videoplayback?expire=1700000000&ei=x"), Some(1700000000));
+            assert_eq!(expiry("https://manifest.googlevideo.com/api/manifest/hls_variant/expire/1700001234/ei/abc/file/index.m3u8"), Some(1700001234));
+            assert_eq!(expiry("https://example.com/a.mp4"), None);
+        }
+    }
+}
 
 async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) -> Result<String> {
     let mut cmd = ytdlp_command(ytdlp);

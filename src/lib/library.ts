@@ -28,7 +28,7 @@ export function toggleFavorite(ep: Episode) {
   const next = on ? favorites.filter((f) => f.id !== ep.id) : [{ id: ep.id, at: Date.now() }, ...favorites];
   useLibrary.setState({ favorites: next });
   void api.setBlob(...KEY, JSON.stringify(next));
-  useStore.getState().notify(on ? t("已取消收藏") : t("已收藏，在「继续收听」里能找到"));
+  useStore.getState().notify(on ? t("已取消收藏") : t("已收藏，在首页「接下来听」里能找到"));
 }
 
 /** Opens an episode and starts it (video episodes need their page open to play). */

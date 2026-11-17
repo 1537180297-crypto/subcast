@@ -2,13 +2,13 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { BookA, ChevronDown, Languages, Loader2, Search, X } from "lucide-react";
+import { BookA, ChevronDown, Ellipsis, Languages, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Modal } from "./Chrome";
 import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { bytes } from "../lib/offline";
 import { api, errorText, rawErrorText, type Episode, type ModelInfo, type Segment } from "../lib/api";
-import { clock } from "../lib/format";
+import { clock, sizeMb } from "../lib/format";
 import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, switchYoutubeTrack, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 import { ASR_SERVICES } from "../lib/settings";
@@ -58,9 +58,14 @@ export function useModelDownload(onDone: () => void) {
     const un = listen<{ id: string; received: number; total?: number }>("model-download", (e) => setDownloading(e.payload));
     return () => { void un.then((f) => f()); };
   }, []);
-  const start = async (id: string, mirrorFirst: boolean) => {
+  /** Tries the China mirror first, then the original source if that fails: no setting needed. */
+  const start = async (id: string, _legacy?: boolean) => {
     setDownloading({ id, received: 0 });
-    try { await api.downloadModel(id, mirrorFirst); onDone(); return true; }
+    try {
+      try { await api.downloadModel(id, true); }
+      catch (e) { if (rawErrorText(e).includes("取消")) throw e; setDownloading({ id, received: 0 }); await api.downloadModel(id, false); } // i18n-ignore (matches the backend's cancel message)
+      onDone(); return true;
+    }
     catch (e) { if (!rawErrorText(e).includes("取消")) useStore.getState().notify(t("模型下载失败：{error}", { error: errorText(e) })); return false; } // i18n-ignore (matches the backend's cancel message)
     finally { setDownloading(null); }
   };
@@ -134,7 +139,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const providerName = providerFor(settings, "translate")?.name;
   const engineName = translation?.engine === "shared" ? t("共享译文") : translation?.engine === "youtube" ? t("节目方中文字幕") : translation?.engine === "google" ? t("谷歌翻译") : t("{name}翻译", { name: providerName ? t(providerName) : t("模型") });
   const error = startError ?? translation?.error;
-  const pending = wantsZh && (running || (settings.autoTranslate && !error && done < total));
+  const pending = wantsZh && (running || (!error && done < total));
   const start = (force?: "llm" | "google") => { setStartError(null); translateEpisode(ep, transcript, force).catch((e) => setStartError(rawErrorText(e))); };
 
   const modeControl = wantsZh && (
@@ -147,9 +152,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     </div>
   );
   const searchBtn = <>
-    {wantsZh && canUpgrade && <GlossaryButton ep={ep} onRetranslate={() => start("llm")} />}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
+    {wantsZh && canUpgrade && <PanelMenu ep={ep} onRetranslate={() => start("llm")} />}
   </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
 
@@ -192,9 +197,36 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   );
 }
 
+/** "…" on the subtitle bar: the rarer tools (本集术语表, retranslating with the model). */
+function PanelMenu({ ep, onRetranslate }: { ep: Episode; onRetranslate: () => void }) {
+  const [menu, setMenu] = useState(false);
+  const [gloss, setGloss] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const h = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setMenu(false); };
+    document.addEventListener("pointerdown", h);
+    return () => document.removeEventListener("pointerdown", h);
+  }, [menu]);
+  return (
+    <div className="panel-menu" ref={box}>
+      <button className="icon-btn" title={t("更多")} aria-label={t("更多")} aria-expanded={menu} onClick={() => setMenu(!menu)}><Ellipsis size={15} /></button>
+      {menu && (
+        <div className="panel-menu-pop" role="menu">
+          <button role="menuitem" onClick={() => { setMenu(false); setGloss(true); }}><BookA size={14} /> {t("本集术语表…")}</button>
+          <button role="menuitem" onClick={() => { setMenu(false); onRetranslate(); }}><RefreshCw size={14} /> {t("用模型重新翻译")}</button>
+        </div>
+      )}
+      {gloss && <Glossary ep={ep} onRetranslate={onRetranslate} onClose={() => setGloss(false)} />}
+    </div>
+  );
+}
+
 /** The episode's names and terms (made before translating), editable; edits are kept when it is remade. */
-function GlossaryButton({ ep, onRetranslate }: { ep: Episode; onRetranslate: () => void }) {
-  const [open, setOpen] = useState(false);
+function Glossary({ ep, onRetranslate, onClose }: { ep: Episode; onRetranslate: () => void; onClose: () => void }) {
+  const [open, setOpenRaw] = useState(false);
+  const setOpen = (v: boolean) => { setOpenRaw(v); if (!v) onClose(); };
+  useEffect(() => { void load(); }, []);
   const [ctx, setCtx] = useState<EpisodeContext | null>(null);
   const [rows, setRows] = useState<{ src: string; zh: string; user?: boolean }[]>([]);
   useLang((s) => s.lang);
@@ -212,7 +244,6 @@ function GlossaryButton({ ep, onRetranslate }: { ep: Episode; onRetranslate: () 
   };
   return (
     <>
-      <button className="icon-btn" title={t("本集术语表")} aria-label={t("本集术语表")} onClick={() => void load()}><BookA size={15} /></button>
       {open && (
         <Modal title={t("本集术语表")} onClose={() => setOpen(false)}>
           <div className="gloss">
@@ -275,6 +306,9 @@ function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; au
   );
 }
 
+/** Episodes transcription was started for automatically this session (never twice). */
+const autoStarted = new Set<string>();
+
 function NoTranscript({ ep, official, officialError }: { ep: Episode; official?: string; officialError?: string }) {
   const asr = useJobs((s) => s.asr[ep.id]);
   const { settings, saveSettings, player, current } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, player: s.player, current: s.current })));
@@ -302,6 +336,14 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
     void generateTranscript(ep, model.id, settings.asrLanguage);
   };
   const retry = () => useJobs.setState((s) => { const a = { ...s.asr }; delete a[ep.id]; return { asr: a }; });
+  // Once a way of transcribing is ready (local model downloaded, or a cloud service the listener chose with its
+  // key), pressing play on an episode that has no subtitles anywhere (cache, publisher, shared library: all
+  // checked by now) starts transcribing by itself. The first time still takes a click (it downloads ~1 GB).
+  const playing = useStore((s) => s.playing && s.current?.id === ep.id);
+  const ready = !!model && (cloud ? cloudKey === true || !cloud.needsKey : model.installed);
+  useEffect(() => {
+    if (playing && ready && official === "none" && !asr && !autoStarted.has(ep.id)) { autoStarted.add(ep.id); void generateTranscript(ep, model!.id, settings.asrLanguage); }
+  }, [playing, ready, official, !!asr, ep.id]);
   /** Stops the running transcription and waits until it has stopped. */
   const stopRunning = async () => {
     await api.cancelJob(ep.id);
@@ -349,7 +391,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
             <select className="engine-switch-mini" aria-label={t("换一种识别方式")} title={t("换一种识别方式（从头开始）")} value="" onChange={(e) => e.target.value && void switchEngine(e.target.value)}>
               <option value="">{t("换一种方式…")}</option>
               <optgroup label={t("本机模型 · 音频不出本机")}>
-                {models.filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${m.sizeMb} MB`}</option>)}
+                {models.filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
               </optgroup>
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
                 {ASR_SERVICES.filter((a) => settings.asrEngine !== a.id).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
@@ -376,7 +418,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
     );
   }
   const needsDownload = !cloud && model && !model.installed;
-  const size = model ? (model.sizeMb >= 900 ? `${(model.sizeMb / 1024).toFixed(1)} GB` : `${model.sizeMb} MB`) : "";
+  const size = model ? sizeMb(model.sizeMb) : "";
   return (
     <GenCard icon={<WaveToTextArt />} title={t("这集还没有字幕")}
       note={cloud ? t("用{name}生成，音频会上传到该服务，速度更快。生成后自动翻译成中文。", { name: t(cloud.name) }) : t("用本机模型生成，音频只在这台电脑上处理。生成后自动翻译成中文。")}>
@@ -396,16 +438,11 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
           <label><span>{t("识别方式")}</span>
             <select value={cloud ? `cloud:${cloud.id}` : `local:${model?.id}`} onChange={(e) => pickEngine(e.target.value)}>
               <optgroup label={t("本机模型 · 音频不出本机")}>
-                {models.map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${m.sizeMb} MB`}</option>)}
+                {models.map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
               </optgroup>
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
                 {ASR_SERVICES.map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
               </optgroup>
-            </select>
-          </label>
-          <label><span>{t("说话语言")}</span>
-            <select value={settings.asrLanguage} onChange={(e) => saveSettings({ asrLanguage: e.target.value })}>
-              <option value="auto">{t("自动识别")}</option><option value="en">{t("英语")}</option><option value="zh">{t("中文")}</option><option value="ja">{t("日语")}</option><option value="ko">{t("韩语")}</option><option value="de">{t("德语")}</option><option value="fr">{t("法语")}</option><option value="es">{t("西班牙语")}</option>
             </select>
           </label>
         </div>

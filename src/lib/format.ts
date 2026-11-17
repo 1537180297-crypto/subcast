@@ -50,3 +50,6 @@ export function notesText(html?: string): string {
 }
 
 export const isChinese = (lang: string, sample = "") => /^zh/i.test(lang) || (lang === "auto" && /[一-鿿]/.test(sample));
+
+/** A model's download size, one way everywhere: "960 MB", "1.4 GB". */
+export const sizeMb = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`);

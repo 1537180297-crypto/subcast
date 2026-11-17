@@ -153,6 +153,14 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     }
     finally { setFallingBack(null); void off.then((f) => f()); }
   };
+  // A saved address can go stale (network changed, YouTube expired it early): ask for a new one once, then try the MP4.
+  const retried = useRef(false);
+  const failed = () => {
+    const mode = native?.kind === "hls" && !retried.current ? (document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "" ? "native-hls" : "proxy-hls") : "mp4";
+    if (retried.current && native?.kind === "mp4") return setError(t("视频地址失效，请稍后再试"));
+    retried.current = true;
+    void api.youtubeStream(ep.videoId!, mode, true).then(setNative).catch((e) => setError(tr(String(e?.message ?? e))));
+  };
   const [botCheck, setBotCheck] = useState<string | null>(null);
   const [browser, setBrowser] = useState(useStore.getState().settings.ytCookiesBrowser || "chrome");
   const retryWithBrowser = async () => {
@@ -161,7 +169,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     await useStore.getState().saveSettings({ ytCookiesBrowser: browser });
     void fallback(why);
   };
-  useEffect(() => { setNative(null); setError(null); }, [ep.id]);
+  useEffect(() => { setNative(null); setError(null); retried.current = false; }, [ep.id]);
   // Have yt-dlp ready before it is needed: a first fallback would otherwise start with a 35 MB download.
   useEffect(() => { void api.prepareYoutube().catch(() => {}); }, []);
   const watchOnYouTube = () => {
@@ -186,7 +194,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   }, [theater]);
   return (
     <div className={`video ${theater ? "theater" : ""} ${theater && idle ? "idle" : ""}`} ref={box}>
-      {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={native.kind === "hls" ? () => void api.youtubeStream(ep.videoId!, "mp4").then(setNative).catch((e) => setError(tr(String(e?.message ?? e)))) : undefined} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
+      {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={failed} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
       {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
       {botCheck && (
         <div className="video-error bot-check">
@@ -313,7 +321,7 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
   );
 }
 
-/** `onFail`: the HLS stream can't be played here; the caller switches to the MP4. */
+/** `onFail`: the stream can't be played (stale address, or HLS unsupported here); the caller gets another. */
 function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src: string; kind: "hls" | "mp4"; onFullscreen: () => void; onFail?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const rate = useStore((s) => s.settings.playbackRate);
@@ -350,6 +358,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
   return (
     <>
       <video ref={ref} className="video-native" playsInline preload="auto"
+        onError={() => { if (!started) onFail?.(); }}
         onLoadedMetadata={(e) => { const el = e.currentTarget; el.playbackRate = rate; if (ep.progress > 5 && ep.progress < el.duration - 10) el.currentTime = ep.progress; track(ep, el.currentTime, el.duration); }}
         onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
         onPlay={(e) => { setStarted(true); useStore.getState().set({ playing: true }); if (e.currentTarget.readyState < 3) waiting(true); }}
@@ -392,7 +401,6 @@ export function Controls({ compact = false }: { compact?: boolean }) {
       />
       <span className="time">{length ? clock(length) : "--:--"}</span>
       <button className={`rate-btn${settings.playbackRate >= 2 ? " fast" : ""}`} onClick={nextRate} title={t("播放速度（S）")}>{settings.playbackRate >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{settings.playbackRate}×</button>
-      <button className="rate-btn" onClick={() => cycleMode()} title={t("字幕：双语 / 中文 / 原文（C）")}>{settings.subtitleMode === "bilingual" ? t("双语") : settings.subtitleMode === "translation" ? t("中文") : t("原文")}</button>
     </div>
   );
 }
