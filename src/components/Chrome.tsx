@@ -26,7 +26,7 @@ export function Sidebar() {
   const is = (v: View) => view.kind === v.kind && (v.kind !== "show" || (view.kind === "show" && view.id === v.id)) && (v.kind !== "channel" || (view.kind === "channel" && view.input === v.input));
   // A 精读 channel is listed once: hidden here when its show is already followed (either version).
   const curated = PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
-  const { sideOpen, put: putLayout } = useLayout();
+  const { sideOpen, put: putLayout } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put })));
   const updateWaiting = useUpdate(hasUpdate);
   const rail = !sideOpen;
   const hasDownloads = useOffline((s) => Object.keys(s.saved).length + Object.keys(s.active).length > 0);
@@ -169,8 +169,8 @@ function TaskChip() {
 
 export function MiniPlayer() {
   const loading = useStore((s) => s.loadingSince);
-  const { current, view, playing, player, time, length, openEpisode } = useStore(useShallow((s) => ({ current: s.current, view: s.view, playing: s.playing, player: s.player, time: s.time, length: s.length, openEpisode: s.openEpisode })));
-  const { panel, panelOpen } = useLayout();
+  const { current, view, playing, player, time, length, openEpisode } = useStore(useShallow((s) => ({ current: s.current, view: s.view, playing: s.playing, player: s.player, time: Math.floor(s.time), length: s.length, openEpisode: s.openEpisode })));
+  const { panel, panelOpen } = useLayout(useShallow((l) => ({ panel: l.panel, panelOpen: l.panelOpen })));
   if (!current || current.videoId || (view.kind === "episode" && view.id === current.id)) return null;
   // Left-aligned with the page content; on an episode page it stays within the middle column.
   const right = view.kind === "episode" && panelOpen ? panel + 24 : 24;

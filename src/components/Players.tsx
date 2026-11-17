@@ -415,7 +415,8 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
 }
 
 export function Controls({ compact = false }: { compact?: boolean }) {
-  const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: s.time, length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
+  // Whole seconds: the clock and bar move once a second instead of re-rendering on every time update.
+  const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: Math.floor(s.time), length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
   const [drag, setDrag] = useState<number | null>(null);
 
   const shown = drag ?? time;

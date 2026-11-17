@@ -1,6 +1,5 @@
 import { create } from "zustand";
-import { useShallow } from "zustand/react/shallow";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, Loader2, RefreshCw, Settings2, Square, SquarePen } from "lucide-react";
 import { api, errorText, rawErrorText, type ChatMessage, type Episode } from "../lib/api";
 import { askEpisode, summaryPrompt, transcriptForModel } from "../lib/ai";
@@ -9,7 +8,7 @@ import { quickPrompts } from "../lib/settings";
 import { ChatPrefsDialog, ModelPicker, PromptMenu, promptIcon, shortModel } from "./ChatTools";
 import { llmReady, useJobs } from "../lib/jobs";
 import { warmAgent } from "../lib/agents";
-import { providerFor, useStore } from "../store";
+import { providerFor, seekSoon, useStore } from "../store";
 import { Markdown } from "./Markdown";
 import { ReadAloud } from "./ReadAloud";
 import { AnswerActions, HistoryMenu, QuestionActions, type ArchivedChat } from "./ChatActions";
@@ -56,12 +55,13 @@ function useReady(ep: Episode) {
   return { transcript, provider, context, check };
 }
 
+/** Stable per episode, so memoised answers don't re-render when the player changes. */
 function useSeek(ep: Episode) {
-  const { current, player, load } = useStore(useShallow((s) => ({ current: s.current, player: s.player, load: s.load })));
-  return (t: number) => {
-    if (current?.id === ep.id) player?.seek(t);
-    else { load({ ...ep, progress: t }); setTimeout(() => useStore.getState().player?.seek(t), 600); }
-  };
+  return useCallback((t: number) => {
+    const s = useStore.getState();
+    if (s.current?.id === ep.id) s.player?.seek(t);
+    else { s.load({ ...ep, progress: t }); seekSoon(t); }
+  }, [ep.id]);
 }
 
 
@@ -103,7 +103,7 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   const box = useRef<HTMLTextAreaElement>(null);
   // The four the listener uses most (the first four by default) are shown; the rest open with "More".
   const [allPrompts, setAllPrompts] = useState(false);
-  const prompts = byUse(quickPrompts(settings).filter((p) => p.enabled));
+  const prompts = useMemo(() => byUse(quickPrompts(settings).filter((p) => p.enabled)), [settings]);
   const shownPrompts = allPrompts ? prompts : prompts.slice(0, 4);
 
   useEffect(() => {

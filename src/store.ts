@@ -60,7 +60,8 @@ interface State {
   go(view: View): void;
   back(): void;
   reloadShows(): Promise<void>;
-  saveSettings(patch: Partial<Settings>): Promise<void>;
+  /** `lazy`: for text being typed. The change shows at once; the disk write waits until typing pauses. */
+  saveSettings(patch: Partial<Settings>, lazy?: boolean): Promise<void>;
   openEpisode(ep: Episode): void;
   /** Loads an episode into the player without navigating. */
   load(ep: Episode): void;
@@ -121,12 +122,16 @@ export const useStore = create<State>((set, get) => ({
     else set({ view: { kind: "latest" } });
   },
   async reloadShows() {
-    set({ shows: await api.listShows() });
+    // Unchanged after a refresh (the usual case): keep the same array, so pages that depend on it don't reload.
+    const shows = await api.listShows();
+    if (JSON.stringify(shows) !== JSON.stringify(get().shows)) set({ shows });
   },
-  async saveSettings(patch) {
+  async saveSettings(patch, lazy) {
     const settings = { ...get().settings, ...patch };
     if (patch.uiLang) { setLang(patch.uiLang); void api.setMenuLabels([t("设置…")]).catch(() => {}); }
     set({ settings });
+    window.clearTimeout(settingsTimer);
+    if (lazy) { settingsTimer = window.setTimeout(() => void api.setSettings(get().settings), 400); return; }
     await api.setSettings(settings);
   },
   openEpisode(ep) {
@@ -170,6 +175,10 @@ export function seekSoon(seconds: number) {
   if (s.player) { s.player.seek(seconds); return; }
   s.set({ time: seconds, seekWhenReady: seconds });
 }
+
+let settingsTimer = 0;
+// A typed setting still waiting to be written is written before the window goes away.
+window.addEventListener("beforeunload", () => { if (settingsTimer) void api.setSettings(useStore.getState().settings); });
 
 export function providerFor(settings: Settings, use: "chat" | "translate") {
   if (use === "translate") return settings.providers[settings.translateProvider];

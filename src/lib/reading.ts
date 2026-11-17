@@ -1,6 +1,7 @@
 // Settings › 阅读与字幕 take effect as CSS variables on the root, so every subtitle (video, audio, full screen)
 // and the Q&A follow one set of values. Web fonts load only when chosen.
 import { useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { POSTER_FONTS, loadCss } from "./poster";
 
@@ -9,7 +10,8 @@ export const SUB_SCALE = { s: 0.86, m: 1, l: 1.18, xl: 1.38 } as const;
 export const SUB_FONTS = { system: "", serif: "serif", kai: "kai", sans: "sans" } as const;
 
 export function useReadingSettings() {
-  const s = useStore((x) => x.settings);
+  // Only these fields: subscribing to all settings re-rendered the whole app on any change.
+  const s = useStore(useShallow((x) => ({ subtitleSize: x.settings.subtitleSize, subtitleFont: x.settings.subtitleFont, subtitleLook: x.settings.subtitleLook, chatSize: x.settings.chatSize, audioNextLine: x.settings.audioNextLine })));
   useEffect(() => {
     const root = document.documentElement.style;
     root.setProperty("--sub-scale", String(SUB_SCALE[s.subtitleSize ?? "m"]));

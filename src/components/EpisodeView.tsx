@@ -292,7 +292,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
     if (short && (ep.videoId || ep.link?.includes("xiaoyuzhoufm.com/episode/"))) void api.fullNotes(ep.id).then((n) => n && setFullNotes(n)).catch(() => {});
   }, [ep.id]);
   const notes = notesText(fullNotes ?? ep.notes);
-  const { panel, panelOpen, put } = useLayout();
+  const { panel, panelOpen, put } = useLayout(useShallow((l) => ({ panel: l.panel, panelOpen: l.panelOpen, put: l.put })));
   // Video first; the audio file is the fallback (and a choice, for listening without the picture).
   const [audioMode, setAudioMode] = useState(startAudio);
   const saved = useOffline((s) => !!s.saved[ep.id]);

@@ -135,10 +135,12 @@ export async function llmChat(opts: {
   let full = "";
   let unlisten: UnlistenFn | undefined;
   if (opts.onDelta) {
+    // Pieces arrive faster than the screen redraws: hand the text over at most once a frame.
+    let frame = 0;
     unlisten = await listen<{ requestId: string; delta: string }>("llm", (ev) => {
       if (ev.payload.requestId !== requestId) return;
       full += ev.payload.delta;
-      opts.onDelta!(full);
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; opts.onDelta!(full); });
     });
   }
   const abort = () => void api.cancelJob(requestId);
