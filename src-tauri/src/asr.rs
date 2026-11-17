@@ -382,7 +382,20 @@ pub fn place_runtime(bin: &Path) {
 }
 
 /// Runs Qwen3-ASR on a 16 kHz WAV. CrispASR transcribes in ~30 s slices; each slice is split into sentences.
-pub async fn run_crispasr(bin: &Path, model: &Path, wav: &Path, language: &str, prompt: &str, cancel: Arc<AtomicBool>, mut on_progress: impl FnMut(f64)) -> Result<Vec<Segment>> {
+/// Background for a recogniser, in each form one reads (built by asr_context.rs; empty when there is none).
+#[derive(Default, Clone, Debug)]
+pub struct AsrContext {
+    /// Whisper-style initial prompt (short; the end matters most).
+    pub prompt: String,
+    /// Qwen3-ASR `--context`, read whole.
+    pub background: String,
+    /// Doubao `corpus.context` JSON string.
+    pub doubao: String,
+    /// Names and terms from the episode's glossary, when one was made.
+    pub hotwords: Vec<String>,
+}
+
+pub async fn run_crispasr(bin: &Path, model: &Path, wav: &Path, language: &str, ctx: &AsrContext, cancel: Arc<AtomicBool>, mut on_progress: impl FnMut(f64)) -> Result<Vec<Segment>> {
     let out = wav.with_extension("");
     if cfg!(windows) { place_runtime(bin); }
     let mut cmd = tokio::process::Command::new(bin);
@@ -390,7 +403,10 @@ pub async fn run_crispasr(bin: &Path, model: &Path, wav: &Path, language: &str, 
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
     cmd.args(["-t", &threads.to_string()]);
     if language == "auto" { cmd.args(["-l", "auto", "--lid-backend", "off"]); } else { cmd.args(["-l", language]); }
-    if !prompt.is_empty() { cmd.arg("--prompt").arg(prompt); }
+    // Qwen3-ASR reads --context (the show notes) and --hotwords; --prompt is whisper-only in CrispASR.
+    if !ctx.background.is_empty() { cmd.arg("--context").arg(&ctx.background); }
+    let words: Vec<&str> = ctx.hotwords.iter().map(|w| w.trim()).filter(|w| !w.is_empty() && !w.contains(',')).take(60).collect();
+    if !words.is_empty() { cmd.arg("--hotwords").arg(words.join(",")); }
     cmd.kill_on_drop(true).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     #[cfg(windows)]
     { cmd.creation_flags(0x08000000); }

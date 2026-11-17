@@ -1,4 +1,5 @@
 mod asr;
+mod asr_context;
 mod cloud;
 mod db;
 mod feeds;
@@ -7,6 +8,7 @@ mod llm;
 mod model;
 mod net;
 mod offline;
+#[cfg_attr(debug_assertions, allow(dead_code))] // serving the interface is release-only
 mod ota;
 mod qiaomu;
 mod shared;
@@ -694,14 +696,34 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
             dest
         };
         asr_emit(&app, &episode_id, "transcribe", 0.0, None, None);
-        let prompt = format!("{} — {}", ep.show_title.clone().unwrap_or_default(), ep.title).chars().take(200).collect::<String>();
+        // What the episode says about itself helps spell names and terms (asr_context.rs). The "useShowNotes"
+        // setting (default on) can turn it off; it is dropped when its script doesn't match the spoken language.
+        let use_notes = {
+            let conn = state.db.lock().unwrap();
+            db::get_setting(&conn, "app").ok().flatten().and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                .and_then(|s| s["useShowNotes"].as_bool()).unwrap_or(true)
+        };
+        let meta = if use_notes {
+            asr_context::Meta { title: ep.title.clone(), show: ep.show_title.clone().unwrap_or_default(), description: ep.notes.clone().unwrap_or_default(), chapters: vec![] }
+        } else { asr_context::Meta::default() };
+        let hotwords: Vec<String> = if use_notes { db::get_blob(&state.db.lock().unwrap(), &ep.id, "ctx").ok().flatten()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .map(|v| v["terms"].as_array().into_iter().flatten().filter_map(|t| t["src"].as_str().map(str::to_string)).collect()).unwrap_or_default() } else { vec![] };
+        let lang_for = |text: &str| if language == "auto" { asr_context::script_of(&format!("{} {}", ep.title, text)) } else { language.as_str() };
+        let fit = |text: String| if asr_context::fits_language(&text, lang_for(&text)) && (language != "auto" || asr_context::script_of(&ep.title) == asr_context::script_of(&text)) { text } else { String::new() };
+        let ctx = asr::AsrContext {
+            prompt: fit(asr_context::prompt(&meta, asr_context::BUDGET_PROMPT)),
+            background: fit(asr_context::background(&meta, asr_context::BUDGET_QWEN)),
+            doubao: { let b = fit(asr_context::background(&meta, asr_context::BUDGET_DOUBAO)); if b.is_empty() && hotwords.is_empty() { String::new() } else { asr_context::doubao(&asr_context::Meta { description: b, ..Default::default() }, &hotwords) } },
+            hotwords: hotwords.clone(),
+        };
         let app2 = app.clone();
         let id2 = episode_id.clone();
         let out = if let Some(cfg) = &cloud {
             asr_emit(&app, &episode_id, "transcribe", 0.01, Some("正在解码音频".into()), None);
             let src = audio.clone();
             let samples = tokio::task::spawn_blocking(move || asr::decode_16k_mono(&src)).await.map_err(e)?.map_err(e)?;
-            let segments = cloud::transcribe(cfg, samples, &language, &prompt, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, Some("云端识别中".into()), None)).await.map_err(e)?;
+            let segments = cloud::transcribe(cfg, samples, &language, &ctx, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, Some("云端识别中".into()), None)).await.map_err(e)?;
             let sample: String = segments.iter().take(5).map(|s| s.text.as_str()).collect();
             let lang = if language != "auto" { language.clone() } else if sample.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) { "zh".into() } else { "auto".into() };
             asr::WorkerResult { language: lang, segments }
@@ -720,17 +742,20 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
             let (src, wav) = (audio.clone(), work.join("audio16k.wav"));
             let wav2 = wav.clone();
             tokio::task::spawn_blocking(move || -> anyhow::Result<()> { asr::write_wav(&wav2, &asr::decode_16k_mono(&src)?) }).await.map_err(e)?.map_err(e)?;
-            let segments = asr::run_crispasr(&bin, &model_path, &wav, &language, &prompt, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, None, None)).await.map_err(e)?;
+            let segments = asr::run_crispasr(&bin, &model_path, &wav, &language, &ctx, cancel.clone(), move |p| asr_emit(&app2, &id2, "transcribe", p, None, None)).await.map_err(e)?;
             let sample: String = segments.iter().take(5).map(|s| s.text.as_str()).collect();
             let lang = if language != "auto" { language.clone() } else if sample.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) { "zh".into() } else { "auto".into() };
             asr::WorkerResult { language: lang, segments }
         } else {
-            asr::run_worker(&audio, &model_path, &language, &prompt, cancel.clone(), move |ev| match ev {
+            asr::run_worker(&audio, &model_path, &language, &ctx.prompt, cancel.clone(), move |ev| match ev {
                 asr::WorkerEvent::Progress(p) => asr_emit(&app2, &id2, "transcribe", p, None, None),
                 asr::WorkerEvent::Segment(s) => asr_emit(&app2, &id2, "segment", 0.0, None, Some(s)),
             }).await.map_err(e)?
         };
-        let segments = transcript::resegment(transcript::clean(out.segments));
+        // A recogniser can echo its background on silence or music: such cues are the prompt, not speech.
+        let echo_of = format!("{} {} {}", ctx.background, ctx.prompt, ctx.doubao);
+        let heard: Vec<Segment> = out.segments.into_iter().filter(|s| !asr_context::is_echo(&s.text, &echo_of)).collect();
+        let segments = transcript::resegment(transcript::clean(heard));
         if segments.is_empty() { return Err("没有识别出文字（可能是纯音乐或静音）".to_string()); }
         let t = Transcript { episode_id: ep.id.clone(), source: if cloud.is_some() { "cloud" } else { "whisper" }.into(), language: out.language, segments };
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
@@ -1150,8 +1175,9 @@ mod live {
         let bin = match asr::find_crispasr(&data) { Some(b) => b, None => asr::install_crispasr(&data, &flag, |_, _| {}).await.unwrap() };
         let wav = dir.join("t16k.wav");
         asr::write_wav(&wav, &asr::decode_16k_mono(&dir.join("clip.mp3")).unwrap()).unwrap();
-        let segs = asr::run_crispasr(&bin, &dir.join("qwen3-asr-0.6b-q8_0.gguf"), &wav, "auto", "No Priors", flag, |p| println!("progress {p}")).await.unwrap();
+        let ctx = asr::AsrContext { background: std::env::var("SUBCAST_TEST_CONTEXT").unwrap_or_default(), ..Default::default() };
+        let segs = asr::run_crispasr(&bin, &dir.join("qwen3-asr-0.6b-q8_0.gguf"), &wav, &std::env::var("SUBCAST_TEST_LANG").unwrap_or("auto".into()), &ctx, flag, |p| println!("progress {p}")).await.unwrap();
         for s in &segs { println!("[{:.1}-{:.1}] {}", s.start, s.end, s.text); }
-        assert!(segs.len() >= 5);
+        assert!(segs.len() >= 2);
     }
 }

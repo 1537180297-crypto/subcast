@@ -47,7 +47,7 @@ pub fn wav_bytes(samples: &[f32], rate: u32) -> Vec<u8> {
 
 fn client() -> reqwest::Client { net::client() }
 
-async fn recognize_chunk(cfg: &CloudAsr, key: &str, wav: Vec<u8>, offset: f64, len: f64, language: &str, prompt: &str) -> Result<Vec<Segment>> {
+async fn recognize_chunk(cfg: &CloudAsr, key: &str, wav: Vec<u8>, offset: f64, len: f64, language: &str, ctx: &crate::asr::AsrContext) -> Result<Vec<Segment>> {
     let base = cfg.base_url.trim().trim_end_matches('/');
     let mut last = String::new();
     for attempt in 0..3 {
@@ -58,13 +58,19 @@ async fn recognize_chunk(cfg: &CloudAsr, key: &str, wav: Vec<u8>, offset: f64, l
                 .header("X-Api-Resource-Id", "volc.bigasr.auc_turbo")
                 .header("X-Api-Request-Id", uuid::Uuid::new_v4().to_string())
                 .header("X-Api-Sequence", "-1")
-                .json(&json!({ "user": { "uid": "subcast" }, "audio": { "data": audio }, "request": { "model_name": if cfg.model.is_empty() { "bigmodel" } else { cfg.model.as_str() }, "enable_itn": true, "enable_punc": true, "show_utterances": true } }))
+                .json(&{
+                    let mut body = json!({ "user": { "uid": "subcast" }, "audio": { "data": audio }, "request": { "model_name": if cfg.model.is_empty() { "bigmodel" } else { cfg.model.as_str() }, "enable_itn": true, "enable_punc": true, "show_utterances": true } });
+                    // The show notes and glossary terms, as Doubao's context (soft guidance for names and terms).
+                    if !ctx.doubao.is_empty() { body["request"]["corpus"] = json!({ "context": ctx.doubao }); }
+                    body
+                })
                 .timeout(std::time::Duration::from_secs(180)).send().await
         } else {
             let part = reqwest::multipart::Part::bytes(wav.clone()).file_name("chunk.wav").mime_str("audio/wav")?;
             let mut form = reqwest::multipart::Form::new().text("model", cfg.model.clone()).text("response_format", "verbose_json").text("timestamp_granularities[]", "segment");
             if language != "auto" { form = form.text("language", language.to_string()); }
-            if !prompt.is_empty() { form = form.text("prompt", prompt.to_string()); }
+            // Only services seen to use it (OpenAI, Groq); others ignore it or reject extra text.
+            if !ctx.prompt.is_empty() && (base.contains("openai.com") || base.contains("groq.com")) { form = form.text("prompt", ctx.prompt.clone()); }
             let b = client().post(format!("{base}/audio/transcriptions")).multipart(form.part("file", part)).timeout(std::time::Duration::from_secs(180));
             (if key.is_empty() { b } else { b.bearer_auth(key) }).send().await
         };
@@ -113,7 +119,7 @@ async fn recognize_chunk(cfg: &CloudAsr, key: &str, wav: Vec<u8>, offset: f64, l
 }
 
 /// Recognises 16 kHz mono samples in chunks, a few at a time, reporting progress 0–1.
-pub async fn transcribe(cfg: &CloudAsr, samples: Vec<f32>, language: &str, prompt: &str, cancel: Arc<AtomicBool>, on_progress: impl Fn(f64)) -> Result<Vec<Segment>> {
+pub async fn transcribe(cfg: &CloudAsr, samples: Vec<f32>, language: &str, ctx: &crate::asr::AsrContext, cancel: Arc<AtomicBool>, on_progress: impl Fn(f64)) -> Result<Vec<Segment>> {
     let key = crate::llm::get_key(&format!("asr.{}", cfg.id)).unwrap_or_default();
     if cfg.needs_key.unwrap_or(true) && key.is_empty() { return Err(anyhow!("请先在设置里填写这个识别服务的 API Key")); }
     let chunk = (cfg.chunk_secs.unwrap_or(if cfg.protocol == "doubao" { 300.0 } else { 20.0 }) * RATE as f64) as usize;
@@ -123,12 +129,12 @@ pub async fn transcribe(cfg: &CloudAsr, samples: Vec<f32>, language: &str, promp
     let parallel = if cfg.protocol == "doubao" { 2 } else { 4 };
     let results: Vec<Result<Vec<Segment>>> = futures_util::stream::iter(chunks.into_iter().map(|(i, c)| {
         let (key, cfg, cancel, done, on_progress) = (key.clone(), cfg.clone(), cancel.clone(), &done, &on_progress);
-        let (language, prompt) = (language.to_string(), prompt.to_string());
+        let (language, ctx) = (language.to_string(), ctx.clone());
         async move {
             if cancel.load(Ordering::Relaxed) { return Err(anyhow!("已取消")); }
             let offset = (i * chunk) as f64 / RATE as f64;
             let len = c.len() as f64 / RATE as f64;
-            let r = recognize_chunk(&cfg, &key, wav_bytes(&c, RATE), offset, len, &language, &prompt).await;
+            let r = recognize_chunk(&cfg, &key, wav_bytes(&c, RATE), offset, len, &language, &ctx).await;
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             on_progress(n as f64 / total as f64);
             r
