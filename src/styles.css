@@ -1476,3 +1476,30 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .ms-foot { margin-top: 14px; line-height: 1.6; }
 @media (prefers-color-scheme: dark) { .ms-pill.ok { color: #5fd3a0; } .ms-pill.warn { color: #f0b072; } }
 @container (max-width: 640px) { .ms-split { grid-template-columns: 1fr; } .ms-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; } }
+/* Full screen for video: the window is full screen and the video fills it. */
+.video.theater { position: fixed; inset: 0; z-index: 400; width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; }
+.video.theater .subtitle-overlay { bottom: 9vh; left: 8vw; right: 8vw; }
+.video.theater .sub-zh { font-size: clamp(22px, 2.6vw, 40px); }
+.video.theater .sub-orig { font-size: clamp(16px, 1.8vw, 28px); }
+.theater-bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; align-items: center; gap: 14px; padding: 28px 24px 18px; color: #fff;
+  background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0)); transition: opacity .25s ease; }
+.theater-bar .controls { flex: 1; min-width: 0; color: #fff; }
+.theater-title { flex: 0 1 26%; margin: 0; font-size: 14px; font-weight: 600; opacity: .9; }
+.theater-exit { color: #fff; }
+.video.theater.idle { cursor: none; }
+.video.theater.idle .theater-bar { opacity: 0; pointer-events: none; }
+.video.theater.idle .subtitle-overlay { bottom: 6vh; }
+@media (prefers-reduced-motion: reduce) { .theater-bar { transition: none; } }
+/* Settings › 快捷键 */
+.shortcuts { display: flex; flex-direction: column; gap: 16px; }
+.shortcuts-head { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.shortcuts-head p { margin: 0; flex: 1; min-width: 220px; }
+.shortcut-group { display: flex; flex-direction: column; gap: 2px; }
+.shortcut-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.shortcut-label { font-size: 13.5px; }
+.shortcut-keys { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.shortcut-recorder { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 7px; padding: 2px 6px; min-width: 44px; height: 28px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.shortcut-recorder:hover { border-color: var(--line-strong, var(--muted)); }
+.shortcut-recorder.recording { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.shortcut-recorder kbd { font-family: inherit; font-size: 12.5px; }
+.shortcut-note { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 2px 0 0; color: #a8601a; }

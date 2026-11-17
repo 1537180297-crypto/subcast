@@ -19,6 +19,8 @@ export interface Settings {
   useShowNotes: boolean;
   /** The listener picked the models themselves: local agents are never switched in automatically after that. */
   modelChosen?: boolean;
+  /** Shortcuts the listener changed (Settings › 快捷键); the rest use the defaults in lib/shortcuts.ts. */
+  shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;
   /** The local agent SubCast switched in on its own (shown as such in settings). */
   autoPicked?: string;
   subtitleMode: "bilingual" | "original" | "translation";
