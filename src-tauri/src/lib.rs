@@ -2,6 +2,7 @@ mod asr;
 mod cloud;
 mod db;
 mod feeds;
+mod hlsproxy;
 mod llm;
 mod model;
 mod net;
@@ -456,20 +457,30 @@ async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res
     Ok(base64::engine::general_purpose::STANDARD.encode(wav))
 }
 
-/// The direct stream for a video the embedded player can't play. Emits `yt-stream` events ("tool" with the
-/// first-time yt-dlp download progress, then "resolve") so the player can say what it is waiting for.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoStream { url: String, /** hls | mp4 */ kind: &'static str }
+
+/// The direct stream for a video the embedded player can't play. `mode`: "native-hls" (the WebView plays HLS
+/// itself), "proxy-hls" (hls.js through the loopback proxy, for HD where HLS isn't native) or "mp4" (360p, plays
+/// anywhere). Emits `yt-stream` events ("tool" with the first-time yt-dlp download progress, then "resolve").
 #[tauri::command]
-async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, hls: Option<bool>) -> Res<String> {
-    let hls = hls.unwrap_or(cfg!(target_os = "macos"));
+async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, mode: Option<String>) -> Res<VideoStream> {
+    let mode = mode.unwrap_or_else(|| if cfg!(target_os = "macos") { "native-hls".into() } else { "proxy-hls".into() });
+    let hls = mode != "mp4";
     let emit = |stage: &str, progress: f64| { let _ = app.emit("yt-stream", json!({ "videoId": video_id, "stage": stage, "progress": progress })); };
     let job = async {
         asr::ytdlp_with(&state.data, |got, total| emit("tool", total.map_or(0.0, |t| got as f64 / t.max(1) as f64))).await?;
         emit("resolve", 0.0);
         asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls).await } }).await
     };
-    tokio::time::timeout(std::time::Duration::from_secs(180), job).await
+    let url = tokio::time::timeout(std::time::Duration::from_secs(180), job).await
         .map_err(|_| "获取视频地址超时，请检查网络或代理".to_string())?
-        .map_err(e)
+        .map_err(e)?;
+    // yt-dlp falls back to an MP4 when a video has no HLS.
+    let is_hls = url.contains("m3u8") || url.contains("/manifest/hls");
+    if is_hls && mode == "proxy-hls" { return Ok(VideoStream { url: hlsproxy::proxied(&url).await.map_err(e)?, kind: "hls" }); }
+    Ok(VideoStream { url, kind: if is_hls { "hls" } else { "mp4" } })
 }
 
 /// Gets yt-dlp ready in the background when a video page opens, so a fallback doesn't start with a download.

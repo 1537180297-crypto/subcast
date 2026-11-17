@@ -88,7 +88,7 @@ export const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
  *  outside the frame, under a shield that keeps hover UI from appearing. Our own controls and subtitles drive it.
  *  Videos whose owners forbid embedding fall back to the HLS stream yt-dlp finds, played in a plain <video>. */
 export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; overlay?: React.ReactNode; onUnplayable?: () => void }) {
-  const [native, setNative] = useState<string | null>(null);
+  const [native, setNative] = useState<{ url: string; kind: "hls" | "mp4" } | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** What the switch to the direct stream is waiting for; null when not switching. */
   const [fallingBack, setFallingBack] = useState<string | null>(null);
@@ -101,8 +101,9 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
         ? t("首次使用，正在下载 YouTube 播放组件 {pct}%", { pct: Math.round(p.progress * 100) })
         : t("{reason}，正在获取视频地址…", { reason: why }));
     });
-    const hls = document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
-    try { setNative(await api.youtubeStream(ep.videoId!, hls)); setError(null); }
+    // HLS where the WebView plays it (macOS); elsewhere HLS through the app's loopback proxy (hls.js), for HD.
+    const nativeHls = document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
+    try { setNative(await api.youtubeStream(ep.videoId!, nativeHls ? "native-hls" : "proxy-hls")); setError(null); }
     catch (e) { if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(String((e as any)?.message ?? e)) })); }
     finally { setFallingBack(null); void off.then((f) => f()); }
   };
@@ -117,7 +118,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   const fullscreen = () => { const el = box.current; if (!el) return; document.fullscreenElement ? void document.exitFullscreen() : void el.requestFullscreen?.().catch(() => {}); };
   return (
     <div className="video" ref={box}>
-      {native ? <NativeVideo ep={ep} src={native} onFullscreen={fullscreen} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
+      {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={native.kind === "hls" ? () => void api.youtubeStream(ep.videoId!, "mp4").then(setNative).catch((e) => setError(tr(String(e?.message ?? e)))) : undefined} /> : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
       {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
       {error && <div className="video-error">{error} {openBtn}</div>}
       {overlay}
@@ -210,7 +211,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
   );
 }
 
-function NativeVideo({ ep, src, onFullscreen }: { ep: Episode; src: string; onFullscreen: () => void }) {
+/** `onFail`: the HLS stream can't be played here; the caller switches to the MP4. */
+function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src: string; kind: "hls" | "mp4"; onFullscreen: () => void; onFail?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const rate = useStore((s) => s.settings.playbackRate);
   const [started, setStarted] = useState(false);
@@ -218,8 +220,14 @@ function NativeVideo({ ep, src, onFullscreen }: { ep: Episode; src: string; onFu
     const el = ref.current;
     if (!el) return;
     let hls: any;
-    if (!src.includes(".m3u8") && !src.includes("/hls_") || el.canPlayType("application/vnd.apple.mpegurl")) el.src = src;
-    else void import("hls.js").then(({ default: Hls }) => { hls = new Hls(); hls.loadSource(src); hls.attachMedia(el); });
+    if (kind === "mp4" || el.canPlayType("application/vnd.apple.mpegurl")) el.src = src;
+    else void import("hls.js").then(({ default: Hls }) => {
+      if (!Hls.isSupported()) { onFail?.(); return; }
+      hls = new Hls();
+      hls.on(Hls.Events.ERROR, (_: unknown, d: { fatal?: boolean }) => { if (d.fatal) { hls.destroy(); hls = null; onFail?.(); } });
+      hls.loadSource(src);
+      hls.attachMedia(el);
+    });
     const handle = {
       seek: (t: number) => { el.currentTime = t; void el.play().catch(() => {}); },
       toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
