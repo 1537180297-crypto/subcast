@@ -409,6 +409,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
 
 function About() {
   const [version, setVersion] = useState("0.1.0");
+  const uiBuild = useStore((s) => s.uiBuild);
   useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);
   const links: [string, string][] = [["qiaomu.ai", "https://qiaomu.ai"], [t("博客"), "https://blog.qiaomu.ai"], [t("乔木推荐"), "https://tuijian.qiaomu.ai"], ["X", "https://x.com/vista8"], ["GitHub", "https://github.com/joeseesun"]];
   return (
@@ -416,7 +417,7 @@ function About() {
       <div className="about-top">
         <img src={logoUrl} alt="" />
         <div className="about-meta">
-          <p className="about-name">SubCast <span className="about-ver">{t("版本 {version}", { version })}</span></p>
+          <p className="about-name">SubCast <span className="about-ver">{t("版本 {version}", { version })}{uiBuild ? ` · ${t("界面更新 {n}", { n: uiBuild })}` : ""}</span></p>
           <p className="muted small">{t("海外好播客，配上中文字幕、精读与 AI 问答。")}</p>
           <UpdateStatus />
         </div>

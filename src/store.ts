@@ -22,6 +22,8 @@ export interface PlayerHandle {
 interface State {
   speaking: boolean;
   ready: boolean;
+  /** The hot update of the interface in use (ota.rs), null when it is the one built into the app. */
+  uiBuild?: number | null;
   settings: Settings;
   shows: Show[];
   view: View;

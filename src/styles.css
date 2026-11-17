@@ -1424,3 +1424,5 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 /* Windows / Linux: the native title bar holds the window buttons, so no room is kept for macOS traffic lights. */
 :root:not(.is-mac) .traffic-space { height: 10px; }
 :root:not(.is-mac) .sidebar.rail .traffic-space { height: 12px; }
+.prompt-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.prompt-foot .spacer { flex: 1; }

@@ -1,6 +1,6 @@
 [package]
 name = "subcast"
-version = "0.2.1"
+version = "0.2.2"
 license = "AGPL-3.0-only"
 description = "SubCast · 声渡 — overseas podcasts and YouTube with bilingual subtitles and AI Q&A"
 authors = ["Qiaomu"]
@@ -23,7 +23,8 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri-plugin-localhost = "2"
+tiny_http = "0.12"
+minisign-verify = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "socks", "gzip", "brotli", "system-proxy", "multipart"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"

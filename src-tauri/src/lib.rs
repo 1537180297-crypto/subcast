@@ -2,10 +2,12 @@ mod asr;
 mod cloud;
 mod db;
 mod feeds;
+mod hlsproxy;
 mod llm;
 mod model;
 mod net;
 mod offline;
+mod ota;
 mod qiaomu;
 mod shared;
 mod transcript;
@@ -456,20 +458,95 @@ async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res
     Ok(base64::engine::general_purpose::STANDARD.encode(wav))
 }
 
-/// The direct stream for a video the embedded player can't play. Emits `yt-stream` events ("tool" with the
-/// first-time yt-dlp download progress, then "resolve") so the player can say what it is waiting for.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoStream { url: String, /** hls | mp4 */ kind: &'static str }
+
+/// Serves the interface on localhost:LOCAL_PORT (what tauri-plugin-localhost did), from the active hot update when
+/// there is one.
+#[cfg(not(debug_assertions))]
+fn serve_ui(app: &AppHandle, active: ota::Active) {
+    let resolver = app.asset_resolver();
+    std::thread::spawn(move || {
+        let Ok(server) = tiny_http::Server::http(format!("localhost:{LOCAL_PORT}")) else { return };
+        for req in server.incoming_requests() {
+            let path = req.url().split(['?', '#']).next().unwrap_or("/").to_string();
+            let found = match ota::read(&active, &path) {
+                Some(file) => file.map(|(bytes, mime)| (bytes, mime.to_string(), None)),
+                None => resolver.get(path).map(|a| (a.bytes, a.mime_type, a.csp_header)),
+            };
+            let Some((bytes, mime, csp)) = found else { let _ = req.respond(tiny_http::Response::empty(404)); continue };
+            let mut resp = tiny_http::Response::from_data(bytes);
+            for (k, v) in [("Content-Type", Some(mime)), ("Cache-Control", Some("no-cache".to_string())), ("Content-Security-Policy", csp)] {
+                if let Some(h) = v.and_then(|v| tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).ok()) { resp.add_header(h); }
+            }
+            let _ = req.respond(resp);
+        }
+    });
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UiInfo { shell: &'static str, build: Option<u64> }
+
+/// The page rendered: a hot update being tried becomes the known-good one.
 #[tauri::command]
-async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, hls: Option<bool>) -> Res<String> {
-    let hls = hls.unwrap_or(cfg!(target_os = "macos"));
+fn ui_ready(state: State<'_, AppState>) -> UiInfo {
+    UiInfo { shell: ota::SHELL, build: if cfg!(debug_assertions) { None } else { ota::ready(&state.data) } }
+}
+
+/// Remote config (https://subcast.qiaomu.ai/tools/config.json): values that go stale outside our control, such as
+/// the YouTube client versions captions depend on. Signed like updates; the last good copy is kept in settings
+/// and applied at startup, so the app works offline and a bad fetch changes nothing.
+const CONFIG_URL: &str = "https://subcast.qiaomu.ai/tools/config.json";
+
+fn apply_config(v: &Value) {
+    youtube::set_clients(&v["youtubeClients"]);
+}
+
+#[tauri::command]
+async fn refresh_config(app: AppHandle, state: State<'_, AppState>) -> Res<()> {
+    let pubkey = app.config().plugins.0.get("updater").and_then(|u| u["pubkey"].as_str()).ok_or("缺少更新公钥")?.to_string();
+    let body = net::client().get(CONFIG_URL).send().await.map_err(e)?.error_for_status().map_err(e)?.bytes().await.map_err(e)?;
+    let sig = net::get_text(&format!("{CONFIG_URL}.sig")).await.map_err(e)?;
+    ota::verify(&pubkey, &body, &sig).map_err(e)?;
+    let v: Value = serde_json::from_slice(&body).map_err(e)?;
+    apply_config(&v);
+    db::set_setting(&state.db.lock().unwrap(), "remote-config", &v.to_string()).map_err(e)?;
+    Ok(())
+}
+
+/// Checks for a hot update of the interface; a new one is used from the next launch. none | staged:N | rollback
+#[tauri::command]
+async fn ui_check(app: AppHandle, state: State<'_, AppState>) -> Res<String> {
+    let pubkey = app.config().plugins.0.get("updater").and_then(|u| u["pubkey"].as_str()).ok_or("缺少更新公钥")?.to_string();
+    Ok(match ota::check(&state.data, &pubkey).await.map_err(e)? {
+        ota::Outcome::None => "none".into(),
+        ota::Outcome::Staged(b) => format!("staged:{b}"),
+        ota::Outcome::RolledBack => "rollback".into(),
+    })
+}
+
+/// The direct stream for a video the embedded player can't play. `mode`: "native-hls" (the WebView plays HLS
+/// itself), "proxy-hls" (hls.js through the loopback proxy, for HD where HLS isn't native) or "mp4" (360p, plays
+/// anywhere). Emits `yt-stream` events ("tool" with the first-time yt-dlp download progress, then "resolve").
+#[tauri::command]
+async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: String, mode: Option<String>) -> Res<VideoStream> {
+    let mode = mode.unwrap_or_else(|| if cfg!(target_os = "macos") { "native-hls".into() } else { "proxy-hls".into() });
+    let hls = mode != "mp4";
     let emit = |stage: &str, progress: f64| { let _ = app.emit("yt-stream", json!({ "videoId": video_id, "stage": stage, "progress": progress })); };
     let job = async {
         asr::ytdlp_with(&state.data, |got, total| emit("tool", total.map_or(0.0, |t| got as f64 / t.max(1) as f64))).await?;
         emit("resolve", 0.0);
         asr::with_ytdlp(&state.data, |bin| { let v = video_id.clone(); async move { asr::youtube_stream_url(&bin, &v, hls).await } }).await
     };
-    tokio::time::timeout(std::time::Duration::from_secs(180), job).await
+    let url = tokio::time::timeout(std::time::Duration::from_secs(180), job).await
         .map_err(|_| "获取视频地址超时，请检查网络或代理".to_string())?
-        .map_err(e)
+        .map_err(e)?;
+    // yt-dlp falls back to an MP4 when a video has no HLS.
+    let is_hls = url.contains("m3u8") || url.contains("/manifest/hls");
+    if is_hls && mode == "proxy-hls" { return Ok(VideoStream { url: hlsproxy::proxied(&url).await.map_err(e)?, kind: "hls" }); }
+    Ok(VideoStream { url, kind: if is_hls { "hls" } else { "mp4" } })
 }
 
 /// Gets yt-dlp ready in the background when a video page opens, so a fallback doesn't start with a download.
@@ -822,10 +899,7 @@ pub fn run() {
     if args.get(1).map(String::as_str) == Some("--asr-worker") {
         std::process::exit(asr::worker_main(&args[2..]));
     }
-    let builder = tauri::Builder::default();
-    #[cfg(not(debug_assertions))]
-    let builder = builder.plugin(tauri_plugin_localhost::Builder::new(LOCAL_PORT).build());
-    builder
+    tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
@@ -839,6 +913,17 @@ pub fn run() {
             if let Some(s) = db::get_setting(&conn, "app")?.and_then(|r| serde_json::from_str::<Value>(&r).ok()) {
                 let _ = net::set_proxy(s["proxy"].as_str().unwrap_or(""));
             }
+            // Release builds serve the interface over http://localhost (YouTube refuses tauri://), from a hot
+            // update when one is active (ota.rs), else from the files built into the app.
+            #[cfg(not(debug_assertions))]
+            let ui: ota::Active = {
+                let active = std::sync::Arc::new(std::sync::RwLock::new(ota::boot(&data)));
+                serve_ui(app.handle(), active.clone());
+                active
+            };
+            #[cfg(not(debug_assertions))]
+            let ui_data = data.clone();
+            if let Some(v) = db::get_setting(&conn, "remote-config")?.and_then(|r| serde_json::from_str::<Value>(&r).ok()) { apply_config(&v); }
             app.manage(AppState { db: Mutex::new(conn), data, jobs: Mutex::new(HashMap::new()) });
             #[cfg(debug_assertions)]
             let url = tauri::WebviewUrl::App("index.html".into());
@@ -855,6 +940,17 @@ pub fn run() {
                 .hidden_title(true)
                 .traffic_light_position(tauri::LogicalPosition::new(18.0, 22.0));
             builder.build()?;
+            // A hot-updated interface that hasn't said it rendered within READY_SECS is dropped for good.
+            #[cfg(not(debug_assertions))]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(ota::READY_SECS)).await;
+                    if ota::give_up(&ui_data, &ui) {
+                        if let Some(w) = handle.get_webview_window("main") { let _ = w.eval("location.reload()"); }
+                    }
+                });
+            }
             // The stock macOS menu has no Settings item, so ⌘, did nothing.
             let menu = tauri::menu::Menu::default(app.handle())?;
             if let Some(first) = menu.items()?.first().and_then(|m| m.as_submenu().cloned()) {
@@ -871,7 +967,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())
