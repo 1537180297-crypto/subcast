@@ -144,15 +144,17 @@ function ContinueHero({ ep }: { ep: Episode }) {
   const resume = () => { openEpisode(ep); playSoon(ep.id); };
   return (
     <div className="hero" role="button" tabIndex={0} title={t("继续播放")} onClick={resume} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), resume())}>
-      {ep.cover ? <img className={ep.videoId ? "wide" : ""} src={ep.cover} alt="" /> : <div className="cover-fallback" />}
+      <div className={`hero-cover ${ep.videoId ? "wide" : ""}`}>
+        {ep.cover ? <img src={ep.cover} alt="" /> : <div className="cover-fallback" />}
+        {pct > 0 && <span className="hero-bar" aria-hidden><span style={{ width: `${pct}%` }} /></span>}
+      </div>
       <div className="hero-meta">
         <p className="meta-line">{t("继续收听")}{ep.showTitle && ep.showId !== "single" ? <> · <ShowName title={ep.showTitle} /></> : null}</p>
         <p className="hero-title">{zh ?? ep.title}</p>
         {zh && zh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
         <div className="hero-foot">
           <span className="btn primary hero-play" aria-hidden><Play size={15} fill="currentColor" /> {t("继续播放")}</span>
-          {pct > 0 && <div className="hero-bar"><div style={{ width: `${pct}%` }} /></div>}
-          {left > 0 && <span className="muted small">{t("还剩 {left} 分钟", { left })}</span>}
+          {left > 0 && <span className="hero-left">{t("还剩 {left} 分钟", { left })}</span>}
         </div>
       </div>
     </div>
