@@ -25,8 +25,8 @@ useStore.subscribe((s, prev) => {
   if (!s.player || s.player === prev.player) return;
   const p = s.player;
   // A seek asked for before the player existed (a chapter link in the notes) starts playback from there.
-  if (s.seekWhenReady != null) {
-    const at = s.seekWhenReady;
+  if (s.seekWhenReady && s.seekWhenReady.id === s.current?.id) {
+    const { at } = s.seekWhenReady;
     useStore.setState({ seekWhenReady: null, playWhenReady: null });
     window.setTimeout(() => p.seek(at), 0);
   } else if (s.playWhenReady && s.current?.id === s.playWhenReady) {
@@ -179,11 +179,22 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   };
   // A saved address can go stale (network changed, YouTube expired it early): ask for a new one once, then try the MP4.
   const retried = useRef(false);
+  const fetching = useRef(false);
+  const mine = () => useStore.getState().current?.id === ep.id;
   const failed = () => {
+    // hls.js and the <video> element can both report the same failure.
+    if (fetching.current) return;
     const mode = native?.kind === "hls" && !retried.current ? (document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "" ? "native-hls" : "proxy-hls") : "mp4";
-    if (retried.current && native?.kind === "mp4") { waiting(false); return setError(t("视频地址失效，请稍后再试")); }
+    if (retried.current && native?.kind === "mp4") { if (mine()) waiting(false); return setError(t("视频地址失效，请稍后再试")); }
     retried.current = true;
-    void api.youtubeStream(ep.videoId!, mode, true).then(setNative).catch((e) => { waiting(false); setError(tr(String(e?.message ?? e))); });
+    fetching.current = true;
+    // It was playing or about to: the new address carries on by itself.
+    const s = useStore.getState();
+    const resume = mine() && (s.playing || !!s.loadingSince);
+    void api.youtubeStream(ep.videoId!, mode, true)
+      .then((stream) => { if (resume) useStore.getState().set({ playWhenReady: ep.id }); setNative(stream); })
+      .catch((e) => { if (mine()) waiting(false); setError(tr(String(e?.message ?? e))); })
+      .finally(() => { fetching.current = false; });
   };
   const [botCheck, setBotCheck] = useState<string | null>(null);
   const [browser, setBrowser] = useState(useStore.getState().settings.ytCookiesBrowser || "chrome");

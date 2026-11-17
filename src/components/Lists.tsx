@@ -8,7 +8,7 @@ import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
 import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, type Pick, type Topic } from "../lib/picks";
-import { isChineseUi, t } from "../lib/i18n";
+import { isChineseUi, t, useLang } from "../lib/i18n";
 import { HOME_SHOW_FEED, showLinks } from "../lib/showLinks";
 import { AlsoOn, HomeShowBanner, YtButton, usePromo } from "./YtPromo";
 import { useShowName, useZh } from "../lib/zh";
@@ -52,6 +52,7 @@ const EpisodeRow = memo(function EpisodeRow({ ep, showShow, hit, query }: { ep: 
   const openEpisode = useStore((s) => s.openEpisode);
   const open = () => (hit?.time != null ? openAt(ep, hit.time) : openEpisode(ep));
   const isPlaying = useStore((s) => s.current?.id === ep.id);
+  useLang((s) => s.lang); // memoised: follow a language change itself
   const zh = useZh(ep.title);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const deep = !!ep.deep;

@@ -305,8 +305,10 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
     const s = useStore.getState();
     const t = s.current?.id === ep.id ? s.time : ep.progress;
     setAudioMode(audio);
+    // Another episode is playing (this page was only opened): switch this page, leave the player alone.
+    if (s.current?.id !== ep.id) return;
     // Play was pressed and is still waiting: the other kind of player starts when it is ready.
-    const wanted = s.current?.id === ep.id && !!s.loadingSince;
+    const wanted = !!s.loadingSince;
     s.set({ current: audio ? { ...ep, videoId: undefined, progress: t } : { ...ep, progress: t }, time: t, player: null, playing: false, loadingSince: null });
     if (wanted) playSoon(ep.id);
     if (why) s.notify(why);

@@ -43,8 +43,8 @@ interface State {
   loadingSince?: number | null;
   /** Play as soon as the player for `current` is ready (it may take a few seconds to appear). */
   playWhenReady?: string | null;
-  /** Seek here as soon as the current episode's player appears. */
-  seekWhenReady?: number | null;
+  /** Seek here as soon as this episode's player appears. */
+  seekWhenReady?: { id: string; at: number } | null;
   /** First run: show the welcome card; shows are being subscribed in the background. */
   welcome?: boolean;
   settingUp?: boolean;
@@ -131,7 +131,8 @@ export const useStore = create<State>((set, get) => ({
     if (patch.uiLang) { setLang(patch.uiLang); void api.setMenuLabels([t("设置…")]).catch(() => {}); }
     set({ settings });
     window.clearTimeout(settingsTimer);
-    if (lazy) { settingsTimer = window.setTimeout(() => void api.setSettings(get().settings), 400); return; }
+    settingsTimer = 0;
+    if (lazy) { settingsTimer = window.setTimeout(() => { settingsTimer = 0; void api.setSettings(get().settings); }, 400); return; }
     await api.setSettings(settings);
   },
   openEpisode(ep) {
@@ -173,12 +174,16 @@ export function withdrawPlayer(h: PlayerHandle & { episodeId: string }) {
 export function seekSoon(seconds: number) {
   const s = useStore.getState();
   if (s.player) { s.player.seek(seconds); return; }
-  s.set({ time: seconds, seekWhenReady: seconds });
+  if (s.current) s.set({ time: seconds, seekWhenReady: { id: s.current.id, at: seconds } });
 }
 
 let settingsTimer = 0;
-// A typed setting still waiting to be written is written before the window goes away.
-window.addEventListener("beforeunload", () => { if (settingsTimer) void api.setSettings(useStore.getState().settings); });
+// A typed setting still waiting is written as soon as the window loses focus or hides (⌘Q may not give
+// the page a chance to unload).
+const flushSettings = () => { if (settingsTimer) { window.clearTimeout(settingsTimer); settingsTimer = 0; void api.setSettings(useStore.getState().settings); } };
+window.addEventListener("blur", flushSettings);
+document.addEventListener("visibilitychange", flushSettings);
+window.addEventListener("beforeunload", flushSettings);
 
 export function providerFor(settings: Settings, use: "chat" | "translate") {
   if (use === "translate") return settings.providers[settings.translateProvider];

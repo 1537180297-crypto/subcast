@@ -883,7 +883,8 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
     Ok(resampler.map(Resampler::finish).unwrap_or_default())
 }
 
-/// Box-filtered linear resampling: plenty for speech recognition.
+/// Box-filtered linear resampling of a whole buffer (tests compare `Resampler` against it).
+#[cfg(test)]
 pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || input.is_empty() { return input.to_vec(); }
     let mut r = Resampler::new(from, to);
@@ -929,6 +930,19 @@ impl Resampler {
         if let Some(p) = self.prev { while self.next < n { self.out.push(p); self.next += 1; } }
         self.out.truncate(n);
         self.out
+    }
+}
+
+#[cfg(test)]
+mod decode_bench {
+    /// SUBCAST_AUDIO: a long audio file. Prints how long decoding takes and how many 16 kHz samples come out.
+    #[test]
+    #[ignore]
+    fn decode_long_file() {
+        let path = std::env::var("SUBCAST_AUDIO").unwrap();
+        let t = std::time::Instant::now();
+        let s = super::decode_16k_mono(std::path::Path::new(&path)).unwrap();
+        println!("decoded {} samples ({:.0} min) in {:?}", s.len(), s.len() as f64 / 16000.0 / 60.0, t.elapsed());
     }
 }
 
