@@ -5,6 +5,7 @@ import { SelectionTools } from "./components/SelectionTools";
 import { SIDEBAR, useLayout } from "./lib/layout";
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { api } from "./lib/api";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
@@ -30,6 +31,8 @@ export default function App() {
     void loadFavorites();
     startUpdateChecks();
     void init();
+    // Rendered: tells the app a hot-updated interface works (otherwise it falls back on its own; see ota.rs).
+    void api.uiReady().then((info) => useStore.setState({ uiBuild: info.build })).catch(() => {});
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); useStore.getState().openSettings(); return; }

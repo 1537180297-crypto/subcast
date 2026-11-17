@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { errorText } from "./api";
+import { api, errorText } from "./api";
 import { useStore } from "../store";
 
 export const DOWNLOAD_PAGE = "https://subcast.qiaomu.ai/download/";
@@ -31,6 +31,10 @@ export const hasUpdate = (s: UpdateState) => s.phase === "available" || s.phase 
 let pending: Update | null = null;
 
 export async function checkForUpdate(manual = false) {
+  // Interface fixes come as hot updates (ota.rs), on their own schedule: independent of whether the app
+  // update check works or finds anything. Used from the next launch.
+  if (useStore.getState().settings.autoUpdate || manual) void api.uiCheck().catch((e) => console.warn("ui update", e));
+  void api.refreshConfig().catch(() => { /* offline, or no config published: the saved one stays */ });
   const { phase } = useUpdate.getState();
   if (phase === "checking" || phase === "downloading" || phase === "installing" || phase === "ready") return;
   useUpdate.setState({ phase: "checking", error: undefined });

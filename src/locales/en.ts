@@ -770,6 +770,15 @@ const dict: Record<string, string> = {
   "校验清单里没有 {name}": "{name} is missing from the checksum list",
   "yt-dlp 校验失败（{base}）": "yt-dlp failed its checksum ({base})",
   "更多 {n} 个": "{n} more",
+  "界面更新 {n}": "interface update {n}",
+  "缺少更新公钥": "The update public key is missing",
+  "界面更新的签名不对": "The interface update's signature doesn't match",
+  "界面更新清单格式不对": "The interface update manifest is malformed",
+  "界面更新包大小不对": "The interface update has the wrong size",
+  "界面更新包校验失败": "The interface update failed its checksum",
+  "界面更新包缺少 index.html": "The interface update has no index.html",
+  "公钥无效：{e}": "Invalid public key: {e}",
+  "签名格式无效：{e}": "Invalid signature format: {e}",
 };
 
 export default dict;

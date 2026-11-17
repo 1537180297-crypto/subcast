@@ -6,6 +6,23 @@ use crate::transcript;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
+/// Overrides from the remote config (`youtubeClients`), so a YouTube change can be answered without a release.
+static REMOTE_CLIENTS: std::sync::RwLock<Vec<(String, String, Option<u32>)>> = std::sync::RwLock::new(Vec::new());
+
+/// `[{"name": "ANDROID", "version": "20.10.38", "sdk": 34}, …]`; ignored when empty or malformed.
+pub fn set_clients(v: &Value) {
+    let list: Vec<(String, String, Option<u32>)> = v.as_array().into_iter().flatten().filter_map(|c| {
+        Some((c["name"].as_str()?.to_string(), c["version"].as_str()?.to_string(), c["sdk"].as_u64().map(|n| n as u32)))
+    }).collect();
+    if !list.is_empty() { *REMOTE_CLIENTS.write().unwrap() = list; }
+}
+
+fn clients() -> Vec<(String, String, Option<u32>)> {
+    let remote = REMOTE_CLIENTS.read().unwrap().clone();
+    if !remote.is_empty() { return remote; }
+    CLIENTS.iter().map(|(n, v, s)| (n.to_string(), v.to_string(), *s)).collect()
+}
+
 const CLIENTS: &[(&str, &str, Option<u32>)] = &[
     ("ANDROID", "20.10.38", Some(34)),
     ("IOS", "20.10.3", None),
@@ -61,7 +78,7 @@ fn tracks_of(player: &Value) -> Vec<Track> {
 pub async fn video_info(video_id: &str) -> Result<VideoInfo> {
     let mut last_err = anyhow!("YouTube 没有返回视频信息");
     let mut fallback: Option<VideoInfo> = None;
-    for (name, version, sdk) in CLIENTS {
+    for (name, version, sdk) in clients() {
         let mut client = json!({ "clientName": name, "clientVersion": version, "hl": "en" });
         if let Some(sdk) = sdk { client["androidSdkVersion"] = json!(sdk); }
         let body = json!({ "context": { "client": client }, "videoId": video_id, "contentCheckOk": true, "racyCheckOk": true });
