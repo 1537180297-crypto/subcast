@@ -1505,3 +1505,4 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .shortcut-note { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 2px 0 0; color: #a8601a; }
 .ms-mark.has-icon { background: var(--bg); border: 1px solid var(--line); padding: 4px; color: var(--text); }
 .ms-mark.has-icon svg { width: 100%; height: 100%; display: block; }
+.engine-switch-mini { height: 28px; max-width: 150px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text-2); font: inherit; font-size: 12.5px; padding: 0 6px; }

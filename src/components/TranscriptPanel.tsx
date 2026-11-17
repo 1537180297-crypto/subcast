@@ -301,6 +301,22 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
     void generateTranscript(ep, model.id, settings.asrLanguage);
   };
   const retry = () => useJobs.setState((s) => { const a = { ...s.asr }; delete a[ep.id]; return { asr: a }; });
+  /** Stops the running transcription and waits until it has stopped. */
+  const stopRunning = async () => {
+    await api.cancelJob(ep.id);
+    for (let i = 0; i < 80 && useJobs.getState().asr[ep.id]?.stage !== "error" && useJobs.getState().asr[ep.id]?.stage !== "done"; i++) await new Promise((r) => setTimeout(r, 100));
+    retry();
+  };
+  /** Mid-way, switch to another way of transcribing: the running one stops, the new one starts from the beginning. */
+  const switchEngine = async (value: string) => {
+    const [kind, id] = value.split(":");
+    await saveSettings(kind === "cloud" ? { asrEngine: id } : { asrEngine: "local", asrModel: id });
+    await stopRunning();
+    const m = kind === "cloud" ? models.find((x) => x.id === settings.asrModel) ?? models[0] : models.find((x) => x.id === id);
+    if (!m) return;
+    if (kind !== "cloud" && !m.installed && !(await start(m.id, settings.mirrorFirst))) return;
+    void generateTranscript(ep, m.id, settings.asrLanguage);
+  };
 
   if (official === "searching" || official === undefined) {
     return <div className="transcript"><StatusLine text={t("正在查找字幕…")} spin /><SkeletonLines /></div>;
@@ -327,7 +343,20 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
     const label = asr.message ? tr(asr.message) : asr.stage === "download" ? t("正在获取音频") : ep.duration ? t("正在识别 · {elapsed} / {total}", { elapsed: clock(asr.progress * ep.duration), total: clock(ep.duration) }) : t("正在识别");
     return (
       <div className="transcript">
-        <StatusLine text={`${label} · ${Math.round(asr.progress * 100)}%`} spin progress={asr.progress} action={<button className="btn ghost sm" onClick={() => api.cancelJob(ep.id)}>{t("取消")}</button>} />
+        <StatusLine text={`${label} · ${Math.round(asr.progress * 100)}%`} spin progress={asr.progress} action={
+          <span className="row-actions tight">
+            <select className="engine-switch-mini" aria-label={t("换一种识别方式")} title={t("换一种识别方式（从头开始）")} value="" onChange={(e) => e.target.value && void switchEngine(e.target.value)}>
+              <option value="">{t("换一种方式…")}</option>
+              <optgroup label={t("本机模型 · 音频不出本机")}>
+                {models.filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${m.sizeMb} MB`}</option>)}
+              </optgroup>
+              <optgroup label={t("云端服务 · 更快，需要 Key")}>
+                {ASR_SERVICES.filter((a) => settings.asrEngine !== a.id).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
+              </optgroup>
+            </select>
+            <button className="btn ghost sm" onClick={() => void stopRunning()}>{t("取消")}</button>
+          </span>
+        } />
         <div className="lines">
           {asr.live.map((s, i) => (
             <div className="line live" key={i} role="button" tabIndex={0} onClick={() => current?.id === ep.id && player?.seek(s.start)}>
