@@ -224,19 +224,6 @@ fn parse_acp_models(v: &Value) -> Vec<AgentModel> {
     out
 }
 
-#[cfg(test)]
-mod model_list_tests {
-    use super::*;
-    #[test]
-    fn reads_codex_and_acp_listings() {
-        let codex = json!({ "data": [{ "id": "a", "model": "gpt-x", "displayName": "GPT X" }, { "model": "old", "hidden": true }] });
-        assert_eq!(parse_codex_models(&codex), vec![AgentModel { id: "gpt-x".into(), name: "GPT X".into() }]);
-        let acp = json!({ "sessionId": "s", "models": { "currentModelId": "k3", "availableModels": [{ "modelId": "k3", "name": "Kimi K3" }] } });
-        assert_eq!(parse_acp_models(&acp)[0].id, "k3");
-        let cfg = json!({ "configOptions": [{ "id": "model", "options": [{ "group": "x", "options": [{ "value": "m1", "name": "M1" }] }, { "value": "m2" }] }] });
-        assert_eq!(parse_acp_models(&cfg).iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m1", "m2"]);
-    }
-}
 
 // ---- requests --------------------------------------------------------------------------------------------
 
@@ -681,5 +668,19 @@ mod live {
                 println!("  {round}: {:.1}s -> {:?}", t0.elapsed().as_secs_f64(), r.map(|s| s.chars().take(80).collect::<String>()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::*;
+    #[test]
+    fn reads_codex_and_acp_listings() {
+        let codex = json!({ "data": [{ "id": "a", "model": "gpt-x", "displayName": "GPT X" }, { "model": "old", "hidden": true }] });
+        assert_eq!(parse_codex_models(&codex), vec![AgentModel { id: "gpt-x".into(), name: "GPT X".into() }]);
+        let acp = json!({ "sessionId": "s", "models": { "currentModelId": "k3", "availableModels": [{ "modelId": "k3", "name": "Kimi K3" }] } });
+        assert_eq!(parse_acp_models(&acp)[0].id, "k3");
+        let cfg = json!({ "configOptions": [{ "id": "model", "options": [{ "group": "x", "options": [{ "value": "m1", "name": "M1" }] }, { "value": "m2" }] }] });
+        assert_eq!(parse_acp_models(&cfg).iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m1", "m2"]);
     }
 }
