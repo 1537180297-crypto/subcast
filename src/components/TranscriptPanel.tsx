@@ -58,9 +58,14 @@ export function useModelDownload(onDone: () => void) {
     const un = listen<{ id: string; received: number; total?: number }>("model-download", (e) => setDownloading(e.payload));
     return () => { void un.then((f) => f()); };
   }, []);
-  const start = async (id: string, mirrorFirst: boolean) => {
+  /** Tries the China mirror first, then the original source if that fails: no setting needed. */
+  const start = async (id: string, _legacy?: boolean) => {
     setDownloading({ id, received: 0 });
-    try { await api.downloadModel(id, mirrorFirst); onDone(); return true; }
+    try {
+      try { await api.downloadModel(id, true); }
+      catch (e) { if (rawErrorText(e).includes("取消")) throw e; setDownloading({ id, received: 0 }); await api.downloadModel(id, false); } // i18n-ignore (matches the backend's cancel message)
+      onDone(); return true;
+    }
     catch (e) { if (!rawErrorText(e).includes("取消")) useStore.getState().notify(t("模型下载失败：{error}", { error: errorText(e) })); return false; } // i18n-ignore (matches the backend's cancel message)
     finally { setDownloading(null); }
   };

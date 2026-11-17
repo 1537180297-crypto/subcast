@@ -10,6 +10,7 @@ import { llmReady, useJobs } from "../lib/jobs";
 import { warmAgent } from "../lib/agents";
 import { providerFor, useStore } from "../store";
 import { Markdown } from "./Markdown";
+import { ReadAloud } from "./ReadAloud";
 import { AnswerActions, HistoryMenu, QuestionActions, type ArchivedChat } from "./ChatActions";
 import { AskArt, NightNote, PageArt, PlugArt } from "./Illustrations";
 
@@ -294,10 +295,22 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
       {streaming == null && (
         <div className="summary-foot">
           <span className="muted small">{provider ? t(provider.name) : ""} · {provider?.model}</span>
+          <ReadAloud text={() => plainText(text)} />
           <button className="btn ghost sm" onClick={run}><RefreshCw size={13} /> {t("重新生成")}</button>
         </div>
       )}
       {error && <p className="error-text">{error}</p>}
     </div>
   );
+}
+
+// Markdown → what a voice should say: no links, timestamps, headings or emphasis marks.
+function plainText(md: string) {
+  return md
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[?\b\d{1,2}(:\d{2}){1,2}\]?/g, "")
+    .replace(/^#+\s*|[*_`>]+/gm, "")
+    .replace(/^\s*[-+]\s+/gm, "")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
 }

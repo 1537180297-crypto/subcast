@@ -2,28 +2,27 @@ import { sizeMb } from "../lib/format";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
-import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, Play, RefreshCw, Square, Trash2, X, AudioLines, Captions, HardDrive, Info, Keyboard, LayoutGrid, SlidersHorizontal, Sparkles, Volume2, type LucideIcon } from "lucide-react";
+import { BookOpen, Check, ChevronDown, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
-import { ASR_SERVICES, VOICES } from "../lib/settings";
-import { speak, stopSpeaking } from "../lib/tts";
+import { ASR_SERVICES } from "../lib/settings";
+import { stopSpeaking } from "../lib/tts";
 import logoUrl from "../assets/logo.png";
 import wechatQr from "../assets/about-wechat-qr.jpg";
 import rewardQr from "../assets/about-reward-qr.png";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type CloudAsr, type ModelInfo, type Provider } from "../lib/api";
-import { llmReady } from "../lib/jobs";
 import { useStore } from "../store";
 import { Modal } from "./Chrome";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
 import { useModelDownload } from "./TranscriptPanel";
-import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC } from "../lib/i18n";
+import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC, kbd } from "../lib/i18n";
 import { ModelSettings } from "./ModelSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { ReadingSettings } from "./ReadingSettings";
 import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } from "../lib/updater";
 
-const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
+export const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
 
 /** One default model for translation and the guide; Q&A starts with it and can switch in the chat box. */
 export function DefaultButton({ id, isDefault }: { id: string; isDefault: boolean }) {
@@ -111,11 +110,10 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
 
 export function SettingsDialog() {
   const { settings, saveSettings, set, notify, settingsSection } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection })));
-  type Section = "overview" | "model" | "asr" | "reading" | "tts" | "shortcuts" | "general" | "storage" | "about";
-  const [section, setSection] = useState<Section>((settingsSection as Section) ?? "overview");
-  const [chatOk, setChatOk] = useState<boolean | null>(null);
-  const [trOk, setTrOk] = useState<boolean | null>(null);
-  useEffect(() => { void llmReady("chat").then(setChatOk); void llmReady("translate").then(setTrOk); }, [settings, section]);
+  type Section = "subtitles" | "ai" | "general" | "about";
+  // Old section names (links from elsewhere in the app) land in their new home.
+  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "general", shortcuts: "general", storage: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai" };
+  const [section, setSection] = useState<Section>(LEGACY[settingsSection ?? "subtitles"] ?? "subtitles");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
   const [elsewhere, setElsewhere] = useState<{ app: string; format: string }[]>([]);
@@ -123,7 +121,30 @@ export function SettingsDialog() {
   const { downloading, start, cancel } = useModelDownload(refresh);
   useEffect(() => { void refresh(); }, []);
   const updateWaiting = useUpdate(hasUpdate);
-  const NAV: [Section, string, LucideIcon][] = [["overview", tk("概览"), LayoutGrid], ["model", tk("AI 模型"), Sparkles], ["asr", tk("语音识别"), AudioLines], ["reading", tk("阅读与字幕"), Captions], ["tts", tk("朗读"), Volume2], ["shortcuts", tk("快捷键"), Keyboard], ["general", tk("通用"), SlidersHorizontal], ["storage", tk("存储"), HardDrive], ["about", tk("关于"), Info]];
+  const [moreLocal, setMoreLocal] = useState(false);
+  const [cloudOpen, setCloudOpen] = useState(settings.asrEngine !== "local");
+  const [moreCloud, setMoreCloud] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
+  const [showStorage, setShowStorage] = useState(false);
+  const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["general", tk("通用"), SlidersHorizontal], ["about", tk("关于"), Info]];
+  const CLOUD_MAIN = ["doubao", "siliconflow", "groq"];
+  const modelRow = (m: ModelInfo) => (
+    <div key={m.id} className={`model-item ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`}>
+      <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrEngine: "local", asrModel: m.id })}>
+        <span className={`radio ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`} />
+        <div><p>{tr(m.name)}</p><p className="muted small">{m.id.startsWith("file:") ? sizeMb(m.sizeMb) : `${tr(m.note)} · ${sizeMb(m.sizeMb)}`}</p></div>
+      </div>
+      {downloading?.id === m.id ? (
+        <div className="dl"><span className="small">{downloading.total ? Math.round((downloading.received / downloading.total) * 100) : 0}%</span><button className="btn ghost sm" onClick={() => cancel(m.id)}>{t("取消")}</button></div>
+      ) : m.installed && m.from ? (
+        <div className="dl"><span className="from-tag small">{t("来自 {app}", { app: tr(m.from) })}</span><button className="icon-btn" title={t("不再使用（原文件保留）")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><X size={14} /></button></div>
+      ) : m.installed ? (
+        <div className="dl"><span className="ok-text small"><Check size={13} /> {t("已下载")}</span><button className="icon-btn" title={t("删除模型")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><Trash2 size={14} /></button></div>
+      ) : (
+        <button className="btn sm" onClick={() => start(m.id)} disabled={downloading != null}>{t("下载")}</button>
+      )}
+    </div>
+  );
 
   return (
     <Modal title={t("设置")} onClose={() => { stopSpeaking(); set({ settingsOpen: false }); }} wide>
@@ -132,115 +153,40 @@ export function SettingsDialog() {
           {NAV.map(([k, label, Icon]) => <button key={k} className={section === k ? "on" : ""} onClick={() => setSection(k)}><Icon size={15} aria-hidden />{t(label)}{k === "about" && updateWaiting && <span className="update-dot" aria-label={t("有新版本")} />}</button>)}
         </nav>
         <div className="settings-body">
-          {section === "overview" && (
-            <div className="overview">
-              <div className="ov-card">
-                <div className="ov-head"><p className="ov-title">{t("AI 模型")}</p><span className={`pill ${chatOk || trOk ? "ok" : ""}`}>{trOk || chatOk ? t(settings.providers[settings.translateProvider]?.name ?? "") : t("未设置")}</span></div>
-                <p className="muted small">{trOk || chatOk ? t("翻译字幕、写导读、回答问题都用它。") : t("不设置也能用：字幕会用免费的谷歌翻译。设置后翻译更准，还能问答和导读。")}</p>
-                <button className={`btn sm ${trOk || chatOk ? "" : "primary"}`} onClick={() => setSection("model")}>{trOk || chatOk ? t("更换") : t("设置模型")}</button>
-              </div>
-              <div className="ov-card">
-                <div className="ov-head"><p className="ov-title">{t("字幕翻译")}</p></div>
-                <label className="check"><input type="checkbox" checked={settings.autoTranslate} onChange={(e) => saveSettings({ autoTranslate: e.target.checked })} /> {t("打开外语节目时自动翻译")}</label>
-                {trOk && (
-                  <div className="ov-row">
-                    <span className="small">{t("翻译用")}</span>
-                    <div className="seg-control">
-                      {([["auto", t("AI 模型")], ["google", t("谷歌翻译")]] as const).map(([k, label]) => (
-                        <button key={k} className={(settings.translateMode === "google" ? "google" : "auto") === k ? "on" : ""} onClick={() => saveSettings({ translateMode: k })}>{label}</button>
-                      ))}
-                    </div>
-                    {settings.translateMode !== "google" && (
-                      <div className="seg-control">
-                        {([["fast", t("快速")], ["best", t("精翻")]] as const).map(([k, label]) => (
-                          <button key={k} className={settings.translateQuality === k ? "on" : ""} title={k === "best" ? t("多一遍润色，读起来更像中文口语；花费约为两倍") : t("一遍翻译，最快出字幕")} onClick={() => saveSettings({ translateQuality: k })}>{label}</button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <label className="check" title={t("把标题和节目简介里的人名、公司和术语告诉识别与翻译模型，名字更少写错")}><input type="checkbox" checked={settings.useShowNotes} onChange={(e) => saveSettings({ useShowNotes: e.target.checked })} /> {t("参考节目简介，人名术语更准")}</label>
-              </div>
-              <div className="ov-card">
-                <div className="ov-head"><p className="ov-title">{t("语音识别")}</p><span className={`pill ${settings.asrEngine !== "local" || models.find((m) => m.id === settings.asrModel)?.installed ? "ok" : ""}`}>{settings.asrEngine !== "local" ? t(settings.cloudAsr[settings.asrEngine]?.name ?? "") : models.find((m) => m.id === settings.asrModel)?.installed ? t("本机 · 已下载") : t("本机 · 未下载")}</span></div>
-                <p className="muted small">{t("节目没有字幕时，用它听写出来。")}</p>
-                <button className="btn sm" onClick={() => setSection("asr")}>{t("更换")}</button>
-              </div>
-            </div>
-          )}
-          {section === "model" && <ModelSettings ProviderEditor={ProviderEditor} />}
-          {section === "shortcuts" && <ShortcutSettings />}
-          {section === "reading" && <ReadingSettings />}
-          {section === "asr" && (
+          {section === "subtitles" && (
             <>
-              <div className="engine-switch">
-                <button className={`engine ${settings.asrEngine === "local" ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: "local" })}>
-                  <Cpu size={18} /><div><p>{t("本机模型")}</p><p className="muted small">{t("免费、离线，音频不出本机")}</p></div>
-                </button>
-                <button className={`engine ${settings.asrEngine !== "local" ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: settings.asrEngine !== "local" ? settings.asrEngine : "doubao" })}>
-                  <Cloud size={18} /><div><p>{t("云端服务")}</p><p className="muted small">{t("更快，适合长节目，需要 Key")}</p></div>
-                </button>
-              </div>
-              {settings.asrEngine === "local" ? (
-                <>
-<p className="muted small">{t("没有官方字幕时，用本机模型识别。音频只在本机处理，识别完即删除。")}</p>
-              <div className="model-list">
-                {models.filter((m) => !m.id.startsWith("file:")).map((m) => (
-                  <div key={m.id} className={`model-item ${settings.asrModel === m.id ? "on" : ""}`}>
-                    <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrModel: m.id })}>
-                      <span className={`radio ${settings.asrModel === m.id ? "on" : ""}`} />
-                      <div><p>{tr(m.name)}</p><p className="muted small">{tr(m.note)} · {sizeMb(m.sizeMb)}</p></div>
+              <ReadingSettings />
+              <section className="setup-block">
+                <p className="setup-title">{t("没有字幕的节目")}</p>
+                <p className="muted small">{t("先查节目自带的和别人分享的字幕，都没有时才听写。")}</p>
+                <div className="model-list">{models.filter((m) => m.id === "qwen3-asr").map(modelRow)}</div>
+                <p className="muted small">{t("本机识别：免费，音频不出本机。")}</p>
+                {elsewhere.length > 0 && !models.find((m) => m.id === "qwen3-asr")?.installed && (
+                  <p className="model-elsewhere small">{t("在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。", { where: [...new Set(elsewhere.map((e) => tr(e.app)))].join("、"), format: [...new Set(elsewhere.map((e) => tr(e.format)))].join(" / ") })}</p>
+                )}
+                <button className="adv-toggle" aria-expanded={moreLocal} onClick={() => setMoreLocal(!moreLocal)}><ChevronDown size={12} className={moreLocal ? "flip" : ""} /> {t("其他模型")}</button>
+                {moreLocal && (
+                  <>
+                    <div className="model-list">{models.filter((m) => m.id !== "qwen3-asr").map(modelRow)}</div>
+                    <button className="link-btn small" onClick={async () => { await api.rescanModels(); void refresh(); notify(t("已重新查找本机的识别模型")); }}><RefreshCw size={12} /> {t("重新查找本机已有的模型")}</button>
+                  </>
+                )}
+                <button className="adv-toggle" aria-expanded={cloudOpen} onClick={() => setCloudOpen(!cloudOpen)}><ChevronDown size={12} className={cloudOpen ? "flip" : ""} /> {t("改用云端识别")}{settings.asrEngine !== "local" && <span className="muted small"> · {t(settings.cloudAsr[settings.asrEngine]?.name ?? "")}</span>}</button>
+                {cloudOpen && (
+                  <>
+                    <div className="provider-tabs">
+                      {ASR_SERVICES.filter((a) => moreCloud || CLOUD_MAIN.includes(a.id) || settings.asrEngine === a.id).map((a) => <button key={a.id} className={`chip ${settings.asrEngine === a.id ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: a.id })}>{t(a.name)}</button>)}
+                      {!moreCloud && <button className="chip" onClick={() => setMoreCloud(true)}>{t("更多")}</button>}
+                      {settings.asrEngine !== "local" && <button className="chip" onClick={() => saveSettings({ asrEngine: "local" })}>{t("用回本机")}</button>}
                     </div>
-                    {downloading?.id === m.id ? (
-                      <div className="dl"><span className="small">{downloading.total ? Math.round((downloading.received / downloading.total) * 100) : 0}%</span><button className="btn ghost sm" onClick={() => cancel(m.id)}>{t("取消")}</button></div>
-                    ) : m.installed && m.from ? (
-                      <div className="dl"><span className="from-tag small" title={t("这台电脑上已有这个模型，直接使用，不占额外空间")}>{t("来自 {app}", { app: tr(m.from) })}</span><button className="icon-btn" title={t("不再使用（原文件保留）")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><X size={14} /></button></div>
-                    ) : m.installed ? (
-                      <div className="dl"><span className="ok-text small"><Check size={13} /> {t("已下载")}</span><button className="icon-btn" title={t("删除模型")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><Trash2 size={14} /></button></div>
-                    ) : (
-                      <button className="btn sm" onClick={() => start(m.id, settings.mirrorFirst)} disabled={downloading != null}>{t("下载")}</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              {elsewhere.length > 0 && !models.find((m) => m.id === "qwen3-asr")?.installed && (
-                <p className="model-elsewhere small">{t("在 {where} 里找到了 Qwen3-ASR，但它是 {format} 格式，SubCast 的识别程序只能用 GGUF 格式，没法直接共用。下载上面的 Qwen3-ASR（约 960 MB）只需一次。", { where: [...new Set(elsewhere.map((e) => tr(e.app)))].join("、"), format: [...new Set(elsewhere.map((e) => tr(e.format)))].join(" / ") })}</p>
-              )}
-              {models.some((m) => m.id.startsWith("file:")) && (
-                <>
-                  <p className="model-found-h">{t("这台电脑上其他软件下载过的模型")}<span className="muted small">{t("直接使用，不用再下载")}</span></p>
-                  <div className="model-list">
-                    {models.filter((m) => m.id.startsWith("file:")).map((m) => (
-                      <div key={m.id} className={`model-item ${settings.asrModel === m.id ? "on" : ""}`}>
-                        <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrModel: m.id })}>
-                          <span className={`radio ${settings.asrModel === m.id ? "on" : ""}`} />
-                          <div><p>{m.name}</p><p className="muted small">{sizeMb(m.sizeMb)}</p></div>
-                        </div>
-                        <div className="dl"><span className="from-tag small">{t("来自 {app}", { app: tr(m.from ?? "") })}</span><button className="icon-btn" title={t("不再使用（原文件保留）")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><X size={14} /></button></div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-              <button className="link-btn small" onClick={async () => { await api.rescanModels(); void refresh(); notify(t("已重新查找本机的识别模型")); }}><RefreshCw size={12} /> {t("重新查找本机已有的模型")}</button>
-              <label className="check"><input type="checkbox" checked={settings.mirrorFirst} onChange={(e) => saveSettings({ mirrorFirst: e.target.checked })} /> {t("优先从国内镜像（hf-mirror.com）下载模型")}</label>
-              <label><span>{t("默认说话语言")}</span>
-                <select value={settings.asrLanguage} onChange={(e) => saveSettings({ asrLanguage: e.target.value })}>
-                  <option value="auto">{t("自动识别")}</option><option value="en">{t("英语")}</option><option value="zh">{t("中文")}</option><option value="ja">{t("日语")}</option>
-                </select>
-              </label>
-                            </>
-              ) : (
-                <>
-                  <div className="provider-tabs">
-                    {ASR_SERVICES.map((a) => <button key={a.id} className={`chip ${settings.asrEngine === a.id ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: a.id })}>{t(a.name)}</button>)}
-                  </div>
-                  {settings.cloudAsr[settings.asrEngine] && <CloudAsrEditor key={settings.asrEngine} a={settings.cloudAsr[settings.asrEngine]} onChange={(na) => saveSettings({ cloudAsr: { ...settings.cloudAsr, [na.id]: na } })} />}
-                </>
-              )}
+                    {settings.asrEngine !== "local" && <p className="muted small">{t("识别时音频会发送到 {name}。", { name: t(settings.cloudAsr[settings.asrEngine]?.name ?? "") })}</p>}
+                    {settings.asrEngine !== "local" && settings.cloudAsr[settings.asrEngine] && <CloudAsrEditor key={settings.asrEngine} a={settings.cloudAsr[settings.asrEngine]} onChange={(na) => saveSettings({ cloudAsr: { ...settings.cloudAsr, [na.id]: na } })} />}
+                  </>
+                )}
+              </section>
             </>
           )}
-          {section === "tts" && <TtsSettings />}
+          {section === "ai" && <ModelSettings ProviderEditor={ProviderEditor} />}
           {section === "general" && (
             <>
               <section className="setup-block">
@@ -269,7 +215,6 @@ export function SettingsDialog() {
                     <button className="btn sm" onClick={async () => { try { await saveSettings({ proxy }); notify(t("代理已保存")); } catch (e) { notify(errorText(e)); } }}>{t("保存")}</button>
                   </div>
                 </label>
-                <p className="muted small">{t("一般不用填：开着 Clash 等代理软件时会自动使用。")}</p>
                 <label><span>{t("YouTube 要求验证时")}</span>
                   <select value={settings.ytCookiesBrowser ?? ""} onChange={(e) => void saveSettings({ ytCookiesBrowser: e.target.value })}>
                     <option value="">{t("先问我")}</option>
@@ -282,9 +227,14 @@ export function SettingsDialog() {
                 <label className="check"><input type="checkbox" checked={settings.shareTranscripts} onChange={(e) => saveSettings({ shareTranscripts: e.target.checked })} /> {t("匿名分享我生成的字幕和译文")}</label>
                 <p className="muted small">{t("只分享文字，帮别人省去等待。关掉后照样能用别人分享的。")}</p>
               </section>
+              <section className="setup-block">
+                <button className="setting-row" aria-expanded={showKeys} onClick={() => setShowKeys(!showKeys)}><Keyboard size={15} /> <span>{t("快捷键")}</span><span className="muted small">{t("{key} 随时查看", { key: kbd("⌘/") })}</span><ChevronDown size={14} className={showKeys ? "flip" : ""} /></button>
+                {showKeys && <ShortcutSettings />}
+                <button className="setting-row" aria-expanded={showStorage} onClick={() => setShowStorage(!showStorage)}><HardDrive size={15} /> <span>{t("存储")}</span><StorageTotal /><ChevronDown size={14} className={showStorage ? "flip" : ""} /></button>
+                {showStorage && <Storage onAsr={() => setSection("subtitles")} />}
+              </section>
             </>
           )}
-          {section === "storage" && <Storage onAsr={() => setSection("asr")} />}
           {section === "about" && <About />}
         </div>
       </div>
@@ -292,7 +242,7 @@ export function SettingsDialog() {
   );
 }
 
-function KeyField({ account, placeholder }: { account: string; placeholder?: string }) {
+export function KeyField({ account, placeholder }: { account: string; placeholder?: string }) {
   const [key, setKey] = useState("");
   const [has, setHas] = useState(false);
   useEffect(() => { setKey(""); api.hasApiKey(account).then(setHas); }, [account]);
@@ -325,43 +275,6 @@ function CloudAsrEditor({ a, onChange }: { a: CloudAsr; onChange: (a: CloudAsr) 
   );
 }
 
-function TtsSettings() {
-  const { settings, saveSettings, speaking } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, speaking: s.speaking })));
-  const [error, setError] = useState<string | null>(null);
-  const known = VOICES.some(([id]) => id === settings.ttsVoice);
-  const [advanced, setAdvanced] = useState(!known || settings.ttsResource === "seed-icl-2.0");
-  const sample = settings.ttsVoice.startsWith("en_") ? "Hi, this is SubCast. Your podcasts, now with subtitles and AI notes." : "你好，这里是 SubCast。海外好播客，配上中文字幕和精读，也可以听。"; // i18n-ignore
-  return (
-    <>
-      <p className="muted small">{t("把精读和导读读给你听，用的是豆包语音。")}</p>
-      <div className="provider-form">
-        <label><span>API Key</span><KeyField account="tts.doubao" placeholder={t("豆包语音的 Key（填过语音识别的可以留空）")} /></label>
-        <label><span>{t("音色")}</span>
-          <div className="model-chips">
-            {VOICES.map(([id, name]) => <button key={id} className={`chip sm ${settings.ttsVoice === id ? "on" : ""}`} onClick={() => saveSettings({ ttsVoice: id, ttsResource: "seed-tts-2.0" })}>{t(name)}</button>)}
-          </div>
-        </label>
-        <div className="row-actions">
-          {speaking
-            ? <button className="btn sm" onClick={stopSpeaking}><Square size={12} /> {t("停止")}</button>
-            : <button className="btn primary sm" onClick={() => { setError(null); void speak(sample, setError); }}><Play size={12} /> {t("试听")}</button>}
-          {error && <span className="error-text small">{error}</span>}
-          <span className="spacer" />
-          <button className="btn ghost sm" onClick={() => openUrl("https://console.volcengine.com/speech/new/setting/apikeys?projectName=default")}><ExternalLink size={13} /> {t("获取 Key")}</button>
-          <button className="adv-toggle" onClick={() => setAdvanced(!advanced)}><ChevronDown size={12} className={advanced ? "flip" : ""} /> {t("高级设置")}</button>
-        </div>
-        {advanced && (
-          <div className="adv-body">
-            <label><span>{t("自定义音色 ID")}</span><input {...NO_AUTO} value={settings.ttsVoice} onChange={(e) => saveSettings({ ttsVoice: e.target.value.trim() })} placeholder={t("复刻音色或其他音色的 ID")} /></label>
-            <label className="check"><input type="checkbox" checked={settings.ttsResource === "seed-icl-2.0"} onChange={(e) => saveSettings({ ttsResource: e.target.checked ? "seed-icl-2.0" : "seed-tts-2.0" })} /> {t("这是我复刻的声音")}</label>
-            <button className="link-btn small" onClick={() => openUrl("https://docs.volcengine.com/docs/doubao-voice/tone-list-3?lang=zh")}><ExternalLink size={12} /> {t("查看全部音色")}</button>
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
-
 function UpdateButton() {
   const { phase } = useUpdate();
   if (phase === "available") return <button className="btn primary sm" onClick={() => void installUpdate()}><RefreshCw size={13} /> {t("更新并重启")}</button>;
@@ -388,6 +301,13 @@ function UpdateStatus() {
 }
 
 const REPO = "https://github.com/joeseesun/subcast";
+/** "占用 1.9 GB" for the 通用 page's storage row. */
+function StorageTotal() {
+  const [total, setTotal] = useState<number | null>(null);
+  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp)).catch(() => {}); }, []);
+  return <span className="muted small">{total == null ? "" : t("占用 {size}", { size: bytes(total) })}</span>;
+}
+
 function Storage({ onAsr }: { onAsr: () => void }) {
   const { set, go } = useStore(useShallow((s) => ({ set: s.set, go: s.go })));
   const saved = useOffline((s) => s.saved);
@@ -402,7 +322,6 @@ function Storage({ onAsr }: { onAsr: () => void }) {
   };
   return (
     <>
-      <p className="muted small">{t("SubCast 存在这台电脑上的内容。删除下载不会影响字幕、精读和收听进度。")}</p>
       <div className="storage-list">
         <div className="storage-row">
           <div className="storage-row-text">
