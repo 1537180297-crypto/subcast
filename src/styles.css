@@ -1673,3 +1673,25 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .default-on { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--text); }
 .setup-block + .setup-block { margin-top: 6px; }
 .thumb-subs { position: absolute; left: 8px; top: 8px; font-size: 11px; padding: 2px 6px; border-radius: 6px; color: #fff; background: rgba(0,0,0,.55); }
+
+/* 0.2.6 settings: one-line rows that open a fold (快捷键, 存储), and the AI 高级设置 fold */
+.setting-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.setting-row:hover { background: var(--soft); }
+.setting-row > span:nth-of-type(2) { margin-left: auto; }
+.setting-row + .setting-row, .setting-row + * + .setting-row { margin-top: 8px; }
+.ms-adv { margin-top: 14px; }
+.ms-adv-body { padding: 10px 12px; border-radius: 10px; background: var(--soft); }
+.ms-adv-body select { max-width: 240px; }
+.read-aloud { position: relative; display: inline-flex; align-items: center; gap: 2px; }
+.read-aloud-pop { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; width: 300px; display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 12px 32px rgba(0,0,0,0.14); text-align: left; }
+.summary-foot .read-aloud-pop { top: auto; bottom: calc(100% + 6px); }
+.skip-label { display: inline-flex; align-items: center; gap: 6px; }
+.skip-label select { height: 24px; font-size: 12px; }
+.keys-help { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px 28px; }
+.keys-help-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 13px; }
+.keys-help-row kbd + kbd { margin-left: 4px; }
+.panel-menu { position: relative; display: inline-flex; }
+.panel-menu-pop { position: absolute; z-index: 30; top: calc(100% + 4px); right: 0; min-width: 180px; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 10px 28px rgba(0,0,0,0.14); }
+.panel-menu-pop button { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; white-space: nowrap; }
+.panel-menu-pop button:hover { background: var(--soft); }
+.keys-help kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft); font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }

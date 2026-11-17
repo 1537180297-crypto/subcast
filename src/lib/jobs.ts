@@ -258,7 +258,7 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
  *  the subtitles on the video need the Chinese lines too. */
 export function autoTranslate(ep: Episode) {
   const t = useJobs.getState().transcripts[ep.id];
-  if (!t || !useStore.getState().settings.autoTranslate || !needsTranslation(t)) return;
+  if (!t || useStore.getState().settings.subtitleMode === "original" || !needsTranslation(t)) return;
   void loadTranslation(ep.id, t.segments.length).then(() => {
     const job = useJobs.getState().translations[ep.id];
     if (!job || job.running || job.error || job.items.every((x) => x != null)) return;

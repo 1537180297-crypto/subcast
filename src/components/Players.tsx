@@ -392,7 +392,6 @@ export function Controls({ compact = false }: { compact?: boolean }) {
       />
       <span className="time">{length ? clock(length) : "--:--"}</span>
       <button className={`rate-btn${settings.playbackRate >= 2 ? " fast" : ""}`} onClick={nextRate} title={t("播放速度（S）")}>{settings.playbackRate >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{settings.playbackRate}×</button>
-      <button className="rate-btn" onClick={() => cycleMode()} title={t("字幕：双语 / 中文 / 原文（C）")}>{settings.subtitleMode === "bilingual" ? t("双语") : settings.subtitleMode === "translation" ? t("中文") : t("原文")}</button>
     </div>
   );
 }

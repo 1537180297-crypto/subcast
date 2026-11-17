@@ -189,5 +189,17 @@ export async function loadSettings(): Promise<Settings> {
   for (const p of PRESETS) providers[p.id] = { ...p, ...(raw.providers?.[p.id] ?? {}), keyUrl: p.keyUrl, models: p.models, needsKey: p.needsKey, name: p.name, group: p.group };
   const cloudAsr: Record<string, CloudAsr> = {};
   for (const a of ASR_SERVICES) cloudAsr[a.id] = { ...a, ...(raw.cloudAsr?.[a.id] ?? {}), name: a.name, note: a.note, models: a.models, keyUrl: a.keyUrl, needsKey: a.needsKey, protocol: a.protocol };
-  return { ...DEFAULTS, ...raw, providers, cloudAsr };
+  return migrate({ ...DEFAULTS, ...raw, providers, cloudAsr });
+}
+
+/** 0.2.6 removed several switches; carry what each one meant into what remains. Idempotent. */
+export function migrate(s: Settings): Settings {
+  const out = { ...s };
+  // "Always use the model" is now just the default; "always Google" stays as translation assigned to Google.
+  if (out.translateMode === "llm") out.translateMode = "auto";
+  // Translation is always on; someone who turned it off wanted the original only.
+  if (out.autoTranslate === false) { out.subtitleMode = "original"; out.autoTranslate = true; }
+  out.useShowNotes = true;
+  out.asrLanguage = "auto";
+  return out;
 }

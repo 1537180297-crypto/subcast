@@ -249,10 +249,13 @@ export function LatestView() {
     <div className="page home">
       {welcome && <WelcomeCard />}
       {hero && <ContinueHero ep={hero} />}
-      {upNext.length > 0 && (
+      {(upNext.length > 0 || hero || favorites.length > 0) && (
         <section>
-          <h2 className="module-title" role="button" tabIndex={0} onClick={() => go({ kind: "recent" })}>{t("接下来听")} <ChevronRight size={16} /></h2>
-          <div className="card-strip">{upNext.map((e) => <EpisodeCard key={e.id} ep={e} />)}</div>
+          <div className="module-head">
+            <h2 className="module-title">{t("接下来听")}</h2>
+            <button className="link-btn" onClick={() => go({ kind: "recent" })}>{favorites.length ? t("全部 · 收藏 {n}", { n: favorites.length }) : t("全部")} <ChevronRight size={13} /></button>
+          </div>
+          {upNext.length > 0 && <div className="card-strip">{upNext.map((e) => <EpisodeCard key={e.id} ep={e} />)}</div>}
         </section>
       )}
       <div className="home-grid">
@@ -309,7 +312,7 @@ export function RecentView() {
   return (
     <div className="page">
       <div className="page-head">
-        <h1 className="page-title">{t("继续收听")}</h1>
+        <h1 className="page-title">{t("接下来听")}</h1>
         <div className="seg-control" role="tablist">
           <button role="tab" aria-selected={tab === "recent"} className={tab === "recent" ? "on" : ""} onClick={() => setTab("recent")}>{t("最近播放")}</button>
           <button role="tab" aria-selected={tab === "saved"} className={tab === "saved" ? "on" : ""} onClick={() => setTab("saved")}>{t("收藏")}{favorites.length ? ` ${favorites.length}` : ""}</button>

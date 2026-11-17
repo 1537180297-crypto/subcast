@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { BookA, ChevronDown, Languages, Loader2, Search, X } from "lucide-react";
+import { BookA, ChevronDown, Ellipsis, Languages, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Modal } from "./Chrome";
 import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
@@ -139,7 +139,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const providerName = providerFor(settings, "translate")?.name;
   const engineName = translation?.engine === "shared" ? t("共享译文") : translation?.engine === "youtube" ? t("节目方中文字幕") : translation?.engine === "google" ? t("谷歌翻译") : t("{name}翻译", { name: providerName ? t(providerName) : t("模型") });
   const error = startError ?? translation?.error;
-  const pending = wantsZh && (running || (settings.autoTranslate && !error && done < total));
+  const pending = wantsZh && (running || (!error && done < total));
   const start = (force?: "llm" | "google") => { setStartError(null); translateEpisode(ep, transcript, force).catch((e) => setStartError(rawErrorText(e))); };
 
   const modeControl = wantsZh && (
@@ -152,9 +152,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     </div>
   );
   const searchBtn = <>
-    {wantsZh && canUpgrade && <GlossaryButton ep={ep} onRetranslate={() => start("llm")} />}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
+    {wantsZh && canUpgrade && <PanelMenu ep={ep} onRetranslate={() => start("llm")} />}
   </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
 
@@ -197,9 +197,36 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   );
 }
 
+/** "…" on the subtitle bar: the rarer tools (本集术语表, retranslating with the model). */
+function PanelMenu({ ep, onRetranslate }: { ep: Episode; onRetranslate: () => void }) {
+  const [menu, setMenu] = useState(false);
+  const [gloss, setGloss] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const h = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setMenu(false); };
+    document.addEventListener("pointerdown", h);
+    return () => document.removeEventListener("pointerdown", h);
+  }, [menu]);
+  return (
+    <div className="panel-menu" ref={box}>
+      <button className="icon-btn" title={t("更多")} aria-label={t("更多")} aria-expanded={menu} onClick={() => setMenu(!menu)}><Ellipsis size={15} /></button>
+      {menu && (
+        <div className="panel-menu-pop" role="menu">
+          <button role="menuitem" onClick={() => { setMenu(false); setGloss(true); }}><BookA size={14} /> {t("本集术语表…")}</button>
+          <button role="menuitem" onClick={() => { setMenu(false); onRetranslate(); }}><RefreshCw size={14} /> {t("用模型重新翻译")}</button>
+        </div>
+      )}
+      {gloss && <Glossary ep={ep} onRetranslate={onRetranslate} onClose={() => setGloss(false)} />}
+    </div>
+  );
+}
+
 /** The episode's names and terms (made before translating), editable; edits are kept when it is remade. */
-function GlossaryButton({ ep, onRetranslate }: { ep: Episode; onRetranslate: () => void }) {
-  const [open, setOpen] = useState(false);
+function Glossary({ ep, onRetranslate, onClose }: { ep: Episode; onRetranslate: () => void; onClose: () => void }) {
+  const [open, setOpenRaw] = useState(false);
+  const setOpen = (v: boolean) => { setOpenRaw(v); if (!v) onClose(); };
+  useEffect(() => { void load(); }, []);
   const [ctx, setCtx] = useState<EpisodeContext | null>(null);
   const [rows, setRows] = useState<{ src: string; zh: string; user?: boolean }[]>([]);
   useLang((s) => s.lang);
@@ -217,7 +244,6 @@ function GlossaryButton({ ep, onRetranslate }: { ep: Episode; onRetranslate: () 
   };
   return (
     <>
-      <button className="icon-btn" title={t("本集术语表")} aria-label={t("本集术语表")} onClick={() => void load()}><BookA size={15} /></button>
       {open && (
         <Modal title={t("本集术语表")} onClose={() => setOpen(false)}>
           <div className="gloss">
@@ -417,11 +443,6 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
                 {ASR_SERVICES.map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
               </optgroup>
-            </select>
-          </label>
-          <label><span>{t("说话语言")}</span>
-            <select value={settings.asrLanguage} onChange={(e) => saveSettings({ asrLanguage: e.target.value })}>
-              <option value="auto">{t("自动识别")}</option><option value="en">{t("英语")}</option><option value="zh">{t("中文")}</option><option value="ja">{t("日语")}</option><option value="ko">{t("韩语")}</option><option value="de">{t("德语")}</option><option value="fr">{t("法语")}</option><option value="es">{t("西班牙语")}</option>
             </select>
           </label>
         </div>

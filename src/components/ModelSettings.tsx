@@ -9,6 +9,7 @@ import { api, errorText, llmChat, type Provider } from "../lib/api";
 import { AGENTS, agentOf, agentProvider, agentProviderId, detectAgents, useAgents, type AgentKind, type FoundAgent } from "../lib/agents";
 import { GROUPS } from "../lib/settings";
 import { DefaultButton } from "./SettingsDialog";
+import { Seg } from "./ReadingSettings";
 import { providerIcon } from "../lib/providerIcons";
 import { useStore } from "../store";
 import { t, tk, tr, useLang } from "../lib/i18n";
@@ -20,6 +21,8 @@ function Mark({ id, name, size = 28 }: { id: string; name: string; size?: number
   const letters = name.replace(/[（(].*$/, "").trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   return <span className="ms-mark" style={{ width: size, height: size, fontSize: size * 0.4 }} aria-hidden>{letters}</span>;
 }
+
+const RECOMMENDED = ["deepseek", "siliconflow", "openrouter"];
 
 const STATUS: Record<FoundAgent["login"], { text: string; tone: "ok" | "warn" | "idle" }> = {
   ready: { text: tk("可用"), tone: "ok" },
@@ -42,18 +45,31 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
 
   const used = (id: string) => (settings.translateProvider === id && settings.translateMode !== "google" ? t("默认") : "");
   const ready = (p: Provider) => !p.needsKey || keys[p.id];
-  const mine = apiProviders.filter((p) => (p.needsKey && keys[p.id]) || settings.chatProvider === p.id || settings.translateProvider === p.id);
+  const mine = apiProviders.filter((p) => RECOMMENDED.includes(p.id) || (p.needsKey && keys[p.id]) || settings.chatProvider === p.id || settings.translateProvider === p.id);
   const rest = apiProviders.filter((p) => !mine.includes(p));
   const p = settings.providers[editing];
   const agent = agentOf(p);
   const update = (np: Provider) => void saveSettings({ providers: { ...settings.providers, [np.id]: np }, ...(np.id === settings.chatProvider && np.model !== p?.model ? { chatModel: "" } : {}) });
   const nameOf = (id: string) => { const x = settings.providers[id]; return x ? tr(x.name) : ""; };
+  const google = settings.translateMode === "google";
+  const translateName = google ? t("谷歌翻译（免费）") : nameOf(settings.translateProvider) || t("没有设置");
+  const split = google || settings.chatProvider !== settings.translateProvider;
+  const [advanced, setAdvanced] = useState(split);
+  // Every model the listener can actually pick: detected agents plus API services that are ready.
+  const choices = [
+    ...(found ?? []).map((f) => ({ id: agentProviderId(f.kind), name: AGENTS[f.kind].name })),
+    ...apiProviders.filter(ready).map((x) => ({ id: x.id, name: tr(x.name) })),
+  ];
+  const withCurrent = (id: string) => (choices.some((c) => c.id === id) || !settings.providers[id] ? choices : [...choices, { id, name: nameOf(id) }]);
 
   return (
     <div className="ms">
       <div className="ms-uses">
-        <div className="ms-use"><span className="muted small">{t("默认模型")}</span><b>{settings.translateMode === "google" ? t("没有设置（字幕用谷歌翻译）") : nameOf(settings.translateProvider) || t("没有设置")}</b></div>
-        <p className="ms-auto small">{t("翻译字幕、写导读都用它；问答时可以在输入框旁边随时换。")}</p>
+        <div className="ms-use">
+          {split
+            ? <b>{t("问答：{a} · 字幕翻译：{b}", { a: nameOf(settings.chatProvider) || t("没有设置"), b: translateName })}</b>
+            : <b>{t("当前：{name}", { name: nameOf(settings.chatProvider) || t("没有设置") })}<span className="muted small"> · {t("管问答、导读和翻译")}</span></b>}
+        </div>
         {settings.autoPicked && settings.chatProvider === settings.autoPicked && !settings.modelChosen && (
           <p className="ms-auto small">{t("检测到你已登录 {name}，已自动设为默认模型。", { name: nameOf(settings.autoPicked) })}</p>
         )}
@@ -111,6 +127,33 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
             ) : null}
         </section>
       </div>
+      <button className="ms-more ms-adv" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}><ChevronDown size={13} className={advanced ? "flip" : ""} /> {t("问答和翻译分别用不同模型")}</button>
+      {advanced && (
+        <div className="setup-block ms-adv-body">
+          <div className="reading-row">
+            <span>{t("问答和导读")}</span>
+            <select value={settings.chatProvider} onChange={(e) => void saveSettings({ chatProvider: e.target.value, chatModel: "", modelChosen: true })}>
+              {withCurrent(settings.chatProvider).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="reading-row">
+            <span>{t("字幕翻译")}</span>
+            <select value={google ? "google" : settings.translateProvider} onChange={(e) => void saveSettings(e.target.value === "google" ? { translateMode: "google" } : { translateMode: "auto", translateProvider: e.target.value, modelChosen: true })}>
+              <option value="google">{t("谷歌翻译（免费）")}</option>
+              {withCurrent(settings.translateProvider).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          {!google && (
+            <>
+              <div className="reading-row">
+                <span>{t("翻译方式")}</span>
+                <Seg value={settings.translateQuality} options={[["fast", t("快速")], ["best", t("精翻")]]} onChange={(q) => void saveSettings({ translateQuality: q })} />
+              </div>
+              <p className="muted small">{settings.translateQuality === "best" ? t("翻完再通读润色一遍，更准，时间和费用约多一倍。") : t("一遍翻完，最快。")}</p>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -132,7 +132,7 @@ export function SettingsDialog() {
     <div key={m.id} className={`model-item ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`}>
       <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrEngine: "local", asrModel: m.id })}>
         <span className={`radio ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`} />
-        <div><p>{tr(m.name)}</p><p className="muted small">{m.id.startsWith("file:") ? sizeMb(m.sizeMb) : `${tr(m.note)} · ${sizeMb(m.sizeMb)}`}</p></div>
+        <div><p>{tr(m.name)}</p><p className="muted small">{m.id.startsWith("file:") ? sizeMb(m.sizeMb) : [tr(m.note), sizeMb(m.sizeMb)].filter(Boolean).join(" · ")}</p></div>
       </div>
       {downloading?.id === m.id ? (
         <div className="dl"><span className="small">{downloading.total ? Math.round((downloading.received / downloading.total) * 100) : 0}%</span><button className="btn ghost sm" onClick={() => cancel(m.id)}>{t("取消")}</button></div>

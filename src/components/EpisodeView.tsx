@@ -2,7 +2,7 @@ import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { TopBar } from "./Chrome";
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { isChineseUi, lang, t, tk } from "../lib/i18n";
+import { t, tk } from "../lib/i18n";
 
 class PanelBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -14,19 +14,19 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { ArrowDownToLine, BookOpen, Captions, ChevronDown, ScrollText, ExternalLink, Loader2, MessageCircle, PanelRightClose, PanelRightOpen, Play, WandSparkles, FolderOpen, Trash2, Youtube, Bookmark, Pause } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Captions, ChevronDown, ScrollText, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, FolderOpen, Trash2, Youtube, Bookmark, Pause } from "lucide-react";
 import { BookArt, DoneCheck, EmptyState } from "./Illustrations";
 import { Splitter } from "./Splitter";
 import { DeepRead } from "./DeepRead";
 import { SkeletonEpisode } from "./Skeleton";
 import { PANEL, useLayout } from "../lib/layout";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, errorText, llmChat, type Episode } from "../lib/api";
+import { api, errorText, type Episode } from "../lib/api";
 import { date, duration, notesText } from "../lib/format";
 import { showName } from "../lib/picks";
 import { isZh, useZh, useZhParagraphs } from "../lib/zh";
 import { autoTranslate, loadTranscript, useJobs } from "../lib/jobs";
-import { providerFor, useStore } from "../store";
+import { useStore } from "../store";
 import { ChatPanel, SummaryPanel } from "./AiPanels";
 import { Controls, playSoon } from "./Players";
 import { VideoSlot } from "./VideoDock";
@@ -166,12 +166,6 @@ export function EpisodeView({ id }: { id: string }) {
   return <EpisodeBody ep={ep} tab={tab} setTab={setTab} startAudio={startAudio} />;
 }
 
-// i18n-ignore-start
-const notesSystem = () => `你把播客的「本集简介」翻译成通顺、准确的${lang() === "zh-TW" ? "繁體中文" : "简体中文"}。
-保留段落划分（段落之间空一行）、人名、公司名、产品名和链接；时间戳、列表符号原样保留。
-广告、赞助商信息照常翻译，不要删减，也不要添加解释。只输出译文。`;
-// i18n-ignore-end
-
 /** Chapter times in show notes ("00:00 开场", "1:02:30") become buttons that seek; links open in the browser. */
 function withStamps(text: string, seek: (s: number) => void): ReactNode[] {
   return text.split(/(https?:\/\/[^\s<>"'）)】]+|\b(?:\d{1,2}:)?\d{1,2}:\d{2}\b)/g).map((part, i) => {
@@ -185,12 +179,10 @@ function withStamps(text: string, seek: (s: number) => void): ReactNode[] {
 function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   const [orig, setOrig] = useState(false);
-  const settings = useStore((s) => s.settings);
   const zhAlready = isZh(text);
   // Translated with Google in the background as soon as the page opens, so it is ready before the card is.
   const google = useZhParagraphs(text, !zhAlready);
   const [model, setModel] = useState<{ paras: string[]; by: string; src?: string } | null>(null);
-  const [busy, setBusy] = useState(false);
   const paras = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
   const srcKey = `${text.length}:${text.slice(0, 40)}`;
   const seek = (sec: number) => {
@@ -198,28 +190,11 @@ function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; d
     if (s.current?.id === ep.id) s.player?.seek(sec);
     else { s.load({ ...ep, progress: sec }); window.setTimeout(() => useStore.getState().player?.seek(sec), 600); }
   };
-  const provider = providerFor(settings, "translate");
 
   useEffect(() => {
     setModel(null);
     api.getBlob(ep.id, "notes-zh").then((raw) => { if (raw) try { const m = JSON.parse(raw); if (!m.src || m.src === srcKey) setModel(m); } catch { /* ignore */ } });
   }, [ep.id, srcKey]);
-
-  const retranslate = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const s = useStore.getState();
-    const p = providerFor(s.settings, "translate");
-    if (!p?.model || !p.baseUrl || (p.needsKey && !(await api.hasApiKey(p.id)))) { s.notify(t("先连接一个 AI 模型，就能用它重新翻译")); s.openSettings("model"); return; }
-    setBusy(true); setOrig(false); setOpen(true);
-    const split = (t: string) => t.split(/\n{2,}/).map((x) => x.trim()).filter(Boolean);
-    try {
-      const out = await llmChat({ provider: p, system: notesSystem(), messages: [{ role: "user", content: paras.join("\n\n").slice(0, 20000) }], maxTokens: 6000, onDelta: (d) => setModel({ paras: split(d), by: p.name }) });
-      const next = { paras: split(out), by: p.name, src: srcKey };
-      setModel(next);
-      void api.setBlob(ep.id, "notes-zh", JSON.stringify(next));
-    } catch (err) { s.notify(t("翻译失败：{error}", { error: errorText(err) })); }
-    finally { setBusy(false); }
-  };
 
   const zh = model?.paras.length ? model.paras : google;
   const shown = zhAlready || orig || !zh ? paras : zh;
@@ -229,11 +204,6 @@ function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; d
         <span>{t("本集简介")}</span>
         {open && zh && !zhAlready && <span className="notes-by">{model?.paras.length ? t("{name} 翻译", { name: t(model.by) }) : t("谷歌翻译")}</span>}
         {open && zh && !zhAlready && <button className="link-btn" onClick={(e) => { e.stopPropagation(); setOrig(!orig); }}>{orig ? t("看中文") : t("原文")}</button>}
-        {!zhAlready && isChineseUi() && (
-          <button className="icon-btn sm" title={busy ? t("正在翻译…") : t("用 {name} 重新翻译", { name: provider ? t(provider.name) : t("AI 模型") })} aria-label={t("用 AI 模型重新翻译")} disabled={busy} onClick={retranslate}>
-            {busy ? <Loader2 size={14} className="spin" /> : <WandSparkles size={14} />}
-          </button>
-        )}
         <ChevronDown size={14} className={open ? "flip" : ""} />
       </div>
       {open && (
@@ -308,8 +278,8 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   const fav = useLibrary((s) => s.favorites.some((f) => f.id === ep.id));
   // Translate foreign-language subtitles whichever tab is open: the video's subtitles need the Chinese too.
   const transcript = useJobs((s) => s.transcripts[ep.id]);
-  const autoOn = useStore((s) => s.settings.autoTranslate);
-  useEffect(() => { if (transcript) autoTranslate(ep); }, [transcript, autoOn]);
+  const mode = useStore((s) => s.settings.subtitleMode);
+  useEffect(() => { if (transcript) autoTranslate(ep); }, [transcript, mode]);
   const coverToggle = () => {
     if (isCurrent) { useStore.getState().player?.toggle(); return; }
     load(ep); playSoon(ep.id);
