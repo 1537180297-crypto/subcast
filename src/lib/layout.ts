@@ -11,11 +11,16 @@ const read = (): Layout => {
   catch { return { sidebar: SIDEBAR.def, sideOpen: true, panel: PANEL.def, panelOpen: true }; }
 };
 
+let saveTimer = 0;
 export const useLayout = create<Layout & { put: (p: Partial<Layout>) => void }>((set, get) => ({
   ...read(),
   put: (p) => {
     set(p);
-    const { sidebar, sideOpen, panel, panelOpen } = get();
-    try { localStorage.setItem(KEY, JSON.stringify({ sidebar, sideOpen, panel, panelOpen })); } catch { /* private mode */ }
+    // Written once dragging pauses, not on every pointer move.
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      const { sidebar, sideOpen, panel, panelOpen } = get();
+      try { localStorage.setItem(KEY, JSON.stringify({ sidebar, sideOpen, panel, panelOpen })); } catch { /* private mode */ }
+    }, 300);
   },
 }));

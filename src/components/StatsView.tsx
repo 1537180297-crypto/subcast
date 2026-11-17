@@ -320,7 +320,7 @@ function Portrait({ rows, range, rangeName }: { rows: ListenRow[]; range: Range;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [ready, setReady] = useState<boolean | null>(null);
-  useEffect(() => { void llmReady("chat").then(setReady); }, [settings]);
+  useEffect(() => { void llmReady("chat").then(setReady); }, [settings.chatProvider, settings.chatModel, settings.providers]);
   useEffect(() => { setText(null); setError(""); void api.getBlob("stats", `portrait-${range}`).then((v) => setText(v || null)); }, [range]);
   const brief = () => {
     const shows = new Map<string, number>(), titles = new Map<string, number>(), hours = Array(24).fill(0) as number[];

@@ -105,6 +105,7 @@ export const api = {
   uiCheck: () => invoke<string>("ui_check"),
   refreshConfig: () => invoke<void>("refresh_config"),
   prepareYoutube: () => invoke<void>("prepare_youtube"),
+  openPrivacySettings: () => invoke<void>("open_privacy_settings"),
   youtubeTracks: (episodeId: string) => invoke<{ language: string; auto: boolean }[]>("youtube_tracks", { episodeId }),
   useYoutubeTrack: (episodeId: string, language: string, auto: boolean) => invoke<Transcript>("use_youtube_track", { episodeId, language, auto }),
   translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
@@ -134,11 +135,15 @@ export async function llmChat(opts: {
   const requestId = `llm-${Date.now()}-${llmCounter++}`;
   let full = "";
   let unlisten: UnlistenFn | undefined;
+  // Pieces arrive faster than the screen redraws: hand the text over at most every 40 ms. A timer, not a frame
+  // callback, so it still runs with the window hidden; cancelled at the end, so a late one can't bring back
+  // "streaming" after the answer is done.
+  let pending = 0;
   if (opts.onDelta) {
     unlisten = await listen<{ requestId: string; delta: string }>("llm", (ev) => {
       if (ev.payload.requestId !== requestId) return;
       full += ev.payload.delta;
-      opts.onDelta!(full);
+      if (!pending) pending = window.setTimeout(() => { pending = 0; opts.onDelta!(full); }, 40);
     });
   }
   const abort = () => void api.cancelJob(requestId);
@@ -154,6 +159,8 @@ export async function llmChat(opts: {
       jsonMode: opts.jsonMode,
     });
   } finally {
+    // The last pieces go out now, before the caller sees the result (it keeps them if the reply fails).
+    if (pending) { window.clearTimeout(pending); opts.onDelta?.(full); }
     unlisten?.();
     opts.signal?.removeEventListener("abort", abort);
   }
@@ -164,3 +171,5 @@ export const rawErrorText = (e: unknown) => (typeof e === "string" ? e : e insta
 /** YouTube's "confirm you're not a bot" check, as the backend words it (asr.rs with_bot_fallback). */
 export const isBotCheck = (m: string) => m.includes("YouTube 要求验证「不是机器人」。选一个"); // i18n-ignore (matches the backend's text)
 export const errorText = (e: unknown) => tr(rawErrorText(e));
+/** macOS refused SubCast access to a browser's data (import.rs NEEDS_ACCESS). */
+export const needsBrowserAccess = (m: string) => m.includes("需要你允许 SubCast 读取"); // i18n-ignore (matches the backend's text)

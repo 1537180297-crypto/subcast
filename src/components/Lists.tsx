@@ -2,13 +2,13 @@ import { playSoon } from "./Players";
 import { ask } from "../lib/confirm";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Search, Trash2, X, Youtube } from "lucide-react";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
 import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, type Pick, type Topic } from "../lib/picks";
-import { isChineseUi, t } from "../lib/i18n";
+import { isChineseUi, t, useLang } from "../lib/i18n";
 import { HOME_SHOW_FEED, showLinks } from "../lib/showLinks";
 import { AlsoOn, HomeShowBanner, YtButton, usePromo } from "./YtPromo";
 import { useShowName, useZh } from "../lib/zh";
@@ -47,17 +47,19 @@ function openAt(ep: Episode, time: number) {
   playSoon(ep.id);
 }
 
-function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boolean; hit?: ShowHit; query?: string }) {
+// Memoised, and watching only whether this row is the one playing: a show page can list hundreds.
+const EpisodeRow = memo(function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boolean; hit?: ShowHit; query?: string }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const open = () => (hit?.time != null ? openAt(ep, hit.time) : openEpisode(ep));
-  const current = useStore((s) => s.current);
+  const isPlaying = useStore((s) => s.current?.id === ep.id);
+  useLang((s) => s.lang); // memoised: follow a language change itself
   const zh = useZh(ep.title);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const deep = !!ep.deep;
   const saved = useOffline((s) => !!s.saved[ep.id]);
   const loading = useOffline((s) => s.active[ep.id]);
   return (
-    <div className={`ep-item ${current?.id === ep.id ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
+    <div className={`ep-item ${isPlaying ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
       <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>
         {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" onError={(e) => {
@@ -95,7 +97,7 @@ function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boole
       </div>
     </div>
   );
-}
+});
 
 function groupLabel(ms?: number | null): string {
   if (!ms) return t("更早");

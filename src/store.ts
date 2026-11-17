@@ -18,8 +18,6 @@ export interface PlayerHandle {
   toggle(): void;
   play(): void;
   setRate(rate: number): void;
-  /** Mutes or unmutes; returns whether it is muted now. */
-  toggleMute?(): boolean;
   /** The episode this player plays. A video's player can be ready before the episode becomes current. */
   episodeId?: string;
 }
@@ -43,6 +41,8 @@ interface State {
   loadingSince?: number | null;
   /** Play as soon as the player for `current` is ready (it may take a few seconds to appear). */
   playWhenReady?: string | null;
+  /** Seek here as soon as this episode's player appears. */
+  seekWhenReady?: { id: string; at: number } | null;
   /** First run: show the welcome card; shows are being subscribed in the background. */
   welcome?: boolean;
   settingUp?: boolean;
@@ -58,7 +58,8 @@ interface State {
   go(view: View): void;
   back(): void;
   reloadShows(): Promise<void>;
-  saveSettings(patch: Partial<Settings>): Promise<void>;
+  /** `lazy`: for text being typed. The change shows at once; the disk write waits until typing pauses. */
+  saveSettings(patch: Partial<Settings>, lazy?: boolean): Promise<void>;
   openEpisode(ep: Episode): void;
   /** Loads an episode into the player without navigating. */
   load(ep: Episode): void;
@@ -119,12 +120,17 @@ export const useStore = create<State>((set, get) => ({
     else set({ view: { kind: "latest" } });
   },
   async reloadShows() {
-    set({ shows: await api.listShows() });
+    // Unchanged after a refresh (the usual case): keep the same array, so pages that depend on it don't reload.
+    const shows = await api.listShows();
+    if (JSON.stringify(shows) !== JSON.stringify(get().shows)) set({ shows });
   },
-  async saveSettings(patch) {
+  async saveSettings(patch, lazy) {
     const settings = { ...get().settings, ...patch };
     if (patch.uiLang) { setLang(patch.uiLang); void api.setMenuLabels([t("设置…")]).catch(() => {}); }
     set({ settings });
+    window.clearTimeout(settingsTimer);
+    settingsTimer = 0;
+    if (lazy) { settingsTimer = window.setTimeout(() => { settingsTimer = 0; void api.setSettings(get().settings); }, 400); return; }
     await api.setSettings(settings);
   },
   openEpisode(ep) {
@@ -133,7 +139,7 @@ export const useStore = create<State>((set, get) => ({
   },
   load(ep) {
     // Keep a player that already belongs to this episode (a video ready before "play" was pressed).
-    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : null }); }
+    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : standby.get(ep.id) ?? null }); }
   },
   notify(text) {
     set({ toast: text });
@@ -143,6 +149,39 @@ export const useStore = create<State>((set, get) => ({
   openSettings: (section) => set({ settingsOpen: true, settingsSection: section }),
   set: (patch) => set(patch),
 }));
+
+/** Players that exist for an episode that isn't the current one (a video page opened while something else plays).
+ *  Only the current episode's player drives the global controls; another becomes current when it is loaded. */
+const standby = new Map<string, PlayerHandle>();
+
+/** A player is ready for its episode: it takes the controls if that episode is current, else waits here. */
+export function offerPlayer(h: PlayerHandle & { episodeId: string }, extra?: Partial<State>) {
+  standby.set(h.episodeId, h);
+  const s = useStore.getState();
+  if (s.current?.id === h.episodeId) s.set({ player: h, ...extra });
+}
+
+/** A player is going away: it stops being offered, and leaves the controls if it had them. */
+export function withdrawPlayer(h: PlayerHandle & { episodeId: string }) {
+  if (standby.get(h.episodeId) === h) standby.delete(h.episodeId);
+  const s = useStore.getState();
+  if (s.player === h) s.set({ player: null, playing: false });
+}
+
+/** Seeks once the current episode's player exists (a video's player takes a moment to appear). */
+export function seekSoon(seconds: number) {
+  const s = useStore.getState();
+  if (s.player) { s.player.seek(seconds); return; }
+  if (s.current) s.set({ time: seconds, seekWhenReady: { id: s.current.id, at: seconds } });
+}
+
+let settingsTimer = 0;
+// A typed setting still waiting is written as soon as the window loses focus or hides (⌘Q may not give
+// the page a chance to unload).
+const flushSettings = () => { if (settingsTimer) { window.clearTimeout(settingsTimer); settingsTimer = 0; void api.setSettings(useStore.getState().settings); } };
+window.addEventListener("blur", flushSettings);
+document.addEventListener("visibilitychange", flushSettings);
+window.addEventListener("beforeunload", flushSettings);
 
 export function providerFor(settings: Settings, use: "chat" | "translate") {
   if (use === "translate") return settings.providers[settings.translateProvider];

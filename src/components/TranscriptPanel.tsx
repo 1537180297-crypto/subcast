@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { BookA, Check, ChevronDown, Ellipsis, Languages, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Modal } from "./Chrome";
@@ -30,6 +30,8 @@ function highlight(text: string, query: string) {
   const i = text.toLowerCase().indexOf(query.toLowerCase());
   return i < 0 ? text : <>{text.slice(0, i)}<mark>{text.slice(i, i + query.length)}</mark>{text.slice(i + query.length)}</>;
 }
+
+const NO_SEGMENTS: Segment[] = [];
 
 const Row = memo(function Row({ seg, zh, active, mode, pending, onSeek, query, current }: { seg: Segment; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean }) {
   const showZh = mode !== "original";
@@ -91,7 +93,8 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const official = useJobs((s) => s.officialChecked[ep.id]);
   const officialError = useJobs((s) => s.officialError[ep.id]);
   const translation = useJobs((s) => s.translations[ep.id]);
-  const { time, player, settings, saveSettings, current, openSettings } = useStore(useShallow((s) => ({ time: s.time, player: s.player, settings: s.settings, saveSettings: s.saveSettings, current: s.current, openSettings: s.openSettings })));
+  // Not `time`: it changes several times a second, and only the active line matters here (selected below).
+  const { player, settings, saveSettings, current, openSettings } = useStore(useShallow((s) => ({ player: s.player, settings: s.settings, saveSettings: s.saveSettings, current: s.current, openSettings: s.openSettings })));
   const isCurrent = current?.id === ep.id;
   const list = useRef<HTMLDivElement>(null);
   const userScrolled = useRef(0);
@@ -101,14 +104,16 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const [hit, setHit] = useState(0);
   const [startError, setStartError] = useState<string | null>(null);
   const [canUpgrade, setCanUpgrade] = useState(false);
-  const segments = transcript?.segments ?? [];
-  const active = isCurrent ? activeIndex(segments, time) : -1;
-  const seek = (t: number) => { if (isCurrent) player?.seek(t); };
+  const segments = transcript?.segments ?? NO_SEGMENTS;
+  // Re-renders when the active line changes, not on every time update.
+  const active = useStore((s) => (s.current?.id === ep.id ? activeIndex(segments, s.time) : -1));
+  // Stable, so the memoised rows don't all re-render whenever this panel does.
+  const seek = useCallback((t: number) => { if (isCurrent) player?.seek(t); }, [isCurrent, player]);
   const wantsZh = transcript ? needsTranslation(transcript) : false;
   const mode = wantsZh ? settings.subtitleMode : "original";
 
   useEffect(() => { if (transcript) void loadTranslation(ep.id, transcript.segments.length); }, [transcript, ep.id]);
-  useEffect(() => { void llmReady("translate").then(setCanUpgrade); }, [settings]);
+  useEffect(() => { void llmReady("translate").then(setCanUpgrade); }, [settings.translateProvider, settings.translateMode, settings.providers]);
 
 
   useEffect(() => {

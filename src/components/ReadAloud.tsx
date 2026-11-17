@@ -50,7 +50,7 @@ function ReadAloudSettings() {
       </div>
       {custom && (
         <>
-          <input {...NO_AUTO} value={settings.ttsVoice} onChange={(e) => saveSettings({ ttsVoice: e.target.value.trim() })} placeholder={t("复刻音色或其他音色的 ID")} />
+          <input {...NO_AUTO} value={settings.ttsVoice} onChange={(e) => saveSettings({ ttsVoice: e.target.value.trim() }, true)} placeholder={t("复刻音色或其他音色的 ID")} />
           <label className="check"><input type="checkbox" checked={settings.ttsResource === "seed-icl-2.0"} onChange={(e) => saveSettings({ ttsResource: e.target.checked ? "seed-icl-2.0" : "seed-tts-2.0" })} /> {t("这是我复刻的声音")}</label>
         </>
       )}
