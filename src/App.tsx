@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
 import { detectAgents } from "./lib/agents";
 import { useReadingSettings } from "./lib/reading";
+import { useRevealOnExpand } from "./lib/reveal";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
@@ -30,6 +31,7 @@ import { EqBars } from "./components/Illustrations";
 
 export default function App() {
   useReadingSettings();
+  useRevealOnExpand();
   const { ready, view, settingsOpen, addOpen, init } = useStore(useShallow((s) => ({ ready: s.ready, view: s.view, settingsOpen: s.settingsOpen, addOpen: s.addOpen, init: s.init })));
 
   useEffect(() => {
