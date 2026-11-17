@@ -96,6 +96,8 @@ export async function llmReady(use: "chat" | "translate"): Promise<boolean> {
   const settings = useStore.getState().settings;
   if (use === "translate" && settings.translateMode === "google") return false;
   const p = providerFor(settings, use);
+  // A local agent picks its own model when none is set.
+  if (p?.protocol === "cli") return true;
   return Boolean(p?.model && p.baseUrl !== "" && (!p.needsKey || (await api.hasApiKey(p.id))));
 }
 
@@ -103,6 +105,7 @@ export async function llmReady(use: "chat" | "translate"): Promise<boolean> {
 function concurrency(p?: Provider | null): { start: number; max: number } {
   if (!p) return { start: 3, max: 6 };
   if (p.group === "local") return { start: 1, max: 1 };
+  if (p.protocol === "cli") return { start: 2, max: 2 };
   if (p.protocol === "anthropic") return { start: 2, max: 4 };
   if (/deepseek/i.test(p.id + p.baseUrl)) return { start: 4, max: 6 };
   return { start: 3, max: 6 };

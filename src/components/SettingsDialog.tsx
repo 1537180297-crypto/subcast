@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
 import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, Play, RefreshCw, Square, Trash2 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
-import { ASR_SERVICES, GROUPS, VOICES } from "../lib/settings";
+import { ASR_SERVICES, VOICES } from "../lib/settings";
 import { speak, stopSpeaking } from "../lib/tts";
 import logoUrl from "../assets/logo.png";
 import wechatQr from "../assets/about-wechat-qr.jpg";
@@ -17,6 +17,7 @@ import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
 import { useModelDownload } from "./TranscriptPanel";
 import { LANGS, systemLang, t, tk, tr, type LangSetting } from "../lib/i18n";
+import { ModelSettings } from "./ModelSettings";
 import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } from "../lib/updater";
 
 const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
@@ -65,8 +66,8 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
       <div className="setup-block">
         <p className="setup-title">{t("用它做什么")}</p>
         <div className="use-picks">
-          <button className={`chip sm ${forChat ? "on" : ""}`} aria-pressed={forChat} onClick={() => !forChat && saveSettings({ chatProvider: p.id, chatModel: "" })}>{forChat && <Check size={12} />}{t("问答与导读")}</button>
-          <button className={`chip sm ${forTranslate ? "on" : ""}`} aria-pressed={forTranslate} onClick={() => !forTranslate && saveSettings({ translateProvider: p.id })}>{forTranslate && <Check size={12} />}{t("字幕翻译")}</button>
+          <button className={`chip sm ${forChat ? "on" : ""}`} aria-pressed={forChat} onClick={() => !forChat && saveSettings({ chatProvider: p.id, chatModel: "", modelChosen: true })}>{forChat && <Check size={12} />}{t("问答与导读")}</button>
+          <button className={`chip sm ${forTranslate ? "on" : ""}`} aria-pressed={forTranslate} onClick={() => !forTranslate && saveSettings({ translateProvider: p.id, modelChosen: true })}>{forTranslate && <Check size={12} />}{t("字幕翻译")}</button>
         </div>
         <p className="muted small">{t("每项用途只能交给一个服务，选中后原来的会自动换下。")}</p>
       </div>
@@ -109,16 +110,12 @@ export function SettingsDialog() {
   const [chatOk, setChatOk] = useState<boolean | null>(null);
   const [trOk, setTrOk] = useState<boolean | null>(null);
   useEffect(() => { void llmReady("chat").then(setChatOk); void llmReady("translate").then(setTrOk); }, [settings, section]);
-  const [editing, setEditing] = useState(settings.chatProvider);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
   const proxyHint = t("留空使用系统代理，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"); // i18n-ignore: scripts/i18n.mjs reads the URL's "//" as a comment; the key is still extracted
   const refresh = () => api.asrModels().then(setModels);
   const { downloading, start, cancel } = useModelDownload(refresh);
   useEffect(() => { void refresh(); }, []);
-  const providers = Object.values(settings.providers);
-  const p = settings.providers[editing];
-  const update = (np: Provider) => void saveSettings({ providers: { ...settings.providers, [np.id]: np }, ...(np.id === settings.chatProvider && np.model !== p?.model ? { chatModel: "" } : {}) });
   const updateWaiting = useUpdate(hasUpdate);
   const NAV: [Section, string][] = [["overview", tk("概览")], ["model", tk("AI 模型")], ["asr", tk("语音识别")], ["tts", tk("朗读")], ["general", tk("通用")], ["storage", tk("存储")], ["about", tk("关于")]];
 
@@ -164,30 +161,7 @@ export function SettingsDialog() {
               </div>
             </div>
           )}
-          {section === "model" && (
-            <>
-              <p className="muted small">{t("问答、导读（以及可选的字幕翻译）使用你自己的模型服务，Key 只保存在本机钥匙串。")}</p>
-              <p className="usage">{t("问答与导读：")}<b>{t(settings.providers[settings.chatProvider]?.name ?? "")}{settings.chatModel ? ` · ${settings.chatModel}` : ""}</b>　·　{t("字幕翻译：")}<b>{t(settings.providers[settings.translateProvider]?.name ?? "")}</b></p>
-              <div className="provider-split">
-                <div className="provider-list">
-                  {GROUPS.map((g) => (
-                    <div key={g.id} className="provider-group">
-                      <p className="provider-group-h">{t(g.name)}<span>{t(g.note)}</span></p>
-                      {providers.filter((x) => (x.group ?? "provider") === g.id).map((x) => (
-                        <button key={x.id} className={`provider-item ${editing === x.id ? "on" : ""}`} onClick={() => setEditing(x.id)}>
-                          <span>{t(x.name)}</span>
-                          {(x.id === settings.chatProvider || x.id === settings.translateProvider) && <span className="use-tag">{[x.id === settings.chatProvider && t("问答"), x.id === settings.translateProvider && t("翻译")].filter(Boolean).join("·")}</span>}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-                <div className="provider-detail">
-                  {p && <><p className="provider-title">{t(p.name)}</p><ProviderEditor key={p.id} p={p} onChange={update} /></>}
-                </div>
-              </div>
-            </>
-          )}
+          {section === "model" && <ModelSettings ProviderEditor={ProviderEditor} />}
           {section === "asr" && (
             <>
               <div className="engine-switch">

@@ -6,6 +6,7 @@ import { SIDEBAR, useLayout } from "./lib/layout";
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
+import { detectAgents } from "./lib/agents";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
@@ -30,7 +31,8 @@ export default function App() {
     void startOffline();
     void loadFavorites();
     startUpdateChecks();
-    void init();
+    // Local AI agents (Claude Code and the like): found once settings are loaded, put to work if nothing else is set up.
+    void init().then(() => detectAgents());
     // Rendered: tells the app a hot-updated interface works (otherwise it falls back on its own; see ota.rs).
     void api.uiReady().then((info) => useStore.setState({ uiBuild: info.build })).catch(() => {});
     const onKey = (e: KeyboardEvent) => {

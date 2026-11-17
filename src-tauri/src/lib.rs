@@ -1,5 +1,6 @@
 mod asr;
 mod asr_context;
+mod agents;
 mod cloud;
 mod db;
 mod feeds;
@@ -916,11 +917,47 @@ fn has_api_key(provider: String) -> bool { llm::get_key(&provider).is_some_and(|
 async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String, provider: llm::Provider, system: String, messages: Vec<llm::Message>, max_tokens: Option<u32>, json_mode: Option<bool>) -> Res<String> {
     let cancel = state.job(&request_id);
     let rid = request_id.clone();
-    let r = llm::chat(&provider, &system, &messages, max_tokens.unwrap_or(8000), json_mode.unwrap_or(false), &cancel, |d| {
-        let _ = app.emit("llm", json!({"requestId": rid, "delta": d}));
-    }).await;
+    let r = if provider.protocol == "cli" {
+        // A local agent (agents.rs): the conversation goes as one message; it keeps no history of its own.
+        let kind = agents::Kind::parse(provider.id.trim_start_matches("cli-")).ok_or("未知的本机 AI")?;
+        let path = agents::path_of(kind).ok_or_else(|| format!("没有找到 {}，请在设置里点「重新检测」", agents::display(kind)))?;
+        let user = flatten(&messages);
+        let app2 = app.clone();
+        agents::complete(kind, &path, agents::Request { system: &system, user: &user, model: Some(provider.model.as_str()).filter(|m| !m.is_empty() && *m != "default"), json: json_mode.unwrap_or(false) },
+            cancel.clone(), move |d| { let _ = app2.emit("llm", json!({"requestId": rid, "delta": d})); }).await
+    } else {
+        llm::chat(&provider, &system, &messages, max_tokens.unwrap_or(8000), json_mode.unwrap_or(false), &cancel, |d| {
+            let _ = app.emit("llm", json!({"requestId": rid, "delta": d}));
+        }).await
+    };
     state.done(&request_id);
     r.map_err(e)
+}
+
+/// A conversation as one message, for agents that take a single prompt.
+fn flatten(messages: &[llm::Message]) -> String {
+    if messages.len() == 1 { return messages[0].content.clone(); }
+    let mut out = String::from("以下是到目前为止的对话，请回答最后一个问题。\n\n"); // i18n-ignore (sent to the model)
+    for m in messages { out.push_str(if m.role == "assistant" { "【助手】\n" } else { "【用户】\n" }); out.push_str(&m.content); out.push_str("\n\n"); } // i18n-ignore
+    out
+}
+
+/// Local AI agents on this computer (Claude Code, Codex, Qwen Code…) and whether they are logged in.
+#[tauri::command]
+async fn local_agents() -> Vec<agents::Found> { agents::detect().await }
+
+/// Starts an agent once to see whether it can answer (ready / needsLogin), without a model call.
+#[tauri::command]
+async fn probe_agent(kind: String) -> Res<String> {
+    let k = agents::Kind::parse(&kind).ok_or("未知的本机 AI")?;
+    let path = agents::path_of(k).ok_or("没有找到")?;
+    agents::probe(k, &path).await.map(str::to_string).map_err(e)
+}
+
+/// Starts an agent in the background (opening Q&A), so the first answer doesn't wait for it.
+#[tauri::command]
+async fn warm_agent(kind: String) {
+    if let Some(k) = agents::Kind::parse(&kind) { if let Some(p) = agents::path_of(k) { agents::warm(k, &p).await; } }
 }
 
 /// Machine translation (Google, free) with a persistent cache; used for titles, show notes, and subtitles
@@ -1034,7 +1071,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

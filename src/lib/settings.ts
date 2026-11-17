@@ -17,6 +17,10 @@ export interface Settings {
   translateQuality: "fast" | "best";
   /** Give recognition and translation the episode's title and show notes (names and terms come out right). */
   useShowNotes: boolean;
+  /** The listener picked the models themselves: local agents are never switched in automatically after that. */
+  modelChosen?: boolean;
+  /** The local agent SubCast switched in on its own (shown as such in settings). */
+  autoPicked?: string;
   subtitleMode: "bilingual" | "original" | "translation";
   playbackRate: number;
   /** "local", or the id of a cloud transcription service. */

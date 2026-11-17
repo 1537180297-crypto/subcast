@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-warm-agent"
+description = "Enables the warm_agent command without any pre-configured scope."
+commands.allow = ["warm_agent"]
+
+[[permission]]
+identifier = "deny-warm-agent"
+description = "Denies the warm_agent command without any pre-configured scope."
+commands.deny = ["warm_agent"]
