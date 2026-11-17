@@ -159,8 +159,12 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
     save();
   };
 
-  const ctx = engine === "llm" && provider ? await episodeContext(ep, t, provider, signal) : null;
-  const opts = { title: ep.title, show: ep.showTitle ?? "", ctx, signal, polish: settings.translateQuality === "best" };
+  // The glossary takes a model call (seconds; more with a local CLI). The lines on screen don't wait for it: the
+  // first batch goes at once without it, the rest once it is there.
+  const ctxReady = engine === "llm" && provider ? episodeContext(ep, t, provider, signal) : Promise.resolve(null);
+  let ctx: EpisodeContext | null = null, ctxDone = engine !== "llm";
+  void ctxReady.then((c) => { ctx = c; ctxDone = true; pumpNow(); });
+  const opts = () => ({ title: ep.title, show: ep.showTitle ?? "", ctx, signal, polish: settings.translateQuality === "best" });
   const queue = batches(t.segments, items, engine === "llm" ? batchShape(provider) : undefined);
   const tries = new Map<number, number>();
   // The batch nearest to where the listener is (ahead of the playhead counts double), so the lines on screen
@@ -185,7 +189,7 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
         const out = await api.translateTexts(b.ids.map((i) => t.segments[i].text));
         merge(new Map(b.ids.map((id, j) => [id, out[j] ?? ""])));
       } else {
-        const got = await translateBatch(provider!, t.segments, b, opts);
+        const got = await translateBatch(provider!, t.segments, b, opts());
         merge(got);
         // Lines that didn't come back go round again on their own; after three tries a line is given up.
         const missing = b.ids.filter((id) => !got.has(id) && (tries.set(id, (tries.get(id) ?? 0) + 1).get(id) ?? 0) < 3);
@@ -211,16 +215,22 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
       else failed += b.ids.length;
     }
   };
+  let pumpNow = () => {};
+  let started = 0;
   await new Promise<void>((done) => {
     const pump = () => {
       if (signal.aborted && active === 0) return done();
-      while (!signal.aborted && active < limit && queue.length) {
+      // Before the glossary is ready only one batch runs (the one nearest the playhead).
+      while (!signal.aborted && active < (ctxDone ? limit : 1) && queue.length && (ctxDone || started === 0)) {
+        started++;
         const b = next()!;
         active++;
         void one(b).finally(() => { active--; pump(); });
       }
-      if (active === 0 && (!queue.length || signal.aborted)) done();
+      if (active === 0 && (!queue.length || signal.aborted) && ctxDone) done();
+      if (active === 0 && signal.aborted) done();
     };
+    pumpNow = pump;
     pump();
   });
   controllers.delete(ep.id);
