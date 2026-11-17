@@ -32,7 +32,8 @@ function sanitize(html: string): string {
 const seconds = (t: string) => t.split(":").reduce((n, p) => n * 60 + Number(p), 0);
 
 /** The 乔木精读 article for an episode, cached after the first fetch. */
-export function DeepRead({ ep, children }: { ep: Episode; children?: React.ReactNode }) {
+/** `onMissing`: the feed promised a deep-read but there is none to fetch. */
+export function DeepRead({ ep, children, onMissing }: { ep: Episode; children?: React.ReactNode; onMissing?: () => void }) {
   const [html, setHtml] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
@@ -43,6 +44,7 @@ export function DeepRead({ ep, children }: { ep: Episode; children?: React.React
     });
     return () => { live = false; };
   }, [ep.id]);
+  useEffect(() => { if (html === null) onMissing?.(); }, [html]);
   const clean = useMemo(() => (html ? sanitize(html) : ""), [html]);
   const readText = () => {
     const doc = new DOMParser().parseFromString(clean, "text/html");

@@ -1261,6 +1261,20 @@ mod live {
         println!("stream: {}", &url[..url.len().min(80)]);
         let _ = std::fs::remove_dir_all(&data);
     }
+    /// SUBCAST_DB: a copy of a real library. Every transcribed episode in it should come back from the shared library.
+    #[tokio::test]
+    #[ignore]
+    async fn shared_library_hits() {
+        let conn = rusqlite::Connection::open(std::env::var("SUBCAST_DB").unwrap()).unwrap();
+        let ids: Vec<(String, String)> = conn.prepare("SELECT episode_id, source FROM transcripts WHERE source NOT LIKE 'youtube%'").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        for (id, source) in ids {
+            let Some(ep) = db::get_episode(&conn, &id).unwrap() else { continue };
+            let hit = shared::lookup(&shared::keys(&ep)).await;
+            println!("{source:>14} {:<40} shared: {}", ep.title.chars().take(40).collect::<String>(),
+                hit.map(|h| format!("{} lines, zh {}", h.segments.len(), h.translation.map(|t| t.items.len()).unwrap_or(0))).unwrap_or("none".into()));
+        }
+    }
     /// SUBCAST_DB: a copy of a real library.
     #[test]
     #[ignore]
