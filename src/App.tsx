@@ -16,6 +16,7 @@ import { loadFavorites } from "./lib/library";
 import { startUpdateChecks } from "./lib/updater";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { EpisodeView } from "./components/EpisodeView";
+import { VideoDock } from "./components/VideoDock";
 import { AudioEngine, cycleMode, stepRate, toggleTheater } from "./components/Players";
 import { actionFor, comboOf, isPlain, type ActionId } from "./lib/shortcuts";
 import { useJobs } from "./lib/jobs";
@@ -114,6 +115,7 @@ export default function App() {
       </main>
       <MiniPlayer />
       <AudioEngine />
+      <VideoDock />
       {settingsOpen && <SettingsDialog />}
       {addOpen && <AddDialog />}
       <SelectionTools />

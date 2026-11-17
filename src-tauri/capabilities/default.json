@@ -39,6 +39,7 @@
     "allow-share-translation",
     "allow-local-agents",
     "allow-youtube-subscriptions",
+    "allow-rescan-models",
     "allow-export-opml",
     "allow-probe-agent",
     "allow-warm-agent",

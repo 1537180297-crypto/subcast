@@ -674,8 +674,8 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         asr_emit(&app, &episode_id, "done", 1.0, None, None);
         return Ok(t);
     }
-    let spec = asr::spec(&model).ok_or("未知模型")?;
-    let model_path = asr::models_dir(&state.data).join(spec.file);
+    let spec = asr::resolve(&state.data, &model).ok_or("未知模型")?;
+    let model_path = spec.path.clone();
     if cloud.is_none() && !model_path.is_file() { return Err("请先下载识别模型".into()); }
     let cancel = state.job(&episode_id);
     let work = state.data.join("work").join(&episode_id);
@@ -764,7 +764,7 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
         // What made it, for sharing the translation later (share_translation).
         let made_by = json!({ "source": if cloud.is_some() { "cloud" } else if spec.engine == "qwen3" { "qwen3" } else { "whisper" },
-            "model": cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.to_string()) });
+            "model": cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.clone()) });
         let _ = db::set_blob(&state.db.lock().unwrap(), &ep.id, "asr-meta", &made_by.to_string());
         Ok(t)
     }.await;
@@ -792,7 +792,7 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
                 show: ep.show_title.clone().unwrap_or_default(),
                 duration: ep.duration.unwrap_or(0.0).max(last_end).max(1.0),
                 source: if cloud.is_some() { "cloud".into() } else if spec.engine == "qwen3" { "qwen3".into() } else { "whisper".into() },
-                model: cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.to_string()),
+                model: cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.clone()),
                 language: t.language.clone(),
                 install,
                 translation,
@@ -862,7 +862,11 @@ fn cancel_job(state: State<'_, AppState>, id: String) {
 }
 
 #[tauri::command]
-fn asr_models(state: State<'_, AppState>) -> Vec<asr::ModelInfo> { asr::list_models(&state.data) }
+async fn asr_models(state: State<'_, AppState>) -> Res<Vec<asr::ModelInfo>> {
+    // Looking through other apps' folders takes a second or two: off the main thread.
+    let data = state.data.clone();
+    tokio::task::spawn_blocking(move || asr::list_models(&data)).await.map_err(e)
+}
 
 #[tauri::command]
 async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String, mirror_first: bool) -> Res<()> {
@@ -878,9 +882,13 @@ async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String, 
 }
 
 #[tauri::command]
+fn rescan_models() { asr::rescan(); }
+
+#[tauri::command]
 fn delete_model(state: State<'_, AppState>, id: String) -> Res<()> {
-    let spec = asr::spec(&id).ok_or("未知模型")?;
-    let _ = std::fs::remove_file(asr::models_dir(&state.data).join(spec.file));
+    // A link to a file another app keeps is only unlinked; the file itself stays.
+    let r = asr::resolve(&state.data, &id).ok_or("未知模型")?;
+    let _ = std::fs::remove_file(&r.path);
     Ok(())
 }
 
@@ -905,6 +913,7 @@ fn get_settings(state: State<'_, AppState>) -> Res<Value> {
 #[tauri::command]
 fn set_settings(state: State<'_, AppState>, settings: Value) -> Res<()> {
     net::set_proxy(settings["proxy"].as_str().unwrap_or("")).map_err(e)?;
+    *asr::YT_BROWSER.write().unwrap() = settings["ytCookiesBrowser"].as_str().unwrap_or("").to_string();
     db::set_setting(&state.db.lock().unwrap(), "app", &settings.to_string()).map_err(e)
 }
 
@@ -1036,6 +1045,7 @@ pub fn run() {
             conn.execute("INSERT OR IGNORE INTO shows(id,kind,title,feed_url,updated_at) VALUES('single','single','单独打开','',0)", [])?;
             if let Some(s) = db::get_setting(&conn, "app")?.and_then(|r| serde_json::from_str::<Value>(&r).ok()) {
                 let _ = net::set_proxy(s["proxy"].as_str().unwrap_or(""));
+                *asr::YT_BROWSER.write().unwrap() = s["ytCookiesBrowser"].as_str().unwrap_or("").to_string();
             }
             // Release builds serve the interface over http://localhost (YouTube refuses tauri://), from a hot
             // update when one is active (ota.rs), else from the files built into the app.
@@ -1091,7 +1101,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

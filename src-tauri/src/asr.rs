@@ -40,14 +40,166 @@ pub struct ModelInfo {
     pub size_mb: u32,
     pub note: String,
     pub installed: bool,
+    /** The app whose copy is used (found on this computer, linked, not downloaded). */
+    pub from: Option<String>,
 }
 
 pub fn models_dir(data: &Path) -> PathBuf { data.join("models") }
 
 pub fn list_models(data: &Path) -> Vec<ModelInfo> {
-    MODELS.iter().map(|m| ModelInfo {
-        id: m.id.into(), name: m.name.into(), size_mb: m.size_mb, note: m.note.into(), installed: models_dir(data).join(m.file).is_file(),
-    }).collect()
+    adopt_found(data);
+    let dir = models_dir(data);
+    let mut out: Vec<ModelInfo> = MODELS.iter().map(|m| {
+        let path = dir.join(m.file);
+        let from = linked_from(&path);
+        ModelInfo {
+            id: m.id.into(), name: m.name.into(), size_mb: m.size_mb,
+            note: m.note.into(),
+            installed: path.is_file(),
+            from,
+        }
+    }).collect();
+    // Other whisper.cpp / Qwen3-ASR files found on this computer can be used as they are.
+    for (name, engine) in extra_files(data) {
+        let path = dir.join(&name);
+        let size_mb = std::fs::metadata(&path).map(|m| (m.len() / 1_048_576) as u32).unwrap_or(0);
+        let label = name.trim_start_matches("ggml-").trim_end_matches(".bin").trim_end_matches(".gguf");
+        out.push(ModelInfo {
+            id: format!("file:{name}"),
+            name: if engine == "qwen3" { format!("Qwen3-ASR（{label}）") } else { format!("Whisper {label}") },
+            size_mb,
+            note: String::new(),
+            installed: path.is_file(),
+            from: Some(linked_from(&path).unwrap_or_else(|| "本机".into())),
+        });
+    }
+    out
+}
+
+/// A model to run: its engine, file and the id it is recorded under.
+pub struct Resolved { pub id: String, pub engine: &'static str, pub path: PathBuf }
+
+/// Our own models by id, and files found on this computer as "file:<name>".
+pub fn resolve(data: &Path, id: &str) -> Option<Resolved> {
+    if let Some(m) = spec(id) { return Some(Resolved { id: m.id.into(), engine: m.engine, path: models_dir(data).join(m.file) }); }
+    let name = id.strip_prefix("file:")?;
+    if name.contains('/') || name.contains('\\') || name.contains("..") { return None; }
+    let engine = engine_of(name)?;
+    Some(Resolved { id: id.into(), engine, path: models_dir(data).join(name) })
+}
+
+/// whisper.cpp ggml files and Qwen3-ASR GGUF files, by name.
+fn engine_of(name: &str) -> Option<&'static str> {
+    let n = name.to_lowercase();
+    if n.starts_with("ggml-") && n.ends_with(".bin") && !n.contains("silero") && !n.contains("vad") { Some("whisper") }
+    else if n.starts_with("qwen3-asr") && n.ends_with(".gguf") { Some("qwen3") }
+    else { None }
+}
+
+/// The app a linked model file belongs to, from where it lives ("Screen Studio", "Hugging Face 缓存"…).
+fn linked_from(path: &Path) -> Option<String> {
+    let target = std::fs::read_link(path).ok()?;
+    let s = target.to_string_lossy();
+    if s.contains("huggingface") { return Some("Hugging Face 缓存".into()); }
+    if let Some(i) = s.find("Application Support/") { return s[i + 20..].split('/').next().map(str::to_string); }
+    target.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string())
+}
+
+/// Model files in our folder that aren't ours: links to files found elsewhere.
+fn extra_files(data: &Path) -> Vec<(String, &'static str)> {
+    let mut v: Vec<(String, &'static str)> = std::fs::read_dir(models_dir(data)).into_iter().flatten().flatten()
+        .filter_map(|e| { let n = e.file_name().to_string_lossy().to_string(); let eng = engine_of(&n)?; (!MODELS.iter().any(|m| m.file == n) && e.path().is_file()).then_some((n, eng)) })
+        .collect();
+    v.sort();
+    v
+}
+
+/// Whether a file really is a model of that kind: whisper.cpp files start with "lmgg", GGUF with "GGUF".
+fn looks_like_model(path: &Path, engine: &str) -> bool {
+    use std::io::Read;
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let min = if engine == "qwen3" { 300 } else { 30 } * 1_048_576;
+    if meta.len() < min { return false; }
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok()
+        && if engine == "qwen3" { &magic == b"GGUF" } else { &magic == b"lmgg" || &magic == b"ggjt" || &magic == b"GGUF" }
+}
+
+/// Where other apps keep speech models (whisper.cpp front ends, screen recorders, Hugging Face's cache…).
+fn model_roots() -> Vec<(PathBuf, usize)> {
+    let h = dirs::home_dir().unwrap_or_default();
+    let mut v = vec![
+        (h.join(".cache/huggingface/hub"), 5), (h.join(".cache"), 3), (h.join("whisper.cpp/models"), 1),
+        (h.join("Downloads"), 1), (h.join(".local/share"), 3),
+    ];
+    if let Some(d) = dirs::data_dir() { v.push((d, 3)); }       // ~/Library/Application Support, %APPDATA%, ~/.local/share
+    // Mac App Store apps keep theirs inside their sandbox containers.
+    if cfg!(target_os = "macos") {
+        for base in [h.join("Library/Containers"), h.join("Library/Group Containers")] {
+            for e in std::fs::read_dir(&base).into_iter().flatten().flatten() {
+                let p = e.path();
+                v.push((p.join("Data/Library/Application Support"), 3));
+                v.push((p.join("Data/Documents"), 2));
+                v.push((p.join("Library/Application Support"), 3));
+            }
+        }
+    }
+    if let Some(d) = dirs::data_local_dir() { v.push((d, 3)); } // %LOCALAPPDATA%
+    v
+}
+
+/// Links usable model files found elsewhere on this computer into our models folder (nothing is copied or
+/// downloaded; deleting the link here never touches the original). Runs at most once a minute.
+/// Looks again on the next list (Settings › 重新查找).
+pub fn rescan() { *SCANNED.lock().unwrap() = None; }
+static SCANNED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+fn adopt_found(data: &Path) {
+    let last_scan = &SCANNED;
+
+    {
+        let mut last = last_scan.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed().as_secs() < 60) { return; }
+        *last = Some(std::time::Instant::now());
+    }
+    let dir = models_dir(data);
+    let _ = std::fs::create_dir_all(&dir);
+    let own = dir.canonicalize().unwrap_or(dir.clone());
+    let mut found: Vec<PathBuf> = Vec::new();
+    fn walk(p: &Path, depth: usize, own: &Path, out: &mut Vec<PathBuf>, budget: &mut usize) {
+        if *budget == 0 { return; }
+        let Ok(rd) = std::fs::read_dir(p) else { return };
+        for e in rd.flatten() {
+            *budget = budget.saturating_sub(1);
+            if *budget == 0 { return; }
+            let Ok(ft) = e.file_type() else { continue };
+            let path = e.path();
+            if ft.is_symlink() && !path.to_string_lossy().contains("huggingface") { continue; }
+            if path.starts_with(own) { continue; }
+            let name = e.file_name().to_string_lossy().to_string();
+            if (ft.is_file() || ft.is_symlink()) && engine_of(&name).is_some() { out.push(path); }
+            else if ft.is_dir() && depth > 0 && !name.starts_with('.') || (ft.is_dir() && depth > 0 && (name == ".cache" || name.starts_with("models--"))) {
+                if matches!(name.as_str(), "node_modules" | "Caches" | "Logs" | "CrashReporter" | "Photos" | "MobileSync") { continue; }
+                walk(&path, depth - 1, own, out, budget);
+            }
+        }
+    }
+    let mut budget = 60_000;
+    for (root, depth) in model_roots() { walk(&root, depth, &own, &mut found, &mut budget); }
+    for src in found {
+        let Some(name) = src.file_name().map(|n| n.to_string_lossy().to_string()) else { continue };
+        let Some(engine) = engine_of(&name) else { continue };
+        let real = src.canonicalize().unwrap_or(src.clone());
+        let dest = dir.join(&name);
+        if dest.exists() || !looks_like_model(&real, engine) { continue; }
+        // llama.cpp-style Qwen3-ASR comes as two files (the audio encoder in an mmproj file); CrispASR needs the
+        // single-file GGUF, so those (Cap's, for one) can't be used.
+        if engine == "qwen3" && real.parent().and_then(|d| std::fs::read_dir(d).ok()).is_some_and(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().to_lowercase().starts_with("mmproj"))) { continue; }
+        #[cfg(unix)]
+        let _ = std::os::unix::fs::symlink(&real, &dest);
+        #[cfg(windows)]
+        let _ = std::fs::hard_link(&real, &dest).or_else(|_| std::os::windows::fs::symlink_file(&real, &dest));
+    }
 }
 
 /// Streams `url` into `dest` (via a .part file), reporting (received, total). Stops when `cancel` is set.
@@ -231,12 +383,40 @@ where F: Fn(PathBuf) -> Fut, Fut: std::future::Future<Output = Result<T>> {
         },
     }
 }
+/// The browser whose YouTube sign-in yt-dlp may use when YouTube asks to "confirm you're not a bot" (Settings ›
+/// 通用; empty = never). Read from the browser each time, never stored by SubCast.
+pub static YT_BROWSER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+fn bot_check(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("confirm you") && m.contains("bot") || m.contains("sign in to confirm") }
+
+/// Downloads a video's audio. When YouTube answers with its bot check, tries other YouTube clients, then (if the
+/// listener allowed it) their browser's sign-in.
 pub async fn youtube_audio(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>) -> Result<PathBuf> {
+    match youtube_audio_with(ytdlp, video_id, dir, cancel.clone(), &[]).await {
+        Err(e) if bot_check(&e.to_string()) => {
+            let alt = ["--extractor-args", "youtube:player_client=tv,web_safari,mweb"];
+            match youtube_audio_with(ytdlp, video_id, dir, cancel.clone(), &alt).await {
+                Err(e2) if bot_check(&e2.to_string()) => {
+                    let browser = YT_BROWSER.read().unwrap().clone();
+                    if browser.is_empty() {
+                        return Err(anyhow!("YouTube 要求验证「不是机器人」才能下载这个视频的音频。可以在 设置 › 通用 里选择一个已登录 YouTube 的浏览器，SubCast 会借用它的登录再试；也可以直接看视频版"));
+                    }
+                    youtube_audio_with(ytdlp, video_id, dir, cancel, &["--cookies-from-browser", &browser]).await
+                        .map_err(|e3| if bot_check(&e3.to_string()) { anyhow!("YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试") } else { e3 })
+                }
+                other => other,
+            }
+        }
+        other => other,
+    }
+}
+
+async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>, extra: &[&str]) -> Result<PathBuf> {
     tokio::fs::create_dir_all(dir).await?;
     let template = dir.join(format!("{video_id}.%(ext)s"));
     let mut cmd = tokio::process::Command::new(ytdlp);
     // m4a (AAC) decodes without ffmpeg; format 18 (mp4 with AAC audio) is the fallback every video has.
-    cmd.args(["-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/18", "--no-playlist", "--no-part", "-o"]).arg(&template);
+    cmd.args(["-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/18", "--no-playlist", "--no-part"]).args(extra).arg("-o").arg(&template);
     let proxy = net::proxy();
     if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
     cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).kill_on_drop(true).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
@@ -615,3 +795,51 @@ pub fn worker_main(args: &[String]) -> i32 {
         Err(e) => { emit(serde_json::json!({"type": "error", "message": e.to_string()})); 1 }
     }
 }
+
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+    #[test]
+    fn links_models_found_elsewhere_and_unlinks_without_touching_them() {
+        let home = std::env::temp_dir().join(format!("subcast-scan-{}", uuid::Uuid::new_v4()));
+        let other = home.join("OtherApp/models");
+        std::fs::create_dir_all(&other).unwrap();
+        let mut ggml = b"lmgg".to_vec(); ggml.resize(31 * 1_048_576, 0);
+        std::fs::write(other.join("ggml-medium.bin"), &ggml).unwrap();
+        std::fs::write(other.join("ggml-tiny.bin"), b"lmgg too small").unwrap();
+        let mut fake = b"XXXX".to_vec(); fake.resize(31 * 1_048_576, 0);
+        std::fs::write(other.join("ggml-small-q5_1.bin"), &fake).unwrap();
+        let data = home.join("data");
+        std::fs::create_dir_all(models_dir(&data)).unwrap();
+        let mut found = Vec::new();
+        // The same linking as adopt_found, rooted at the test folder.
+        for e in std::fs::read_dir(&other).unwrap().flatten() { found.push(e.path()); }
+        for src in found {
+            let name = src.file_name().unwrap().to_string_lossy().to_string();
+            let Some(engine) = engine_of(&name) else { continue };
+            if looks_like_model(&src, engine) { std::os::unix::fs::symlink(&src, models_dir(&data).join(&name)).unwrap(); }
+        }
+        let list = list_models(&data);
+        let medium = list.iter().find(|m| m.id == "file:ggml-medium.bin").expect("found model listed");
+        assert!(medium.installed && medium.from.is_some(), "{:?}", medium.from);
+        assert!(!list.iter().any(|m| m.id == "file:ggml-tiny.bin"), "too small is not a model");
+        assert!(!list.iter().find(|m| m.id == "small").unwrap().installed, "wrong magic is not adopted");
+        let r = resolve(&data, "file:ggml-medium.bin").unwrap();
+        assert_eq!(r.engine, "whisper");
+        std::fs::remove_file(&r.path).unwrap();
+        assert!(other.join("ggml-medium.bin").is_file(), "the original stays");
+        assert!(resolve(&data, "file:../x.bin").is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+    /// On this computer: what a real scan finds (prints, doesn't assert).
+    #[test]
+    #[ignore]
+    fn scan_this_computer() {
+        let data = std::env::temp_dir().join(format!("subcast-scan-real-{}", uuid::Uuid::new_v4()));
+        let t0 = std::time::Instant::now();
+        for m in list_models(&data) { println!("{} installed={} {} from={:?}", m.id, m.installed, m.size_mb, m.from); }
+        println!("scan took {:?}", t0.elapsed());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+}
+

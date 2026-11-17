@@ -1,7 +1,7 @@
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
-import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, Play, RefreshCw, Square, Trash2, X } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { ASR_SERVICES, VOICES } from "../lib/settings";
 import { speak, stopSpeaking } from "../lib/tts";
@@ -16,7 +16,7 @@ import { Modal } from "./Chrome";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
 import { useModelDownload } from "./TranscriptPanel";
-import { LANGS, systemLang, t, tk, tr, type LangSetting } from "../lib/i18n";
+import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC } from "../lib/i18n";
 import { ModelSettings } from "./ModelSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } from "../lib/updater";
@@ -178,7 +178,7 @@ export function SettingsDialog() {
                 <>
 <p className="muted small">{t("没有官方字幕时，用本机模型识别。音频只在本机处理，识别完即删除。")}</p>
               <div className="model-list">
-                {models.map((m) => (
+                {models.filter((m) => !m.id.startsWith("file:")).map((m) => (
                   <div key={m.id} className={`model-item ${settings.asrModel === m.id ? "on" : ""}`}>
                     <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrModel: m.id })}>
                       <span className={`radio ${settings.asrModel === m.id ? "on" : ""}`} />
@@ -186,6 +186,8 @@ export function SettingsDialog() {
                     </div>
                     {downloading?.id === m.id ? (
                       <div className="dl"><span className="small">{downloading.total ? Math.round((downloading.received / downloading.total) * 100) : 0}%</span><button className="btn ghost sm" onClick={() => cancel(m.id)}>{t("取消")}</button></div>
+                    ) : m.installed && m.from ? (
+                      <div className="dl"><span className="from-tag small" title={t("这台电脑上已有这个模型，直接使用，不占额外空间")}>{t("来自 {app}", { app: tr(m.from) })}</span><button className="icon-btn" title={t("不再使用（原文件保留）")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><X size={14} /></button></div>
                     ) : m.installed ? (
                       <div className="dl"><span className="ok-text small"><Check size={13} /> {t("已下载")}</span><button className="icon-btn" title={t("删除模型")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><Trash2 size={14} /></button></div>
                     ) : (
@@ -194,6 +196,23 @@ export function SettingsDialog() {
                   </div>
                 ))}
               </div>
+              {models.some((m) => m.id.startsWith("file:")) && (
+                <>
+                  <p className="model-found-h">{t("这台电脑上其他软件下载过的模型")}<span className="muted small">{t("直接使用，不用再下载")}</span></p>
+                  <div className="model-list">
+                    {models.filter((m) => m.id.startsWith("file:")).map((m) => (
+                      <div key={m.id} className={`model-item ${settings.asrModel === m.id ? "on" : ""}`}>
+                        <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrModel: m.id })}>
+                          <span className={`radio ${settings.asrModel === m.id ? "on" : ""}`} />
+                          <div><p>{m.name}</p><p className="muted small">{m.sizeMb >= 1024 ? `${(m.sizeMb / 1024).toFixed(1)} GB` : `${m.sizeMb} MB`}</p></div>
+                        </div>
+                        <div className="dl"><span className="from-tag small">{t("来自 {app}", { app: tr(m.from ?? "") })}</span><button className="icon-btn" title={t("不再使用（原文件保留）")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><X size={14} /></button></div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              <button className="link-btn small" onClick={async () => { await api.rescanModels(); void refresh(); notify(t("已重新查找本机的识别模型")); }}><RefreshCw size={12} /> {t("重新查找本机已有的模型")}</button>
               <label className="check"><input type="checkbox" checked={settings.mirrorFirst} onChange={(e) => saveSettings({ mirrorFirst: e.target.checked })} /> {t("优先从国内镜像（hf-mirror.com）下载模型")}</label>
               <label><span>{t("默认说话语言")}</span>
                 <select value={settings.asrLanguage} onChange={(e) => saveSettings({ asrLanguage: e.target.value })}>
@@ -222,6 +241,13 @@ export function SettingsDialog() {
                 </div>
                 <p className="muted small">{t("从 YouTube、小宇宙和其他播客 App 导入；导出的 OPML 可以在其他播客 App 里打开。")}</p>
               </div>
+              <label><span>{t("YouTube 要求验证时")}</span>
+                <select value={settings.ytCookiesBrowser ?? ""} onChange={(e) => void saveSettings({ ytCookiesBrowser: e.target.value })}>
+                  <option value="">{t("不借用浏览器登录")}</option>
+                  {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{t("借用 {name} 的 YouTube 登录", { name: b[0].toUpperCase() + b.slice(1) })}</option>)}
+                </select>
+              </label>
+              <p className="muted small">{t("下载音频或生成字幕时，YouTube 有时会要求「确认不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 会在那时借用它的登录，只在本机读取，不保存。")}</p>
               <label><span>{t("界面语言")}</span>
                 <select value={settings.uiLang} onChange={(e) => void saveSettings({ uiLang: e.target.value as LangSetting })}>
                   <option value="auto">{t("跟随系统（{name}）", { name: LANGS.find((l) => l.id === systemLang())?.name ?? "" })}</option>
@@ -275,6 +301,7 @@ function CloudAsrEditor({ a, onChange }: { a: CloudAsr; onChange: (a: CloudAsr) 
       </label>
       {a.models.length > 1 && <div className="model-chips">{a.models.map((m) => <button key={m} className={`chip sm ${a.model === m ? "on" : ""}`} onClick={() => onChange({ ...a, model: m })}>{m}</button>)}</div>}
       {a.needsKey && <label><span>API Key</span><KeyField account={`asr.${a.id}`} /></label>}
+      {a.protocol === "deepseek" && <p className="muted small">{t("已在「AI 模型」里填过 DeepSeek Key 的话，这里可以留空。")}</p>}
       <div className="row-actions">
         <span className="spacer" />
         {a.keyUrl && <button className="btn ghost sm" onClick={() => openUrl(a.keyUrl!)}><ExternalLink size={13} /> {t("获取 Key")}</button>}

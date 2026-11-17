@@ -42,9 +42,9 @@ export interface Episode {
 export interface Segment { start: number; end: number; text: string }
 export interface Transcript { episodeId: string; source: string; language: string; segments: Segment[] }
 export interface SearchResult { title: string; author: string; cover?: string; feedUrl: string; genre?: string; episodes?: number }
-export interface ModelInfo { id: string; name: string; sizeMb: number; note: string; installed: boolean }
+export interface ModelInfo { id: string; name: string; sizeMb: number; note: string; installed: boolean; /** Another app's copy, used in place (no download). */ from?: string | null }
 export interface Provider { id: string; name: string; protocol: "openai" | "anthropic" | "cli"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[]; group?: "relay" | "provider" | "local" | "cli" }
-export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
+export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai" | "deepseek"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
 export interface ChatMessage { role: "user" | "assistant"; content: string; /** Which model wrote an answer, for display. */ model?: string }
 
 /** An episode saved for offline listening. */
@@ -70,6 +70,7 @@ export const api = {
   transcribe: (episodeId: string, model: string, language: string, cloud?: CloudAsr) => invoke<Transcript>("transcribe", { episodeId, model, language, cloud: cloud ?? null }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   asrModels: () => invoke<ModelInfo[]>("asr_models"),
+  rescanModels: () => invoke<void>("rescan_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),
   deleteModel: (id: string) => invoke<void>("delete_model", { id }),
   getBlob: (episodeId: string, kind: string) => invoke<string | null>("get_blob", { episodeId, kind }),

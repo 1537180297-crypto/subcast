@@ -287,7 +287,8 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   const settingsOpen = useStore((s) => s.settingsOpen);
   useEffect(() => {
     setCloudKey(null);
-    if (cloud?.needsKey && !settingsOpen) void api.hasApiKey(`asr.${cloud.id}`).then(setCloudKey);
+    // DeepSeek recognition shares the Q&A key.
+    if (cloud?.needsKey && !settingsOpen) void Promise.all([api.hasApiKey(`asr.${cloud.id}`), cloud.protocol === "deepseek" ? api.hasApiKey("deepseek") : Promise.resolve(false)]).then(([a, b]) => setCloudKey(a || b));
   }, [cloud?.id, settingsOpen]);
   const missingKey = !!cloud?.needsKey && cloudKey === false;
   const pickEngine = (value: string) => {
@@ -382,6 +383,11 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
       {official === "error" && officialError && <p className="gen-warn" title={tr(officialError)}><span>{t("节目自带的字幕没读到：{error}", { error: plainError(tr(officialError)) })}</span></p>}
       <button className="btn primary gen-go" onClick={generate} disabled={!model}>{missingKey ? t("先填写 API Key") : t("生成字幕")}</button>
       {needsDownload && <p className="gen-size">{t("第一次会先下载识别模型（约 {size}），之后不用再下载", { size })}</p>}
+      {needsDownload && (() => {
+        // A model this computer already has (ours, or another app's) saves the download.
+        const have = models.find((m) => m.installed && !m.from) ?? models.find((m) => m.installed);
+        return have ? <button className="link-btn gen-alt" onClick={() => saveSettings({ asrEngine: "local", asrModel: have.id })}>{have.from ? t("改用{app}里已有的 {name}，不用下载", { app: tr(have.from), name: have.name }) : t("改用已下载的 {name}", { name: tr(have.name) })}</button> : null;
+      })()}
       {missingKey && <p className="gen-size">{t("用{name}识别需要它的 API Key，填好就能开始", { name: t(cloud!.name) })}</p>}
       <button className="link-btn gen-more" aria-expanded={options} onClick={() => setOptions(!options)}>{t("识别设置")}<ChevronDown size={12} className={options ? "flip" : ""} /></button>
       {!options && <NightNote />}

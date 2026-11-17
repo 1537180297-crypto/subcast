@@ -1534,3 +1534,37 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .theater-bar .controls .play-btn { background: #fff; color: #111; }
 .video.theater:not(.idle) .subtitle-overlay { bottom: calc(9vh + 56px); }
 .video.theater .subtitle-overlay { transition: bottom .25s ease; }
+/* Full screen keeps the whole picture: a 16:9 box centred in the screen (letterboxed on other shapes), so the
+   embed's edge crop stays exactly the player chrome and nothing of the video is cut off. */
+.video.theater .video-host, .video.theater .video-native { inset: auto; left: 50%; top: 50%; width: min(100vw, 177.78vh); height: min(56.25vw, 100vh); transform: translate(-50%, -50%); }
+.video.theater .video-native { object-fit: contain; }
+.from-tag { padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--text-2); white-space: nowrap; }
+.model-found-h { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 6px; font-size: 13px; font-weight: 600; }
+.gen-alt { font-size: 12.5px; }
+/* The one video player, kept at the root (VideoDock): over the page's slot, or floating when the page is left. */
+.video-slot { width: 100%; aspect-ratio: 16 / 9; border-radius: 12px; background: #000; flex: none; }
+.video-dock { position: fixed; z-index: 30; border-radius: 12px; overflow: hidden; }
+.video-dock .video { width: 100%; height: 100%; aspect-ratio: auto; border-radius: 0; }
+.video-dock.floating { right: 24px; bottom: 96px; width: 340px; height: 191px; z-index: 45; box-shadow: 0 12px 40px rgba(0,0,0,.28); }
+.video-dock.floating .subtitle-overlay p { font-size: 12px !important; }
+.video-dock.floating .sub-orig { display: none; }
+.video-float-bar { position: absolute; top: 6px; right: 6px; z-index: 7; display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+.video-dock.floating:hover .video-float-bar { opacity: 1; }
+.video-float-bar .icon-btn { background: rgba(0,0,0,.55); color: #fff; }
+.video-dock.theater-host { clip-path: none !important; z-index: 400; }
+/* Audio episodes: current line, and the next one waiting below it. */
+.asub { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 4px 8px; }
+.asub-line { display: flex; flex-direction: column; gap: 3px; max-width: 46em; animation: asub-in .32s var(--ease, ease) both; }
+.asub-line p { margin: 0; line-height: 1.5; }
+.asub-line.now .sub-zh { font-size: 20px; font-weight: 600; color: var(--text); }
+.asub-line.now .sub-orig { font-size: 15px; color: var(--text-2); }
+/* The next line: smaller and quiet; a small dot above marks it as coming up. */
+.asub-line.next { opacity: .42; transform-origin: top center; }
+.asub-line.next .sub-zh { font-size: 15px; font-weight: 500; color: var(--text); }
+.asub-line.next .sub-orig { font-size: 13px; color: var(--text-2); }
+.asub-line.next::before { content: ""; align-self: center; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .7; margin-bottom: 2px; }
+@keyframes asub-in { from { opacity: 0; transform: translateY(8px); } }
+.asub-line.next { animation-name: asub-next-in; }
+@keyframes asub-next-in { from { opacity: 0; transform: translateY(10px); } to { opacity: .42; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .asub-line { animation: none; } }
+.audio-sub { min-height: 150px; }
