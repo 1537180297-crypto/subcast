@@ -34,7 +34,8 @@ export function startJobListeners() {
   });
 }
 
-/** Cached transcript, else the publisher's subtitles. */
+/** Cached transcript, else the publisher's subtitles, else the shared library: all before an episode is called
+ *  "no subtitles", so nobody downloads a model for an episode someone already transcribed. */
 export async function loadTranscript(ep: Episode) {
   const s = useJobs.getState();
   if (s.transcripts[ep.id] || s.officialChecked[ep.id] === "searching") return;
@@ -42,8 +43,13 @@ export async function loadTranscript(ep: Episode) {
   // Before 0.2.1 a Chinese video that also had English subtitles opened in English: fetch those again.
   const stale = cached?.source.startsWith("youtube") && /[\u4e00-\u9fff].*[\u4e00-\u9fff]/.test(ep.title) && !/[\u3040-\u30ff]/.test(ep.title) && !cached.language.toLowerCase().startsWith("zh");
   if (cached && (!stale || (await api.getBlob(ep.id, "track-picked")))) { patch("transcripts", ep.id, cached); return; }
-  if (!ep.videoId && !ep.transcriptUrl && ep.transcriptType !== "qiaomu") { patch("officialChecked", ep.id, "none"); return; }
   patch("officialChecked", ep.id, "searching");
+  const fromShared = async () => {
+    const sh = await api.sharedTranscript(ep.id).catch(() => null);
+    if (sh) { patch("transcripts", ep.id, sh); patch("officialChecked", ep.id, "found"); return true; }
+    return false;
+  };
+  if (!ep.videoId && !ep.transcriptUrl && ep.transcriptType !== "qiaomu") { if (!(await fromShared())) patch("officialChecked", ep.id, "none"); return; }
   try {
     const t = await api.fetchOfficialTranscript(ep.id);
     if (t) {
@@ -51,9 +57,10 @@ export async function loadTranscript(ep: Episode) {
       // Still not Chinese (a Chinese title over an English video): settled, don't check again on every open.
       if (stale && !t.language.toLowerCase().startsWith("zh")) void api.setBlob(ep.id, "track-picked", "auto");
     } else if (cached) { patch("transcripts", ep.id, cached); patch("officialChecked", ep.id, "found"); }
-    else patch("officialChecked", ep.id, "none");
+    else if (!(await fromShared())) patch("officialChecked", ep.id, "none");
   } catch (e) {
     if (cached) { patch("transcripts", ep.id, cached); patch("officialChecked", ep.id, "found"); return; }
+    if (await fromShared()) return;
     patch("officialError", ep.id, rawErrorText(e));
     patch("officialChecked", ep.id, "error");
   }

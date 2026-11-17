@@ -75,6 +75,7 @@ export const api = {
   asrModels: () => invoke<ModelInfo[]>("asr_models"),
   logListen: (episodeId: string, showId: string, seconds: number, translated: boolean) => invoke<void>("log_listen", { episodeId, showId, seconds, translated }),
   listeningStats: (since: string) => invoke<ListenRow[]>("listening_stats", { since }),
+  sharedTranscript: (episodeId: string) => invoke<Transcript | null>("shared_transcript", { episodeId }),
   asrElsewhere: () => invoke<{ app: string; format: string }[]>("asr_elsewhere"),
   rescanModels: () => invoke<void>("rescan_models"),
   downloadModel: (id: string, mirrorFirst: boolean) => invoke<void>("download_model", { id, mirrorFirst }),

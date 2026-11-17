@@ -1,3 +1,4 @@
+import { sizeMb } from "../lib/format";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
@@ -188,7 +189,7 @@ export function SettingsDialog() {
                   <div key={m.id} className={`model-item ${settings.asrModel === m.id ? "on" : ""}`}>
                     <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrModel: m.id })}>
                       <span className={`radio ${settings.asrModel === m.id ? "on" : ""}`} />
-                      <div><p>{tr(m.name)}</p><p className="muted small">{tr(m.note)} · {m.sizeMb} MB</p></div>
+                      <div><p>{tr(m.name)}</p><p className="muted small">{tr(m.note)} · {sizeMb(m.sizeMb)}</p></div>
                     </div>
                     {downloading?.id === m.id ? (
                       <div className="dl"><span className="small">{downloading.total ? Math.round((downloading.received / downloading.total) * 100) : 0}%</span><button className="btn ghost sm" onClick={() => cancel(m.id)}>{t("取消")}</button></div>
@@ -213,7 +214,7 @@ export function SettingsDialog() {
                       <div key={m.id} className={`model-item ${settings.asrModel === m.id ? "on" : ""}`}>
                         <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrModel: m.id })}>
                           <span className={`radio ${settings.asrModel === m.id ? "on" : ""}`} />
-                          <div><p>{m.name}</p><p className="muted small">{m.sizeMb >= 1024 ? `${(m.sizeMb / 1024).toFixed(1)} GB` : `${m.sizeMb} MB`}</p></div>
+                          <div><p>{m.name}</p><p className="muted small">{sizeMb(m.sizeMb)}</p></div>
                         </div>
                         <div className="dl"><span className="from-tag small">{t("来自 {app}", { app: tr(m.from ?? "") })}</span><button className="icon-btn" title={t("不再使用（原文件保留）")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><X size={14} /></button></div>
                       </div>

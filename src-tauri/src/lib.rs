@@ -654,23 +654,37 @@ fn clear_temp(state: State<'_, AppState>) -> Res<()> {
     Ok(())
 }
 
+/// Someone else's subtitles for this episode from the shared library, saved as this episode's transcript (and
+/// their Chinese as its translation). None when the library hasn't got it.
+async fn take_shared(state: &AppState, ep: &Episode) -> Option<Transcript> {
+    let mut hit = shared::lookup(&shared::keys(ep)).await?;
+    let translation = hit.translation.take();
+    let t = shared::into_transcript(&ep.id, hit);
+    db::save_transcript(&state.db.lock().unwrap(), &t).ok()?;
+    // The shared Chinese lines become this episode's translation (engine "shared"); the subtitle view only
+    // machine-translates the gaps. Saved after the transcript, which clears an episode's old blobs.
+    if let Some(tr) = translation.filter(|tr| tr.items.len() == t.segments.len() && tr.lang.starts_with("zh")) {
+        let conn = state.db.lock().unwrap();
+        let _ = db::set_blob(&conn, &ep.id, "zh", &serde_json::to_string(&tr.items).unwrap_or_default());
+        let _ = db::set_blob(&conn, &ep.id, "zh-engine", "shared");
+    }
+    Some(t)
+}
+
+/// Checked when an episode opens, before it is called "no subtitles", so no model is downloaded for it.
+#[tauri::command]
+async fn shared_transcript(state: State<'_, AppState>, episode_id: String) -> Res<Option<Transcript>> {
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    Ok(take_shared(&state, &ep).await)
+}
+
 #[tauri::command]
 async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: String, model: String, language: String, cloud: Option<cloud::CloudAsr>) -> Res<Transcript> {
     let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
     // Someone else may have shared this episode's subtitles; a hit skips the download + ASR pass
     // entirely (and works even without a local model).
     let share_keys = shared::keys(&ep);
-    if let Some(mut hit) = shared::lookup(&share_keys).await {
-        let translation = hit.translation.take();
-        let t = shared::into_transcript(&ep.id, hit);
-        db::save_transcript(&state.db.lock().unwrap(), &t).map_err(e)?;
-        // The shared Chinese lines become this episode's translation (engine "shared"); the subtitle view only
-        // machine-translates the gaps. Saved after the transcript, which clears an episode's old blobs.
-        if let Some(tr) = translation.filter(|tr| tr.items.len() == t.segments.len() && tr.lang.starts_with("zh")) {
-            let conn = state.db.lock().unwrap();
-            let _ = db::set_blob(&conn, &ep.id, "zh", &serde_json::to_string(&tr.items).unwrap_or_default());
-            let _ = db::set_blob(&conn, &ep.id, "zh-engine", "shared");
-        }
+    if let Some(t) = take_shared(&state, &ep).await {
         asr_emit(&app, &episode_id, "done", 1.0, None, None);
         return Ok(t);
     }
@@ -1115,7 +1129,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, export_opml, local_agents, probe_agent, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

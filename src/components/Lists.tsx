@@ -171,6 +171,10 @@ function ShowTile({ show }: { show: Show }) {
 }
 
 /** A compact episode card for the home rows: picture, show and date, title, and a play button on hover. */
+/** Subtitles open with the episode, no transcription: already made here, the publisher's (YouTube captions,
+ *  a feed transcript) or a 精读 transcript. Shared-library hits aren't known until opened. */
+const hasSubs = (e: Episode) => !!(e.hasTranscript || e.transcriptUrl || e.deep || e.videoId);
+
 function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const zh = useZh(ep.title);
@@ -183,6 +187,7 @@ function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
         {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" /> : <div className="cover-fallback" />}
         {pct > 0 && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
+        {hasSubs(ep) && <span className="thumb-subs">{t("有字幕")}</span>}
         <button type="button" className="card-play" title={t("播放")} aria-label={t("播放")} onClick={play}><Play size={16} fill="currentColor" /></button>
       </div>
       <p className="ep-kicker">{ep.showId !== "single" && <ShowName title={ep.showTitle} />}<span>{left ? t("剩 {n} 分钟", { n: left }) : date(ep.published)}</span></p>
@@ -229,7 +234,9 @@ export function LatestView() {
   // Up next: other unfinished episodes, then saved ones not started yet.
   const upNext = [...recent.filter((e) => unfinished(e) && e.id !== hero?.id), ...favEps.filter((e) => !unfinished(e) && !(e.duration && e.progress >= e.duration * 0.97))]
     .filter((e, i, a) => a.findIndex((x) => x.id === e.id) === i).slice(0, 12);
-  const fresh = (eps ?? []).filter((e) => !(e.duration && e.progress >= e.duration * 0.97));
+  // Latest first, but in the top grid episodes that open with subtitles come before ones that need transcribing.
+  const unheard = (eps ?? []).filter((e) => !(e.duration && e.progress >= e.duration * 0.97));
+  const fresh = [...unheard.slice(0, 18).filter(hasSubs), ...unheard.slice(0, 18).filter((e) => !hasSubs(e)), ...unheard.slice(18)];
   const recs = useMemo(() => recommend({ shows, recent, favorites: favEps, downloads: dlEps }, 6), [shows, recent, favEps, dlEps]);
   const subscribe = async (input: string, name: string) => {
     setAdding(input);
