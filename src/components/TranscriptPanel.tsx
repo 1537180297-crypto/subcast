@@ -126,12 +126,20 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const onWordClick = (e: React.MouseEvent) => {
     if (!marks || !settings.learnCard) return;
     const el = (e.target as HTMLElement).closest<HTMLElement>(".lw");
-    if (!el || window.getSelection()?.toString()) return;
+    if (!el) return;
+    // Selecting the word itself (a double-click, or dragging across it) also opens its card; a selection that
+    // reaches beyond the word is left to the selection tools.
+    const sel = window.getSelection();
+    const picked = !!sel?.toString().trim();
+    if (picked && !(sel!.anchorNode && el.contains(sel!.anchorNode) && sel!.focusNode && el.contains(sel!.focusNode))) return;
     const i = Number(el.closest<HTMLElement>("[data-i]")?.dataset.i);
     const seg = segments[i];
     if (!seg) return;
     e.stopPropagation();
-    setCard((c) => (c?.el === el ? null : { el, token: el.textContent ?? "", seg, zh: translation?.items[i] }));
+    if (picked) sel!.removeAllRanges();
+    // A plain click on the open word closes it; the second click of a double-click keeps it open.
+    const toggle = !picked && e.detail < 2;
+    setCard((c) => (toggle && c?.el === el ? null : c?.el === el ? c : { el, token: el.textContent ?? "", seg, zh: translation?.items[i] }));
   };
 
   useEffect(() => { if (transcript) void loadTranslation(ep.id, transcript.segments.length); }, [transcript, ep.id]);
