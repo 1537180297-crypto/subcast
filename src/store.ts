@@ -11,7 +11,9 @@ export type View =
   | { kind: "downloads" }
   | { kind: "show"; id: string }
   | { kind: "channel"; input: string }
-  | { kind: "episode"; id: string };
+  | { kind: "episode"; id: string }
+  | { kind: "words" }
+  | { kind: "settings" };
 
 export interface PlayerHandle {
   seek(seconds: number): void;
@@ -21,6 +23,8 @@ export interface PlayerHandle {
   /** The episode this player plays. A video's player can be ready before the episode becomes current. */
   episodeId?: string;
 }
+
+export type SettingsSection = "subtitles" | "ai" | "general" | "learn" | "about" | "model" | "asr" | "reading" | "tts" | "shortcuts" | "storage";
 
 interface State {
   speaking: boolean;
@@ -51,8 +55,11 @@ interface State {
   /** Which tab the add dialog opens on. */
   addTab?: "search" | "link" | "import";
   toast: string | null;
+  /** The settings page is showing (kept in step with `view`, for panels that recheck keys when it closes). */
   settingsOpen: boolean;
-  settingsSection?: "model" | "asr" | "reading" | "tts" | "shortcuts" | "general" | "storage" | "about";
+  settingsSection?: SettingsSection;
+  /** Bumped by each openSettings call, so a page already open still jumps to the asked section. */
+  settingsNonce?: number;
   addOpen: boolean;
   init(): Promise<void>;
   go(view: View): void;
@@ -64,7 +71,7 @@ interface State {
   /** Loads an episode into the player without navigating. */
   load(ep: Episode): void;
   notify(text: string): void;
-  openSettings(section?: "model" | "asr" | "tts" | "general" | "storage" | "about"): void;
+  openSettings(section?: SettingsSection): void;
   /** Checks every subscription for new episodes; tells the user when there are some. */
   checkUpdates(): Promise<void>;
   lastChecked: number;
@@ -112,12 +119,15 @@ export const useStore = create<State>((set, get) => ({
     } catch { /* offline: try again next time */ }
   },
   go(view) {
-    set((s) => ({ view, history: [...s.history.slice(-30), s.view] }));
+    const cur = get().view;
+    // Opening settings again while on it only switches the section (see openSettings), no new history entry.
+    if (view.kind === "settings" && cur.kind === "settings") return;
+    set((s) => ({ view, history: [...s.history.slice(-30), s.view], settingsOpen: view.kind === "settings" }));
   },
   back() {
     const h = get().history;
-    if (h.length) set({ view: h[h.length - 1], history: h.slice(0, -1) });
-    else set({ view: { kind: "latest" } });
+    const view = h.length ? h[h.length - 1] : { kind: "latest" as const };
+    set({ view, history: h.slice(0, -1), settingsOpen: view.kind === "settings" });
   },
   async reloadShows() {
     // Unchanged after a refresh (the usual case): keep the same array, so pages that depend on it don't reload.
@@ -146,7 +156,10 @@ export const useStore = create<State>((set, get) => ({
     window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => set({ toast: null }), 4200);
   },
-  openSettings: (section) => set({ settingsOpen: true, settingsSection: section }),
+  openSettings(section) {
+    set((s) => ({ settingsSection: section, settingsNonce: (s.settingsNonce ?? 0) + 1 }));
+    get().go({ kind: "settings" });
+  },
   set: (patch) => set(patch),
 }));
 
