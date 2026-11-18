@@ -6,12 +6,12 @@ import { create } from "zustand";
 import { api } from "./api";
 import { useStore } from "../store";
 
-/** The clip being fetched for playback right now (its key), for a spinner on the button that asked. */
-export const useClipLoading = create<{ key: string | null }>(() => ({ key: null }));
+/** The sentence being played (its key) and whether its clip is still being cut, for the button that asked:
+ *  a spinner while loading, pause while playing. */
+export const useClipState = create<{ key: string | null; loading: boolean }>(() => ({ key: null, loading: false }));
 export const clipKey = (episodeId: string, start: number, end: number) => `${episodeId}|${start.toFixed(2)}|${end.toFixed(2)}`;
 
 let el: HTMLAudioElement | null = null;
-let stopTimer: number | undefined;
 let unwatch: (() => void) | null = null;
 /** Bumped by every play and stop, so a clip that arrives late doesn't start over something newer. */
 let turn = 0;
@@ -46,10 +46,16 @@ function pump() {
 
 export function stopClip() {
   turn++;
-  window.clearTimeout(stopTimer);
-  unwatch?.(); unwatch = null;
+  // A sentence playing in the main player is paused there too.
+  if (unwatch) { unwatch(); unwatch = null; const s = useStore.getState(); if (s.playing) s.player?.toggle(); }
   if (el) el.pause();
-  useClipLoading.setState({ key: null });
+  useClipState.setState({ key: null, loading: false });
+}
+
+/** Plays the sentence, or stops it when it is the one playing. */
+export async function toggleClip(ep: { id: string }, start: number, end: number): Promise<boolean> {
+  if (useClipState.getState().key === clipKey(ep.id, start, end)) { stopClip(); return true; }
+  return playClip(ep, start, end);
 }
 
 /** Plays [start, end] of an episode. Resolves false when there is no way to play it (the caller can read the text aloud). */
@@ -58,30 +64,38 @@ export async function playClip(ep: { id: string }, start: number, end: number): 
   const mine = turn;
   const s = useStore.getState();
   const pad = 0.15;
+  const key = clipKey(ep.id, start, end);
+  const done = () => { if (mine === turn) useClipState.setState({ key: null, loading: false }); };
   if (s.current?.id === ep.id && s.player) {
     const player = s.player;
     player.seek(Math.max(0, start - pad));
     player.play();
+    useClipState.setState({ key, loading: false });
     const startedAt = Date.now();
-    // Pause once playback passes the end of the sentence (time updates a few times a second).
-    unwatch = useStore.subscribe((st) => {
-      if (st.time >= end + pad || Date.now() - startedAt > (end - start + 8) * 1000) {
+    // Pause once playback passes the end of the sentence (time updates a few times a second); stop watching when
+    // the listener pauses it themselves (not the brief stall while seeking).
+    unwatch = useStore.subscribe((st, prev) => {
+      const over = st.time >= end + pad || Date.now() - startedAt > (end - start + 8) * 1000;
+      if (over || (prev.playing && !st.playing && Date.now() - startedAt > 1500) || st.current?.id !== ep.id) {
         unwatch?.(); unwatch = null;
-        if (st.playing) st.player?.toggle();
+        if (over && st.playing) st.player?.toggle();
+        done();
       }
     });
     return true;
   }
-  const key = clipKey(ep.id, start, end);
-  useClipLoading.setState({ key });
+  useClipState.setState({ key, loading: true });
   const path = await prepareClip(ep.id, start, end);
   if (mine !== turn) return true;
-  useClipLoading.setState({ key: null });
-  if (!path) return false;
+  if (!path) { done(); return false; }
   if (!el) el = new Audio();
+  const a = el;
+  // (A pause event from stopping the previous sentence can arrive after this one has started: not paused then.)
+  a.onended = a.onpause = () => { if (a.paused) done(); };
   el.src = convertFileSrc(path);
   el.currentTime = 0;
-  try { await el.play(); } catch { return false; }
+  useClipState.setState({ key, loading: false });
+  try { await el.play(); } catch { done(); return false; }
   return true;
 }
 

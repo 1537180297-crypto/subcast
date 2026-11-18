@@ -29,8 +29,9 @@ useStore.subscribe((s, prev) => {
   // A seek asked for before the player existed (a chapter link in the notes) starts playback from there.
   if (s.seekWhenReady && s.seekWhenReady.id === s.current?.id) {
     const { at } = s.seekWhenReady;
+    const play = s.playWhenReady === s.current?.id;
     useStore.setState({ seekWhenReady: null, playWhenReady: null });
-    window.setTimeout(() => p.seek(at), 0);
+    window.setTimeout(() => { p.seek(at); if (play) p.play(); }, 0);
   } else if (s.playWhenReady && s.current?.id === s.playWhenReady) {
     useStore.setState({ playWhenReady: null });
     window.setTimeout(() => p.play(), 0);
