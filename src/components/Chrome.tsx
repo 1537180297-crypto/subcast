@@ -25,7 +25,8 @@ export function Sidebar() {
   useKonami(() => { const on = document.body.classList.toggle("tape-seek"); useStore.getState().notify(on ? t("磁带模式已开启") : t("磁带模式已关闭")); });
   const is = (v: View) => view.kind === v.kind && (v.kind !== "show" || (view.kind === "show" && view.id === v.id)) && (v.kind !== "channel" || (view.kind === "channel" && view.input === v.input));
   // A 精读 channel is listed once: hidden here when its show is already followed (either version).
-  const curated = PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
+  const showCurated = useStore((s) => s.settings.sideCurated);
+  const curated = !showCurated ? [] : PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
   const { sideOpen, put: putLayout } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put })));
   const updateWaiting = useUpdate(hasUpdate);
   const rail = !sideOpen;

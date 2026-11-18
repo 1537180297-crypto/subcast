@@ -200,6 +200,7 @@ export function SettingsDialog() {
                 </label>
                 <label className="check"><input type="checkbox" checked={settings.youtubePromo} onChange={(e) => saveSettings({ youtubePromo: e.target.checked })} /> {t("显示节目的 YouTube 订阅按钮")}</label>
                 {settings.youtubePromo && <label className="check"><input type="checkbox" checked={!settings.homeBannerHidden} onChange={(e) => saveSettings({ homeBannerHidden: !e.target.checked })} /> {t("在发现页顶部推荐「词元之外」")}</label>}
+                <label className="check"><input type="checkbox" checked={settings.sideCurated} onChange={(e) => saveSettings({ sideCurated: e.target.checked })} /> {t("在侧栏显示「乔木精读」推荐")}</label>
               </section>
               <section className="setup-block">
                 <p className="setup-title">{t("订阅")}</p>

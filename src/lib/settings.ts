@@ -56,6 +56,8 @@ export interface Settings {
   autoUpdate: boolean;
   /** The Discover banner for our own show was closed by the user. */
   homeBannerHidden: boolean;
+  /** List the 乔木精读 shows not yet followed under the sidebar's subscriptions. */
+  sideCurated: boolean;
   /** Upload transcripts we make to the shared library (anonymous; reading shared ones is always on). */
   shareTranscripts: boolean;
 }
@@ -181,6 +183,7 @@ export const DEFAULTS: Settings = {
   youtubePromo: true,
   autoUpdate: true,
   homeBannerHidden: false,
+  sideCurated: true,
   shareTranscripts: true,
 };
 
