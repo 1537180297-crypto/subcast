@@ -19,6 +19,8 @@ import { Modal } from "./Chrome";
 import { playSoon } from "./Players";
 import { LearnStats } from "./LearnStats";
 import { ask } from "../lib/confirm";
+import confetti from "canvas-confetti";
+import { doneSound, keySound, rightSound, wrongSound } from "../lib/sfx";
 import { EmptyState } from "./Illustrations";
 import type { LearnLevel } from "../lib/settings";
 
@@ -650,7 +652,7 @@ export async function exportWords(kind: "anki" | "csv", words: Word[]) {
   finally { exporting = false; }
 }
 
-const GRADES: [Grade, string, string][] = [[Rating.Again, "again", tk("忘了")], [Rating.Hard, "", tk("困难")], [Rating.Good, "good", tk("记得")], [Rating.Easy, "", tk("简单")]];
+const GRADES: [Grade, string, string][] = [[Rating.Again, "again", tk("忘了")], [Rating.Hard, "hard", tk("困难")], [Rating.Good, "good", tk("记得")], [Rating.Easy, "easy", tk("简单")]];
 
 type Mode = "recall" | "spell";
 const MODE_KEY = "subcast-review-mode";
@@ -691,11 +693,54 @@ function Letters({ typed, answer }: { typed: string; answer: string }) {
 }
 
 /** The spelling front: type the blanked word, each letter checked as you go (after qwerty-learner). */
+// Confetti on our own canvas (no worker: blob workers aren't something to rely on in every web view).
+let fire: confetti.CreateTypes | null = null;
+const CONFETTI = ["#e8582a", "#f2a679", "#f2d091", "#5d8c7b", "#3a6df0"];
+function confettiAt(opts: confetti.Options) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (!fire) {
+    const c = document.createElement("canvas");
+    c.className = "confetti";
+    document.body.appendChild(c);
+    fire = confetti.create(c, { resize: true, useWorker: false });
+  }
+  void fire({ colors: CONFETTI, shapes: ["square", "circle"], scalar: 0.9, ...opts });
+}
+/** A burst from an element (a word spelled right). */
+function burst(el: Element | null) {
+  const r = el?.getBoundingClientRect();
+  const origin = r ? { x: (r.left + r.width / 2) / window.innerWidth, y: (r.top + r.height / 2) / window.innerHeight } : { x: 0.5, y: 0.5 };
+  confettiAt({ particleCount: 60, spread: 70, startVelocity: 30, ticks: 140, origin });
+}
+/** From both sides (a finished review), like qwerty-learner's chapter end. */
+function celebrate() {
+  window.setTimeout(() => confettiAt({ particleCount: 60, angle: 60, spread: 100, origin: { x: 0, y: 0.7 }, ticks: 260 }), 150);
+  window.setTimeout(() => confettiAt({ particleCount: 60, angle: 120, spread: 100, origin: { x: 1, y: 0.7 }, ticks: 260 }), 300);
+}
+
 function Spell({ w, onCheck, onExit }: { w: Word; onCheck: (r: { ok: boolean; typed: string; hints: number }) => void; onExit: () => void }) {
   const [typed, setTyped] = useState("");
   const [hints, setHints] = useState(0);
+  const [shake, setShake] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  const row = useRef<HTMLSpanElement>(null);
   const answer = w.word;
+  const finish = (v: string) => {
+    const ok = letter(v) === letter(answer);
+    if (ok) { rightSound(); burst(row.current); } else { wrongSound(); }
+    onCheck({ ok, typed: v, hints });
+  };
+  // Each letter is checked as it is typed: a click when right, a buzz and a shake when wrong; the whole word
+  // spelled right finishes at once (no Enter needed).
+  const change = (raw: string) => {
+    const v = raw.replace(/\s/g, "");
+    if (v.length > typed.length) {
+      const k = v.length - 1;
+      if (letter(v[k]) === letter(answer[k] ?? "")) keySound(); else { wrongSound(); setShake((n) => n + 1); }
+    }
+    setTyped(v);
+    if (letter(v) === letter(answer)) finish(v);
+  };
   const hint = () => {
     let k = 0;
     while (k < typed.length && letter(typed[k]) === letter(answer[k])) k++;
@@ -705,11 +750,11 @@ function Spell({ w, onCheck, onExit }: { w: Word; onCheck: (r: { ok: boolean; ty
   };
   return (
     <div className="sp" onClick={() => input.current?.focus()}>
-      <Letters typed={typed} answer={answer} />
+      <span ref={row} key={shake} className={shake ? "sp-shake" : ""}><Letters typed={typed} answer={answer} /></span>
       <input ref={input} className="sp-in" autoFocus value={typed} maxLength={answer.length + 3} spellCheck={false} autoCapitalize="off" autoComplete="off" aria-label={t("拼写这个词")}
-        onChange={(e) => setTyped(e.target.value.replace(/\s/g, ""))}
+        onChange={(e) => change(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter") { e.preventDefault(); onCheck({ ok: letter(typed) === letter(answer), typed, hints }); }
+          if (e.key === "Enter") { e.preventDefault(); finish(typed); }
           else if (e.key === "Tab") { e.preventDefault(); hint(); }
           else if (e.key === " ") { e.preventDefault(); void playWord(w); }
           else if (e.key === "Escape") onExit();
@@ -764,6 +809,8 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
     return () => window.removeEventListener("keydown", k);
   }, [flipped, rate, w, onDone, suggest, mode]);
 
+  const finished = !w && list.length > 0;
+  useEffect(() => { if (finished) { doneSound(); celebrate(); } }, [finished]);
   if (!w) return (
     <div className="page review-page">
       <EmptyState art={<span className="wb-empty-ic done"><Check size={28} /></span>} title={t("今天的复习完成了")} note={t("复习了 {n} 个词，明天再来。", { n: new Set(list.map((x) => x.id)).size })}>
@@ -788,7 +835,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
           : <span className="rv-src clamp1">{sourceOf(w)} · {clock(w.start)}</span>}
         {flipped ? <>
           {spelled && (spelled.ok
-            ? <p className="sp-result ok"><Check size={14} />{spelled.hints ? t("拼对了（用了 {n} 次提示）", { n: spelled.hints }) : t("拼对了")}</p>
+            ? <p className="sp-result ok"><span className="sp-tick"><Check size={16} strokeWidth={3} /></span>{spelled.hints ? t("拼对了（用了 {n} 次提示）", { n: spelled.hints }) : t("拼对了！")}</p>
             : <p className="sp-result bad">{spelled.typed ? <Diff typed={spelled.typed} answer={w.word} /> : t("没拼出来")}</p>)}
           <p className="rv-word">{w.id}<button className="icon-btn sm rv-say" title={t("读单词（W）")} aria-label={t("读单词")} onClick={() => speak(w.id, 0.85)}><Volume2 size={16} /></button></p>
           {w.ipa && <p className="rv-ipa">/{w.ipa}/</p>}
@@ -805,13 +852,17 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
         </>}
         <button className="btn sm play rv-listen" onClick={() => void playWord(w, true)}><ClipLabel k={clipKey(w.episodeId, w.start, w.end)} label={t("再听原句")} /><span className="kbd">R</span></button>
         {flipped ? (
-          <div className="rv-rate">
-            {GRADES.map(([g, cls, label], k) => (
-              <button key={g} className={`btn ${cls === "good" ? "" : cls} ${g === suggest ? "good" : ""}`} onClick={() => rate(g)}>
-                <span className="t">{t(label)}</span>
-                <span className="s"><span className="kbd">{k + 1}</span>{gaps ? fmtWait(gaps[g]) : ""}</span>
-              </button>
-            ))}
+          <div className="rv-rating">
+            <p className="rv-rate-q">{t("记得怎么样？选一个，决定下次什么时候再考")}</p>
+            <div className="rv-rate">
+              {GRADES.map(([g, cls, label], k) => (
+                <button key={g} className={`btn ${cls}${g === suggest ? " suggested" : ""}`} onClick={() => rate(g)} title={t("按 {k}", { k: k + 1 })}>
+                  <span className="t">{t(label)}</span>
+                  <span className="s">{gaps ? t("{wait}后再考", { wait: fmtWait(gaps[g]) }) : ""}</span>
+                </button>
+              ))}
+            </div>
+            <p className="rv-keys">{t("键盘 1–4 选择，空格选「{label}」", { label: t(GRADES.find(([g]) => g === suggest)![2]) })}</p>
           </div>
         ) : (
           mode === "spell"

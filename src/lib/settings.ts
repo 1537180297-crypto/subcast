@@ -70,6 +70,8 @@ export interface Settings {
   /** New words introduced per day in review. */
   learnDaily: number;
   learnRemind: boolean;
+  /** Key, wrong-letter and right-word sounds in spelling review. */
+  learnSounds: boolean;
   /** The one-time "想顺便学英语吗？" tip was answered. */
   learnAsked: boolean;
   /** Upload transcripts we make to the shared library (anonymous; reading shared ones is always on). */
@@ -208,6 +210,7 @@ export const DEFAULTS: Settings = {
   learnSide: true,
   learnDaily: 20,
   learnRemind: false,
+  learnSounds: true,
   learnAsked: false,
   shareTranscripts: true,
 };
