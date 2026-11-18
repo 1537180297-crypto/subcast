@@ -105,6 +105,10 @@ export const api = {
   uiCheck: () => invoke<string>("ui_check"),
   refreshConfig: () => invoke<void>("refresh_config"),
   prepareYoutube: () => invoke<void>("prepare_youtube"),
+  /** Opens a SubCast window to sign in to YouTube; `youtube-signed-in` fires when it is done. */
+  youtubeSignIn: () => invoke<void>("youtube_sign_in"),
+  youtubeSignedIn: () => invoke<boolean>("youtube_signed_in"),
+  youtubeSignOut: () => invoke<void>("youtube_sign_out"),
   openPrivacySettings: () => invoke<void>("open_privacy_settings"),
   youtubeTracks: (episodeId: string) => invoke<{ language: string; auto: boolean }[]>("youtube_tracks", { episodeId }),
   useYoutubeTrack: (episodeId: string, language: string, auto: boolean) => invoke<Transcript>("use_youtube_track", { episodeId, language, auto }),
@@ -169,7 +173,11 @@ export async function llmChat(opts: {
 /** The error as it came, for matching on its wording; show it with errorText (or tr). */
 export const rawErrorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
 /** YouTube's "confirm you're not a bot" check, as the backend words it (asr.rs with_bot_fallback). */
-export const isBotCheck = (m: string) => m.includes("YouTube 要求验证「不是机器人」。选一个"); // i18n-ignore (matches the backend's text)
+export const isBotCheck = (m: string) => m.includes("YouTube 要求验证「不是机器人」"); // i18n-ignore (matches the backend's text)
+/** The browser keeps its cookies encrypted for itself (Chrome on Windows), so borrowing its sign-in can't work. */
+export const browserLocked = (m: string) => m.includes("把登录信息加密了"); // i18n-ignore (matches the backend's text)
+/** The sign-in made in SubCast stopped working. */
+export const signInExpired = (m: string) => m.includes("在 SubCast 里登录的 YouTube 已失效"); // i18n-ignore (matches the backend's text)
 export const errorText = (e: unknown) => tr(rawErrorText(e));
 /** macOS refused SubCast access to a browser's data (import.rs NEEDS_ACCESS). */
 export const needsBrowserAccess = (m: string) => m.includes("需要你允许 SubCast 读取"); // i18n-ignore (matches the backend's text)

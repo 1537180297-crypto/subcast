@@ -222,7 +222,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .panel-empty .lead, .chat-intro .lead { font-size: 16px; font-weight: 600; }
 .panel-empty .muted { max-width: 360px; }
 .gen-options { display: flex; gap: 10px; margin-top: 6px; }
-.gen-options label, .settings label:not(.check) { display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 12px; color: var(--muted); }
+.gen-options label, .settings label:not(.check), .settings .field { display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 12px; color: var(--muted); }
 .gen-options select { width: 220px; color: var(--text); font-size: 13px; }
 .progress-block { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 380px; font-size: 12.5px; }
 
@@ -1816,3 +1816,5 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .browser-access ol { margin: 0; padding-left: 18px; color: var(--text-2); }
 .video-error .browser-access { margin: 0; background: transparent; padding: 0; color: inherit; }
 .video-error .browser-access ol { color: inherit; opacity: 0.85; }
+/* Settings › 通用 › YouTube 账号 */
+.yt-account-state { flex: 1; color: var(--text-2); font-size: 13px; }

@@ -5,7 +5,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ExternalLink, Loader2, Minimize2, Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from "lucide-react";
 import { followVolume, gainOf, setLevel, toggleMute, useVolume } from "../lib/volume";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, isBotCheck, needsBrowserAccess, type Episode } from "../lib/api";
+import { api, browserLocked, isBotCheck, needsBrowserAccess, signInExpired, type Episode } from "../lib/api";
+import { useYouTubeSignIn } from "./YouTubeAccount";
 import { BrowserAccess } from "./BrowserAccess";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
@@ -174,7 +175,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
       if (useStore.getState().current?.id === ep.id) waiting(false);
       const msg = typeof e === "string" ? e : String((e as any)?.message ?? e);
       // YouTube wants a signed-in browser: ask once, here, instead of failing or silently falling back to audio.
-      if (isBotCheck(msg)) { setBotCheck(why); return; }
+      if (isBotCheck(msg)) { setBotCheck(why); setBotWhy(browserLocked(msg) ? "locked" : signInExpired(msg) ? "expired" : "ask"); return; }
       if (needsBrowserAccess(msg)) { setDenied(why); return; }
       if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(msg) }));
     }
@@ -200,6 +201,9 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
       .finally(() => { fetching.current = false; });
   };
   const [botCheck, setBotCheck] = useState<string | null>(null);
+  /** Why the check is being shown: never signed in, the browser's sign-in is unreadable, or SubCast's expired. */
+  const [botWhy, setBotWhy] = useState<"ask" | "locked" | "expired">("ask");
+  const signIn = useYouTubeSignIn(() => { const why = botCheck ?? ""; setBotCheck(null); void fallback(why); });
   /** macOS refused access to the browser's data; holds the reason to retry with. */
   const [denied, setDenied] = useState<string | null>(null);
   const [browser, setBrowser] = useState(useStore.getState().settings.ytCookiesBrowser || "chrome");
@@ -244,14 +248,22 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
       {botCheck && (
         <div className="video-error bot-check">
           <p>{t("YouTube 要求验证「不是机器人」才能播放这个视频。")}</p>
-          <p className="small">{t("选一个已经登录 YouTube 的浏览器，SubCast 借用它的登录再试一次（只在本机读取，不保存）。")}</p>
+          <p className="small">{botWhy === "locked" ? t("{name} 把登录信息加密了，SubCast 读不到。在 SubCast 里登录一次 YouTube 就行，以后不用再借用浏览器。", { name: browser[0].toUpperCase() + browser.slice(1) })
+            : botWhy === "expired" ? t("之前在 SubCast 里登录的 YouTube 已失效，重新登录一次再试。")
+            : t("在 SubCast 里登录一次 YouTube，以后遇到验证会自动用这个登录。")}</p>
           <div className="row-actions">
-            <select value={browser} onChange={(e) => setBrowser(e.target.value)} aria-label={t("浏览器")}>
-              {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{b[0].toUpperCase() + b.slice(1)}</option>)}
-            </select>
-            <button className="btn primary sm" onClick={() => void retryWithBrowser()}>{t("借用登录再试")}</button>
+            <button className="btn primary sm" disabled={signIn.waiting} onClick={() => void signIn.start()}>{signIn.waiting ? t("在弹出的窗口里登录…") : t("登录 YouTube")}</button>
             {openBtn}
           </div>
+          {botWhy !== "locked" && (
+            <div className="row-actions small">
+              <span>{t("或者借用浏览器的登录：")}</span>
+              <select value={browser} onChange={(e) => setBrowser(e.target.value)} aria-label={t("浏览器")}>
+                {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{b[0].toUpperCase() + b.slice(1)}</option>)}
+              </select>
+              <button className="btn ghost sm" onClick={() => void retryWithBrowser()}>{t("借用登录再试")}</button>
+            </div>
+          )}
         </div>
       )}
       {denied != null && (

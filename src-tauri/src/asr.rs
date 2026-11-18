@@ -463,11 +463,22 @@ where F: Fn(Vec<String>) -> Fut, Fut: std::future::Future<Output = Result<T>> {
             let alt = vec!["--extractor-args".to_string(), "youtube:player_client=tv,web_safari,mweb".to_string()];
             match job(alt).await {
                 Err(e2) if bot_check(&e2.to_string()) => {
+                    // Signed in to YouTube in SubCast: that sign-in first, it needs no browser.
+                    if let Some(jar) = crate::ytlogin::cookie_file().await {
+                        let r = job(vec!["--cookies".into(), jar.to_string_lossy().into_owned()]).await;
+                        let _ = std::fs::remove_file(&jar);
+                        return r.map_err(|e3| if bot_check(&e3.to_string()) { anyhow!(YT_SIGN_IN_AGAIN) } else { e3 });
+                    }
                     let browser = YT_BROWSER.read().unwrap().clone();
                     if browser.is_empty() { return Err(anyhow!("YouTube 要求验证「不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 借用它的登录再试")); }
                     { let b = browser.clone(); tokio::task::spawn_blocking(move || crate::import::ensure_browser_access(&b)).await??; }
                     job(vec!["--cookies-from-browser".into(), browser.clone()]).await
-                        .map_err(|e3| if bot_check(&e3.to_string()) { anyhow!("YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试") } else { e3 })
+                        .map_err(|e3| {
+                            let m = e3.to_string();
+                            if bot_check(&m) { anyhow!("YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试") }
+                            else if browser_locked(&m) { anyhow!("YouTube 要求验证「不是机器人」。{browser} 把登录信息加密了，SubCast 读不到，请在 SubCast 里登录 YouTube") }
+                            else { e3 }
+                        })
                 }
                 other => other,
             }
@@ -493,6 +504,16 @@ fn knows_js_runtimes(ytdlp: &Path) -> bool {
     let ok = c.output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--js-runtimes")).unwrap_or(false);
     SEEN.lock().unwrap().insert(ytdlp.to_path_buf(), ok);
     ok
+}
+
+/// The sign-in made in SubCast no longer satisfies YouTube (signed out elsewhere, or expired).
+pub const YT_SIGN_IN_AGAIN: &str = "YouTube 要求验证「不是机器人」。在 SubCast 里登录的 YouTube 已失效，请重新登录"; // i18n-ignore (the interface shows its own text)
+
+/// yt-dlp could not read the browser's cookies because the browser encrypts them for itself (Chrome 127+ on
+/// Windows, yt-dlp issue 10927), or the browser holds its cookie file open.
+fn browser_locked(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("dpapi") || m.contains("failed to decrypt") || m.contains("app-bound") || m.contains("could not copy") && m.contains("cookie")
 }
 
 fn bot_check(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("confirm you") && m.contains("bot") || m.contains("sign in to confirm") }
