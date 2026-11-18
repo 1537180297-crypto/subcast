@@ -19,6 +19,7 @@ mod shared;
 mod transcript;
 mod translate;
 mod youtube;
+mod ytlogin;
 
 use model::*;
 use rusqlite::Connection;
@@ -658,6 +659,17 @@ async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: St
     Ok(VideoStream { url, kind: if is_hls { "hls" } else { "mp4" } })
 }
 
+/// Opens a SubCast window to sign in to YouTube (ytlogin.rs); the interface hears `youtube-signed-in`.
+#[tauri::command]
+fn youtube_sign_in(app: AppHandle) -> Res<()> { ytlogin::open(&app).map_err(e) }
+
+/// Whether the listener has signed in to YouTube in SubCast.
+#[tauri::command]
+async fn youtube_signed_in() -> Res<bool> { Ok(ytlogin::signed_in().await) }
+
+#[tauri::command]
+async fn youtube_sign_out() -> Res<()> { ytlogin::sign_out().await.map_err(e) }
+
 /// Gets yt-dlp ready in the background when a video page opens, so a fallback doesn't start with a download.
 #[tauri::command]
 async fn prepare_youtube(state: State<'_, AppState>) -> Res<()> {
@@ -1234,6 +1246,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            ytlogin::init(app.handle());
             let data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data)?;
             if let Ok(res) = app.path().resource_dir() { let _ = asr::VCRT_DIR.set(res.join("vcrt")); }
@@ -1297,7 +1310,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())

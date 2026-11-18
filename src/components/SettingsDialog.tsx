@@ -14,6 +14,7 @@ import { api, errorText, llmChat, type CloudAsr, type ModelInfo, type Provider }
 import { useStore } from "../store";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
+import { YouTubeAccount } from "./YouTubeAccount";
 import { useModelDownload } from "./TranscriptPanel";
 import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC, kbd } from "../lib/i18n";
 import { ModelSettings } from "./ModelSettings";
@@ -222,9 +223,10 @@ export function SettingsView() {
                     <button className="btn sm" onClick={async () => { try { await saveSettings({ proxy }); notify(t("代理已保存")); } catch (e) { notify(errorText(e)); } }}>{t("保存")}</button>
                   </div>
                 </label>
+                <YouTubeAccount />
                 <label><span>{t("YouTube 要求验证时")}</span>
                   <select value={settings.ytCookiesBrowser ?? ""} onChange={(e) => void saveSettings({ ytCookiesBrowser: e.target.value })}>
-                    <option value="">{t("先问我")}</option>
+                    <option value="">{t("用 SubCast 里登录的账号，没登录就问我")}</option>
                     {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{t("借用 {name} 的 YouTube 登录", { name: b[0].toUpperCase() + b.slice(1) })}</option>)}
                   </select>
                 </label>
