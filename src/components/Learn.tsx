@@ -17,6 +17,7 @@ import { clock } from "../lib/format";
 import { t, tk, useLang } from "../lib/i18n";
 import { Modal } from "./Chrome";
 import { playSoon } from "./Players";
+import { LearnStats } from "./LearnStats";
 import { ask } from "../lib/confirm";
 import { EmptyState } from "./Illustrations";
 import type { LearnLevel } from "../lib/settings";
@@ -463,6 +464,7 @@ export function WordsView() {
       {!loaded ? null : !all.length ? (
         <EmptyState art={<span className="wb-empty-ic"><BookMarked size={28} /></span>} title={t("生词本还是空的")} note={t("在英文节目的字幕里点一个单词，再点「加入生词本」。")} />
       ) : <>
+        <LearnStats onOpen={(id) => useWordDetail.setState({ id })} />
         <div className="wb-bar">
           <div className="chips left">
             {([["due", t("待复习"), queue.length], ["all", t("全部"), all.length], ["mastered", t("已掌握"), mastered.length]] as const).map(([k, label, n]) => (

@@ -1924,6 +1924,38 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .wb-search { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 8px; background: var(--soft); color: var(--muted); width: 220px; }
 .wb-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font: inherit; font-size: 13px; color: var(--text); }
 .wb-search:focus-within { box-shadow: 0 0 0 2px var(--accent-soft); }
+.ls { margin-bottom: 20px; padding: 16px 18px; border-radius: 14px; background: var(--panel); box-shadow: 0 0 0 1px var(--line); }
+.ls-nums { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.ls-num { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ls-v { display: inline-flex; align-items: center; gap: 4px; font-size: 22px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.ls-of { font-size: 13px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.ls-fire { color: var(--accent); }
+.ls-k { font-size: 12px; color: var(--muted); }
+.ls-map { min-width: 0; overflow: hidden; padding: 4px; margin: -4px; }
+.ls-months { display: flex; height: 16px; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.ls-months span { flex: none; overflow: visible; }
+.ls-body { display: flex; gap: 3px; }
+.ls-wd { display: flex; flex-direction: column; gap: 3px; flex: none; font-size: 10px; color: var(--muted); }
+.ls-wd span { height: 11px; line-height: 11px; }
+.ls-col { display: flex; flex-direction: column; gap: 3px; }
+.ls-cell { display: block; width: 11px; height: 11px; padding: 0; border: 0; border-radius: 3px; background: var(--soft); cursor: pointer; }
+.ls-cell.future { background: none; cursor: default; }
+.ls-cell.l1 { background: color-mix(in srgb, var(--accent) 30%, var(--soft)); }
+.ls-cell.l2 { background: color-mix(in srgb, var(--accent) 55%, var(--soft)); }
+.ls-cell.l3 { background: color-mix(in srgb, var(--accent) 80%, var(--soft)); }
+.ls-cell.l4 { background: var(--accent); }
+.ls-cell.today { box-shadow: inset 0 0 0 1.5px var(--text-2); }
+.ls-cell.on { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--text); }
+button.ls-cell:hover { filter: brightness(.92); }
+.ls-legend { display: flex; align-items: center; justify-content: flex-end; gap: 3px; margin-top: 8px; font-size: 10.5px; color: var(--muted); }
+.ls-legend > span:first-child { margin-right: 3px; } .ls-legend > span:last-child { margin-left: 3px; }
+.ls-legend .ls-cell { cursor: default; }
+.ls-day { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ls-day-h { font-size: 12.5px; color: var(--text-2); }
+.ls-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ls-chip { height: 26px; padding: 0 10px; border-radius: 13px; border: 0; background: var(--soft); cursor: pointer; font: inherit; font-size: 12.5px; color: var(--text); }
+.ls-chip:hover { background: var(--accent-soft); color: var(--accent-text); }
+@media (max-width: 560px) { .ls-nums { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .wd-nav { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .wd-num { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
 .wd { display: flex; flex-direction: column; }

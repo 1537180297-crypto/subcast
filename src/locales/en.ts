@@ -1156,6 +1156,14 @@ const dict: Record<string, string> = {
   "今天要复习": "due today",
   "{wait}后复习": "next review in {wait}",
   "{date} 加入": "added {date}",
+  "{day}：没有学习": "{day}: no study",
+  "{day}：复习 {r} 次，新加 {n} 个词": "{day}: {r} reviews, {n} new words",
+  "{day}：复习 {r} 次": "{day}: {r} reviews",
+  "{day}：新加 {n} 个词": "{day}: {n} new words",
+  "连续学习（天）": "Day streak",
+  "近 7 天复习": "Reviews, last 7 days",
+  "近 30 天复习时没有选「忘了」的比例（至少复习 10 次后显示）": "Share of reviews in the last 30 days not answered “Forgot” (shown after 10 reviews)",
+  "记住率": "Recall",
 };
 
 export default dict;

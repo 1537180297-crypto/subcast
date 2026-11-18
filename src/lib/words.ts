@@ -28,7 +28,9 @@ export interface Word {
   card: SavedCard;
 }
 
-interface Book { v: 1; words: Record<string, Word>; day: string; newToday: number }
+/** One day's reviews: how many answers, how many of them 忘了, and which words. */
+export interface DayLog { r: number; a: number; ids: string[] }
+interface Book { v: 1; words: Record<string, Word>; day: string; newToday: number; log?: Record<string, DayLog> }
 
 const BLOB = ["learn", "words"] as const;
 const scheduler = fsrs({ enable_fuzz: true });
@@ -38,8 +40,10 @@ const MASTERED_DAYS = 21;
 const toSaved = (c: Card): SavedCard => ({ due: +c.due, stability: c.stability, difficulty: c.difficulty, scheduled_days: c.scheduled_days, learning_steps: c.learning_steps, reps: c.reps, lapses: c.lapses, state: c.state, last_review: c.last_review ? +c.last_review : undefined });
 const toCard = (s: SavedCard): Card => ({ ...s, due: new Date(s.due), last_review: s.last_review ? new Date(s.last_review) : undefined });
 const today = () => new Date().toLocaleDateString("sv");
+export const dayOf = (ms: number) => new Date(ms).toLocaleDateString("sv");
 
 interface WordsState extends Book {
+  log: Record<string, DayLog>;
   loaded: boolean;
   load(): Promise<void>;
   add(w: Omit<Word, "added" | "card">): void;
@@ -52,20 +56,32 @@ let saveTimer: number | undefined;
 function persist() {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
-    const { v, words, day, newToday } = useWords.getState();
-    void api.setBlob(BLOB[0], BLOB[1], JSON.stringify({ v, words, day, newToday })).catch(() => {});
+    void api.setBlob(BLOB[0], BLOB[1], snapshot()).catch(() => {});
   }, 300);
 }
-window.addEventListener("beforeunload", () => { if (saveTimer) { window.clearTimeout(saveTimer); const { v, words, day, newToday } = useWords.getState(); void api.setBlob(BLOB[0], BLOB[1], JSON.stringify({ v, words, day, newToday })); } });
+const snapshot = () => { const { v, words, day, newToday, log } = useWords.getState(); return JSON.stringify({ v, words, day, newToday, log }); };
+window.addEventListener("beforeunload", () => { if (saveTimer) { window.clearTimeout(saveTimer); void api.setBlob(BLOB[0], BLOB[1], snapshot()); } });
+
+/** Books from before the review log: each word's last review is the best record there is of the days studied. */
+function backfill(words: Record<string, Word>): Record<string, DayLog> {
+  const log: Record<string, DayLog> = {};
+  for (const w of Object.values(words)) {
+    if (!w.card.last_review) continue;
+    const d = (log[dayOf(w.card.last_review)] ??= { r: 0, a: 0, ids: [] });
+    d.r++; d.ids.push(w.id);
+  }
+  return log;
+}
 
 export const useWords = create<WordsState>((set, get) => ({
-  v: 1, words: {}, day: today(), newToday: 0, loaded: false,
+  v: 1, words: {}, day: today(), newToday: 0, log: {}, loaded: false,
   async load() {
     if (get().loaded) return;
     try {
       const raw = await api.getBlob(BLOB[0], BLOB[1]);
       const b = raw ? (JSON.parse(raw) as Book) : null;
-      set({ loaded: true, words: b?.words ?? {}, day: b?.day ?? today(), newToday: b?.newToday ?? 0 });
+      const words = b?.words ?? {};
+      set({ loaded: true, words, day: b?.day ?? today(), newToday: b?.newToday ?? 0, log: b?.log ?? backfill(words) });
     } catch { set({ loaded: true }); }
   },
   add(w) {
@@ -93,11 +109,16 @@ export const useWords = create<WordsState>((set, get) => ({
     try { next = scheduler.next(toCard(w.card), new Date(), grade).card; }
     catch { next = scheduler.next(createEmptyCard(new Date()), new Date(), grade).card; }
     const d = today();
-    set((s) => ({
-      words: { ...s.words, [id]: { ...w, card: toSaved(next) } },
-      day: d,
-      newToday: (s.day === d ? s.newToday : 0) + (wasNew ? 1 : 0),
-    }));
+    set((s) => {
+      const was = s.log[d] ?? { r: 0, a: 0, ids: [] };
+      const entry = { r: was.r + 1, a: was.a + (grade === Rating.Again ? 1 : 0), ids: was.ids.includes(id) ? was.ids : [...was.ids, id] };
+      return {
+        words: { ...s.words, [id]: { ...w, card: toSaved(next) } },
+        day: d,
+        newToday: (s.day === d ? s.newToday : 0) + (wasNew ? 1 : 0),
+        log: { ...s.log, [d]: entry },
+      };
+    });
     persist();
   },
 }));
