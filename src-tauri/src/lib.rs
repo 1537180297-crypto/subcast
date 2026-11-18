@@ -1,5 +1,7 @@
 mod asr;
+mod anki;
 mod asr_context;
+mod clip;
 mod agents;
 mod cloud;
 mod db;
@@ -486,6 +488,44 @@ fn save_image(name: String, base64: String) -> Res<String> {
     std::fs::write(&path, bytes).map_err(e)?;
     Ok(path.to_string_lossy().into_owned())
 }
+
+/// The speaker's own voice for one sentence (clip.rs): a small local file, made once and then reused.
+#[tauri::command]
+async fn learn_clip(state: State<'_, AppState>, episode_id: String, start: f64, end: f64) -> Res<String> {
+    let data = state.data.clone();
+    let done = clip::path_for(&data, &episode_id, start, end);
+    if done.exists() { return Ok(done.to_string_lossy().into_owned()); }
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    if let Some(saved) = offline::find(&data, &episode_id) {
+        return clip::make(&data, clip::Source::File(saved.path.into()), &episode_id, start, end).await.map(|p| p.to_string_lossy().into_owned()).map_err(e);
+    }
+    if let Some(url) = ep.audio_url.filter(|u| !u.is_empty()) {
+        return clip::make(&data, clip::Source::Url(url), &episode_id, start, end).await.map(|p| p.to_string_lossy().into_owned()).map_err(e);
+    }
+    let vid = ep.video_id.ok_or("这一集没有音频")?;
+    asr::streams::init(&data);
+    // A saved stream address may have gone stale: one more try with a fresh one.
+    for fresh in [false, true] {
+        let v = vid.clone();
+        let url = asr::with_ytdlp(&data, |bin| { let v = v.clone(); async move { asr::youtube_stream_url(&bin, &v, false, fresh).await } }).await.map_err(e)?;
+        match clip::make(&data, clip::Source::Url(url), &episode_id, start, end).await {
+            Ok(p) => return Ok(p.to_string_lossy().into_owned()),
+            Err(err) if !fresh => { let _ = err; }
+            Err(err) => return Err(e(err)),
+        }
+    }
+    Err("没能截取原声".into())
+}
+
+/// The word book as an Anki package at `path` (chosen in the save dialog); returns how many cards have audio.
+#[tauri::command]
+async fn export_anki(path: String, deck: String, model: String, notes: Vec<anki::Note>) -> Res<usize> {
+    tokio::task::spawn_blocking(move || anki::write(std::path::Path::new(&path), &deck, &model, &notes)).await.map_err(e)?.map_err(e)
+}
+
+/// Asks where to save is the interface's job (the save dialog); this writes text there (a CSV of the word book).
+#[tauri::command]
+fn save_text(path: String, text: String) -> Res<()> { std::fs::write(path, text).map_err(e) }
 
 #[tauri::command]
 async fn list_models(provider: llm::Provider) -> Res<Vec<String>> { cloud::list_models(&provider).await.map_err(e) }
@@ -1189,6 +1229,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             #[cfg(desktop)]
@@ -1256,7 +1297,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())
