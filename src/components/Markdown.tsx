@@ -1,6 +1,6 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, memo, type ReactNode } from "react";
 import { parseClock } from "../lib/format";
-import { t } from "../lib/i18n";
+import { t, useLang } from "../lib/i18n";
 
 // A small Markdown renderer for model answers: headings, lists, bold, inline code, and [mm:ss] timestamps that seek.
 const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\[\d{1,2}:\d{2}(?::\d{2})?\](?:\s*[-–~至]\s*\[\d{1,2}:\d{2}(?::\d{2})?\])?)/g;
@@ -21,7 +21,9 @@ function inline(text: string, onSeek: (t: number) => void, key: string): ReactNo
   });
 }
 
-export function Markdown({ text, onSeek }: { text: string; onSeek: (t: number) => void }) {
+/** Memoised: a long conversation re-parses only the answer that changed. */
+export const Markdown = memo(function Markdown({ text, onSeek }: { text: string; onSeek: (t: number) => void }) {
+  useLang((s) => s.lang); // memoised: follow a language change itself
   const blocks: ReactNode[] = [];
   let list: ReactNode[] = [];
   let ordered = false;
@@ -75,4 +77,4 @@ export function Markdown({ text, onSeek }: { text: string; onSeek: (t: number) =
   });
   flush();
   return <div className="markdown">{blocks}</div>;
-}
+});

@@ -200,7 +200,7 @@ export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
           </div>
           <textarea className="cp-instr" rows={3} value={settings.chatPrompt} disabled={!settings.chatPromptOn} maxLength={4000}
             placeholder={t("例如：先给结论再展开；简洁，不说套话；术语保留英文原文。")} aria-label={t("全局指令")}
-            onChange={(e) => void saveSettings({ chatPrompt: e.target.value })} />
+            onChange={(e) => void saveSettings({ chatPrompt: e.target.value }, true)} />
           <div className="cp-hints"><span className="muted small">{t("试试：")}</span>{PROMPT_HINTS.map((h) => <button key={h} type="button" className="chip sm" onClick={() => addHint(t(h))}>{t(h)}</button>)}</div>
           <p className="muted small">{t("每次提问都会带上这段话，从下一个问题开始生效，已有回答不变。")}</p>
         </section>

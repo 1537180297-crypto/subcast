@@ -94,6 +94,11 @@ export const api = {
   /** Free Google translation with a persistent cache (no model needed). */
   previewShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number }>("preview_show", { input }),
   saveImage: (name: string, base64: string) => invoke<string>("save_image", { name, base64 }),
+  /** The local file with one sentence of an episode in the speaker's voice (made once, then reused). */
+  learnClip: (episodeId: string, start: number, end: number) => invoke<string>("learn_clip", { episodeId, start, end }),
+  saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
+  /** Writes an Anki package; resolves to how many notes carry their sentence audio. */
+  exportAnki: (path: string, deck: string, model: string, notes: AnkiNote[]) => invoke<number>("export_anki", { path, deck, model, notes }),
   cachedShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number } | null>("cached_show", { input }),
   qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
   listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),
@@ -105,6 +110,11 @@ export const api = {
   uiCheck: () => invoke<string>("ui_check"),
   refreshConfig: () => invoke<void>("refresh_config"),
   prepareYoutube: () => invoke<void>("prepare_youtube"),
+  /** Opens a SubCast window to sign in to YouTube; `youtube-signed-in` fires when it is done. */
+  youtubeSignIn: () => invoke<void>("youtube_sign_in"),
+  youtubeSignedIn: () => invoke<boolean>("youtube_signed_in"),
+  youtubeSignOut: () => invoke<void>("youtube_sign_out"),
+  openPrivacySettings: () => invoke<void>("open_privacy_settings"),
   youtubeTracks: (episodeId: string) => invoke<{ language: string; auto: boolean }[]>("youtube_tracks", { episodeId }),
   useYoutubeTrack: (episodeId: string, language: string, auto: boolean) => invoke<Transcript>("use_youtube_track", { episodeId, language, auto }),
   translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
@@ -134,11 +144,15 @@ export async function llmChat(opts: {
   const requestId = `llm-${Date.now()}-${llmCounter++}`;
   let full = "";
   let unlisten: UnlistenFn | undefined;
+  // Pieces arrive faster than the screen redraws: hand the text over at most every 40 ms. A timer, not a frame
+  // callback, so it still runs with the window hidden; cancelled at the end, so a late one can't bring back
+  // "streaming" after the answer is done.
+  let pending = 0;
   if (opts.onDelta) {
     unlisten = await listen<{ requestId: string; delta: string }>("llm", (ev) => {
       if (ev.payload.requestId !== requestId) return;
       full += ev.payload.delta;
-      opts.onDelta!(full);
+      if (!pending) pending = window.setTimeout(() => { pending = 0; opts.onDelta!(full); }, 40);
     });
   }
   const abort = () => void api.cancelJob(requestId);
@@ -154,6 +168,8 @@ export async function llmChat(opts: {
       jsonMode: opts.jsonMode,
     });
   } finally {
+    // The last pieces go out now, before the caller sees the result (it keeps them if the reply fails).
+    if (pending) { window.clearTimeout(pending); opts.onDelta?.(full); }
     unlisten?.();
     opts.signal?.removeEventListener("abort", abort);
   }
@@ -162,5 +178,13 @@ export async function llmChat(opts: {
 /** The error as it came, for matching on its wording; show it with errorText (or tr). */
 export const rawErrorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
 /** YouTube's "confirm you're not a bot" check, as the backend words it (asr.rs with_bot_fallback). */
-export const isBotCheck = (m: string) => m.includes("YouTube 要求验证「不是机器人」。选一个"); // i18n-ignore (matches the backend's text)
+export interface AnkiNote { id: string; word: string; ipa: string; meaning: string; context: string; sentence: string; translation: string; source: string; tags: string; clip: string | null }
+
+export const isBotCheck = (m: string) => m.includes("YouTube 要求验证「不是机器人」"); // i18n-ignore (matches the backend's text)
+/** The browser keeps its cookies encrypted for itself (Chrome on Windows), so borrowing its sign-in can't work. */
+export const browserLocked = (m: string) => m.includes("把登录信息加密了"); // i18n-ignore (matches the backend's text)
+/** The sign-in made in SubCast stopped working. */
+export const signInExpired = (m: string) => m.includes("在 SubCast 里登录的 YouTube 已失效"); // i18n-ignore (matches the backend's text)
 export const errorText = (e: unknown) => tr(rawErrorText(e));
+/** macOS refused SubCast access to a browser's data (import.rs NEEDS_ACCESS). */
+export const needsBrowserAccess = (m: string) => m.includes("需要你允许 SubCast 读取"); // i18n-ignore (matches the backend's text)

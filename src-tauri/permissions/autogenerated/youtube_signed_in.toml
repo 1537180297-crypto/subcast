@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-youtube-signed-in"
+description = "Enables the youtube_signed_in command without any pre-configured scope."
+commands.allow = ["youtube_signed_in"]
+
+[[permission]]
+identifier = "deny-youtube-signed-in"
+description = "Denies the youtube_signed_in command without any pre-configured scope."
+commands.deny = ["youtube_signed_in"]

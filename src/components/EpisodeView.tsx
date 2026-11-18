@@ -26,7 +26,7 @@ import { date, duration, notesText } from "../lib/format";
 import { showName } from "../lib/picks";
 import { isZh, useZh, useZhParagraphs } from "../lib/zh";
 import { autoTranslate, loadTranscript, useJobs } from "../lib/jobs";
-import { useStore } from "../store";
+import { seekSoon, useStore } from "../store";
 import { ChatPanel, SummaryPanel } from "./AiPanels";
 import { Controls, playSoon } from "./Players";
 import { VideoSlot } from "./VideoDock";
@@ -190,7 +190,7 @@ function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; d
   const seek = (sec: number) => {
     const s = useStore.getState();
     if (s.current?.id === ep.id) s.player?.seek(sec);
-    else { s.load({ ...ep, progress: sec }); window.setTimeout(() => useStore.getState().player?.seek(sec), 600); }
+    else { s.load({ ...ep, progress: sec }); seekSoon(sec); }
   };
 
   useEffect(() => {
@@ -292,7 +292,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
     if (short && (ep.videoId || ep.link?.includes("xiaoyuzhoufm.com/episode/"))) void api.fullNotes(ep.id).then((n) => n && setFullNotes(n)).catch(() => {});
   }, [ep.id]);
   const notes = notesText(fullNotes ?? ep.notes);
-  const { panel, panelOpen, put } = useLayout();
+  const { panel, panelOpen, put } = useLayout(useShallow((l) => ({ panel: l.panel, panelOpen: l.panelOpen, put: l.put })));
   // Video first; the audio file is the fallback (and a choice, for listening without the picture).
   const [audioMode, setAudioMode] = useState(startAudio);
   const saved = useOffline((s) => !!s.saved[ep.id]);
@@ -305,7 +305,12 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
     const s = useStore.getState();
     const t = s.current?.id === ep.id ? s.time : ep.progress;
     setAudioMode(audio);
-    s.set({ current: audio ? { ...ep, videoId: undefined, progress: t } : { ...ep, progress: t }, time: t, player: null, playing: false });
+    // Another episode is playing (this page was only opened): switch this page, leave the player alone.
+    if (s.current?.id !== ep.id) return;
+    // Play was pressed and is still waiting: the other kind of player starts when it is ready.
+    const wanted = !!s.loadingSince;
+    s.set({ current: audio ? { ...ep, videoId: undefined, progress: t } : { ...ep, progress: t }, time: t, player: null, playing: false, loadingSince: null });
+    if (wanted) playSoon(ep.id);
     if (why) s.notify(why);
   };
 

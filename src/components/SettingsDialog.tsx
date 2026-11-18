@@ -2,7 +2,7 @@ import { sizeMb } from "../lib/format";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
-import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, GraduationCap, type LucideIcon } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { ASR_SERVICES, CLOUD_ASR_MAIN } from "../lib/settings";
 import { stopSpeaking } from "../lib/tts";
@@ -12,14 +12,15 @@ import rewardQr from "../assets/about-reward-qr.png";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type CloudAsr, type ModelInfo, type Provider } from "../lib/api";
 import { useStore } from "../store";
-import { Modal } from "./Chrome";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
+import { YouTubeAccount } from "./YouTubeAccount";
 import { useModelDownload } from "./TranscriptPanel";
 import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC, kbd } from "../lib/i18n";
 import { ModelSettings } from "./ModelSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { ReadingSettings } from "./ReadingSettings";
+import { LearnSettings } from "./LearnSettings";
 import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } from "../lib/updater";
 
 export const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
@@ -104,12 +105,16 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
   );
 }
 
-export function SettingsDialog() {
-  const { settings, saveSettings, set, notify, settingsSection } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection })));
-  type Section = "subtitles" | "ai" | "general" | "about";
+/** Settings, a page of its own (it was a dialog): room for five sections, and the player stays usable. */
+export function SettingsView() {
+  const { settings, saveSettings, set, notify, settingsSection, settingsNonce } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection, settingsNonce: s.settingsNonce })));
+  type Section = "subtitles" | "ai" | "general" | "learn" | "about";
   // Old section names (links from elsewhere in the app) land in their new home.
-  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "general", shortcuts: "general", storage: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai" };
+  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "general", shortcuts: "general", storage: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai", learn: "learn" };
   const [section, setSection] = useState<Section>(LEGACY[settingsSection ?? "subtitles"] ?? "subtitles");
+  // Asked for a section while the page is already open (a "去设置" link): go there.
+  useEffect(() => { if (settingsSection) setSection(LEGACY[settingsSection] ?? "subtitles"); }, [settingsNonce]);
+  useEffect(() => () => stopSpeaking(), []);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
   const [elsewhere, setElsewhere] = useState<{ app: string; format: string }[]>([]);
@@ -121,7 +126,7 @@ export function SettingsDialog() {
   const [moreCloud, setMoreCloud] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["general", tk("通用"), SlidersHorizontal], ["about", tk("关于"), Info]];
+  const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["general", tk("通用"), SlidersHorizontal], ["learn", tk("学英语"), GraduationCap], ["about", tk("关于"), Info]];
   const modelRow = (m: ModelInfo) => (
     <div key={m.id} className={`model-item ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`}>
       <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrEngine: "local", asrModel: m.id })}>
@@ -141,7 +146,8 @@ export function SettingsDialog() {
   );
 
   return (
-    <Modal title={t("设置")} onClose={() => { stopSpeaking(); set({ settingsOpen: false }); }} wide>
+    <div className="page settings-page">
+      <h1 className="page-title">{t("设置")}</h1>
       <div className="settings">
         <nav className="settings-nav">
           {NAV.map(([k, label, Icon]) => <button key={k} className={section === k ? "on" : ""} onClick={() => setSection(k)}><Icon size={15} aria-hidden />{t(label)}{k === "about" && updateWaiting && <span className="update-dot" aria-label={t("有新版本")} />}</button>)}
@@ -181,7 +187,7 @@ export function SettingsDialog() {
                       {ASR_SERVICES.filter((a) => moreCloud || CLOUD_ASR_MAIN.includes(a.id) || settings.asrEngine === a.id).map((a) => <button key={a.id} className={`chip ${settings.asrEngine === a.id ? "on" : ""}`} onClick={() => saveSettings({ asrEngine: a.id })}>{t(a.name)}</button>)}
                       {!moreCloud && <button className="chip" onClick={() => setMoreCloud(true)}>{t("更多")}</button>}
                     </div>
-                    {settings.cloudAsr[settings.asrEngine] && <CloudAsrEditor key={settings.asrEngine} a={settings.cloudAsr[settings.asrEngine]} onChange={(na) => saveSettings({ cloudAsr: { ...settings.cloudAsr, [na.id]: na } })} />}
+                    {settings.cloudAsr[settings.asrEngine] && <CloudAsrEditor key={settings.asrEngine} a={settings.cloudAsr[settings.asrEngine]} onChange={(na) => saveSettings({ cloudAsr: { ...settings.cloudAsr, [na.id]: na } }, true)} />}
                   </>
                 )}
               </section>
@@ -200,11 +206,12 @@ export function SettingsDialog() {
                 </label>
                 <label className="check"><input type="checkbox" checked={settings.youtubePromo} onChange={(e) => saveSettings({ youtubePromo: e.target.checked })} /> {t("显示节目的 YouTube 订阅按钮")}</label>
                 {settings.youtubePromo && <label className="check"><input type="checkbox" checked={!settings.homeBannerHidden} onChange={(e) => saveSettings({ homeBannerHidden: !e.target.checked })} /> {t("在发现页顶部推荐「词元之外」")}</label>}
+                <label className="check"><input type="checkbox" checked={settings.sideCurated} onChange={(e) => saveSettings({ sideCurated: e.target.checked })} /> {t("在侧栏显示「乔木精读」推荐")}</label>
               </section>
               <section className="setup-block">
                 <p className="setup-title">{t("订阅")}</p>
                 <div className="row-actions">
-                  <button className="btn sm" onClick={() => { set({ settingsOpen: false, addOpen: true, addTab: "import" }); }}>{t("导入订阅…")}</button>
+                  <button className="btn sm" onClick={() => { set({ addOpen: true, addTab: "import" }); }}>{t("导入订阅…")}</button>
                   <button className="btn sm" onClick={async () => { try { const path = await api.exportOpml(); notify(t("已导出到「下载」：{name}", { name: path.split(/[\\/]/).pop() ?? "" })); void revealItemInDir(path).catch(() => {}); } catch (e) { notify(errorText(e)); } }}>{t("导出 OPML")}</button>
                 </div>
               </section>
@@ -216,9 +223,10 @@ export function SettingsDialog() {
                     <button className="btn sm" onClick={async () => { try { await saveSettings({ proxy }); notify(t("代理已保存")); } catch (e) { notify(errorText(e)); } }}>{t("保存")}</button>
                   </div>
                 </label>
+                <YouTubeAccount />
                 <label><span>{t("YouTube 要求验证时")}</span>
                   <select value={settings.ytCookiesBrowser ?? ""} onChange={(e) => void saveSettings({ ytCookiesBrowser: e.target.value })}>
-                    <option value="">{t("先问我")}</option>
+                    <option value="">{t("用 SubCast 里登录的账号，没登录就问我")}</option>
                     {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{t("借用 {name} 的 YouTube 登录", { name: b[0].toUpperCase() + b.slice(1) })}</option>)}
                   </select>
                 </label>
@@ -236,10 +244,11 @@ export function SettingsDialog() {
               </section>
             </>
           )}
+          {section === "learn" && <LearnSettings />}
           {section === "about" && <About />}
         </div>
       </div>
-    </Modal>
+    </div>
   );
 }
 
@@ -328,7 +337,7 @@ function StorageTotal() {
 }
 
 function Storage({ onAsr }: { onAsr: () => void }) {
-  const { set, go } = useStore(useShallow((s) => ({ set: s.set, go: s.go })));
+  const go = useStore((s) => s.go);
   const saved = useOffline((s) => s.saved);
   const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number } | null>(null);
   const load = () => void api.storageInfo().then(setInfo).catch(() => {});
@@ -349,7 +358,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
           </div>
           <span className="storage-size">{size(info?.downloads)}</span>
           <button className="btn sm" onClick={() => void api.openDataFolder("downloads")}><FolderOpen size={13} /> {t("打开文件夹")}</button>
-          {n > 0 && <button className="btn ghost sm" onClick={() => { set({ settingsOpen: false }); go({ kind: "downloads" }); }}>{t("查看")}</button>}
+          {n > 0 && <button className="btn ghost sm" onClick={() => go({ kind: "downloads" })}>{t("查看")}</button>}
           {n > 0 && <button className="icon-btn" title={t("全部删除")} onClick={clearAll}><Trash2 size={14} /></button>}
         </div>
         <div className="storage-row">

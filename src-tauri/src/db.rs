@@ -7,6 +7,9 @@ pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
+        -- In WAL mode NORMAL is still crash-safe, and commits stop waiting on a disk flush each time.
+        PRAGMA synchronous=NORMAL;
+        PRAGMA busy_timeout=5000;
         CREATE TABLE IF NOT EXISTS shows(
             id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, author TEXT, cover TEXT,
             feed_url TEXT NOT NULL, link TEXT, description TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
@@ -15,6 +18,7 @@ pub fn open(path: &Path) -> Result<Connection> {
             published INTEGER, duration REAL, audio_url TEXT, video_id TEXT, link TEXT, cover TEXT, notes TEXT,
             transcript_url TEXT, transcript_type TEXT, progress REAL NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS episodes_show ON episodes(show_id, published DESC);
+        CREATE INDEX IF NOT EXISTS episodes_published ON episodes(published DESC);
         CREATE TABLE IF NOT EXISTS transcripts(
             episode_id TEXT PRIMARY KEY, source TEXT NOT NULL, language TEXT NOT NULL, segments TEXT NOT NULL, created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS blobs(
@@ -94,6 +98,16 @@ pub fn delete_show(conn: &Connection, id: &str) -> Result<()> {
 const EPISODE_COLS: &str = "e.id,e.show_id,e.guid,e.title,e.published,e.duration,e.audio_url,e.video_id,e.link,e.cover,e.notes,e.transcript_url,e.transcript_type,e.progress,
     EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id), s.title, e.deep";
 
+/// The same columns without show notes, which are large and lists don't show.
+fn list_cols() -> String { EPISODE_COLS.replacen("e.notes", "NULL", 1) }
+
+/// Every show note of a show, by episode (for searching inside it).
+pub fn show_notes(conn: &Connection, show_id: &str) -> Result<std::collections::HashMap<String, String>> {
+    let mut st = conn.prepare("SELECT id, notes FROM episodes WHERE show_id=?1 AND notes IS NOT NULL")?;
+    let rows = st.query_map([show_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 fn episode_from(r: &rusqlite::Row) -> rusqlite::Result<Episode> {
     Ok(Episode {
         id: r.get(0)?, show_id: r.get(1)?, guid: r.get(2)?, title: r.get(3)?, published: r.get(4)?, duration: r.get(5)?,
@@ -106,7 +120,8 @@ fn episode_from(r: &rusqlite::Row) -> rusqlite::Result<Episode> {
 pub fn list_episodes(conn: &Connection, show_id: Option<&str>, limit: i64) -> Result<Vec<Episode>> {
     // Notes are large; the list does not need them.
     let sql = format!(
-        "SELECT {EPISODE_COLS} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id {} ORDER BY e.published DESC LIMIT ?1",
+        "SELECT {} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id {} ORDER BY e.published DESC LIMIT ?1",
+        list_cols(),
         if show_id.is_some() { "WHERE e.show_id=?2" } else { "WHERE s.kind != 'single'" }
     );
     let mut st = conn.prepare(&sql)?;
@@ -120,9 +135,10 @@ pub fn list_episodes(conn: &Connection, show_id: Option<&str>, limit: i64) -> Re
 
 pub fn recent_episodes(conn: &Connection, limit: i64) -> Result<Vec<Episode>> {
     let sql = format!(
-        "SELECT {EPISODE_COLS} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id
+        "SELECT {} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id
          WHERE e.progress > 0 OR EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id) OR s.kind='single'
-         ORDER BY e.rowid DESC LIMIT ?1"
+         ORDER BY e.rowid DESC LIMIT ?1",
+        list_cols()
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![limit], |r| episode_from(r).map(|mut e| { e.notes = None; e }))?.collect::<rusqlite::Result<Vec<_>>>()?;

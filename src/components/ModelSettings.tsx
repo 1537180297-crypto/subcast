@@ -61,7 +61,8 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
   const shownAgents = moreAgents ? agents : agents.filter((f, i) => i < SHOWN || agentProviderId(f.kind) === editing);
   const p = settings.providers[editing];
   const agent = agentOf(p);
-  const update = (np: Provider) => void saveSettings({ providers: { ...settings.providers, [np.id]: np }, ...(np.id === settings.chatProvider && np.model !== p?.model ? { chatModel: "" } : {}) });
+  // Lazy: the address and model fields call this on every keystroke.
+  const update = (np: Provider) => void saveSettings({ providers: { ...settings.providers, [np.id]: np }, ...(np.id === settings.chatProvider && np.model !== p?.model ? { chatModel: "" } : {}) }, true);
   const nameOf = (id: string) => { const x = settings.providers[id]; return x ? tr(x.name) : ""; };
   const google = settings.translateMode === "google";
   const translateName = google ? t("谷歌翻译（免费）") : nameOf(settings.translateProvider) || t("没有设置");

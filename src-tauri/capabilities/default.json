@@ -9,6 +9,7 @@
     "core:default",
     "core:event:default",
     "opener:default",
+    "dialog:allow-save",
     "allow-add-subscription",
     "allow-refresh-show",
     "allow-refresh-all",
@@ -39,6 +40,7 @@
     "allow-share-translation",
     "allow-local-agents",
     "allow-youtube-subscriptions",
+    "allow-open-privacy-settings",
     "allow-rescan-models",
     "allow-log-listen",
     "allow-asr-elsewhere",
@@ -57,6 +59,9 @@
     "allow-ui-check",
     "allow-refresh-config",
     "allow-prepare-youtube",
+    "allow-youtube-sign-in",
+    "allow-youtube-signed-in",
+    "allow-youtube-sign-out",
     "allow-search-show",
     "allow-youtube-tracks",
     "allow-use-youtube-track",
@@ -66,6 +71,9 @@
     "allow-tts-speak",
     "allow-cached-show",
     "allow-save-image",
+    "allow-learn-clip",
+    "allow-save-text",
+    "allow-export-anki",
     "allow-set-menu-labels",
     "allow-download-episode",
     "allow-list-downloads",
@@ -84,7 +92,26 @@
   ],
   "remote": {
     "urls": [
-      "http://localhost:14327"
+      "http://localhost:14327",
+      "http://localhost:14328",
+      "http://localhost:14329",
+      "http://localhost:14330",
+      "http://localhost:14331",
+      "http://localhost:14332",
+      "http://localhost:14333",
+      "http://localhost:14334",
+      "http://localhost:14335",
+      "http://localhost:14336",
+      "http://localhost:14337",
+      "http://localhost:14338",
+      "http://localhost:14339",
+      "http://localhost:14340",
+      "http://localhost:14341",
+      "http://localhost:14342",
+      "http://localhost:14343",
+      "http://localhost:14344",
+      "http://localhost:14345",
+      "http://localhost:14346"
     ]
   }
 }
