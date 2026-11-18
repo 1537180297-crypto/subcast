@@ -99,7 +99,7 @@ export function LearnStats({ onOpen }: { onOpen: (id: string) => void }) {
   const chips = sel ? [...new Set([...sel.added, ...sel.reviewed])].filter((id) => words[id]) : [];
 
   return (
-    <section className="hm">
+    <section className="hm-box">
       <div className="hm-nums">
         <div className="hm-num"><span className="hm-v">{stats.streak > 0 && <Flame size={16} className="hm-fire" />}{stats.streak}</span><span className="hm-k">{t("连续学习（天）")}</span></div>
         <div className="hm-num"><span className="hm-v">{stats.week}</span><span className="hm-k">{t("近 7 天复习")}</span></div>
