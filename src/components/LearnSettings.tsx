@@ -65,6 +65,7 @@ export function LearnSettings() {
                 {DAILY.map((n) => <button key={n} role="radio" aria-checked={s.learnDaily === n} className={s.learnDaily === n ? "on" : ""} onClick={() => void save({ learnDaily: n })}>{n}</button>)}
               </div>
             </div>
+            <div className="ls-row"><label className="check"><input type="checkbox" checked={s.learnSounds} onChange={(e) => void save({ learnSounds: e.target.checked })} /> {t("拼写复习时播放按键和对错音效")}</label></div>
             <div className="ls-row"><label className="check"><input type="checkbox" checked={s.learnRemind} onChange={(e) => void save({ learnRemind: e.target.checked })} /> {t("打开 SubCast 时，有要复习的词就提醒我")}</label></div>
             <div className="ls-row">
               <span>{t("生词本 {n} 个词", { n: count })}</span>

@@ -1185,7 +1185,6 @@ const dict: Record<string, string> = {
   "已认识": "Known",
   "拼写": "Spell",
   "拼写这个词": "Spell this word",
-  "拼对了": "Correct",
   "拼对了（用了 {n} 次提示）": "Correct ({n} hints used)",
   "按难度从高到低排列，默认勾选前 15 个还没收藏的词。认识的词可以取消勾选，再标为认识。": "Hardest first; the first 15 words not yet saved are ticked. Untick words you know, then mark them known.",
   "提示一个字母": "reveal a letter",
@@ -1199,6 +1198,12 @@ const dict: Record<string, string> = {
   "认识": "I know it",
   "这些词不再标成生词": "not marked as new",
   "重听": "replay",
+  "{wait}后再考": "again in {wait}",
+  "拼写复习时播放按键和对错音效": "Play key and right/wrong sounds in spelling review",
+  "拼对了！": "Correct!",
+  "按 {k}": "Press {k}",
+  "记得怎么样？选一个，决定下次什么时候再考": "How well did you know it? Your pick sets when it comes back",
+  "键盘 1–4 选择，空格选「{label}」": "Keys 1–4 choose; space picks “{label}”",
 };
 
 export default dict;
