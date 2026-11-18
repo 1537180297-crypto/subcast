@@ -30,7 +30,8 @@ export interface Word {
 
 /** One day's reviews: how many answers, how many of them 忘了, and which words. */
 export interface DayLog { r: number; a: number; ids: string[] }
-interface Book { v: 1; words: Record<string, Word>; day: string; newToday: number; log?: Record<string, DayLog> }
+/** `known`: words the listener said they know (headword → when), never marked as new again. */
+interface Book { v: 1; words: Record<string, Word>; day: string; newToday: number; log?: Record<string, DayLog>; known?: Record<string, number> }
 
 const BLOB = ["learn", "words"] as const;
 const scheduler = fsrs({ enable_fuzz: true });
@@ -44,6 +45,11 @@ export const dayOf = (ms: number) => new Date(ms).toLocaleDateString("sv");
 
 interface WordsState extends Book {
   log: Record<string, DayLog>;
+  known: Record<string, number>;
+  /** Marks words as known (they stop being marked as new in subtitles). */
+  know(ids: string[]): void;
+  unknow(id: string): void;
+  clearKnown(): void;
   loaded: boolean;
   load(): Promise<void>;
   add(w: Omit<Word, "added" | "card">): void;
@@ -59,7 +65,7 @@ function persist() {
     void api.setBlob(BLOB[0], BLOB[1], snapshot()).catch(() => {});
   }, 300);
 }
-const snapshot = () => { const { v, words, day, newToday, log } = useWords.getState(); return JSON.stringify({ v, words, day, newToday, log }); };
+const snapshot = () => { const { v, words, day, newToday, log, known } = useWords.getState(); return JSON.stringify({ v, words, day, newToday, log, known }); };
 window.addEventListener("beforeunload", () => { if (saveTimer) { window.clearTimeout(saveTimer); void api.setBlob(BLOB[0], BLOB[1], snapshot()); } });
 
 /** Books from before the review log: each word's last review is the best record there is of the days studied. */
@@ -74,14 +80,14 @@ function backfill(words: Record<string, Word>): Record<string, DayLog> {
 }
 
 export const useWords = create<WordsState>((set, get) => ({
-  v: 1, words: {}, day: today(), newToday: 0, log: {}, loaded: false,
+  v: 1, words: {}, day: today(), newToday: 0, log: {}, known: {}, loaded: false,
   async load() {
     if (get().loaded) return;
     try {
       const raw = await api.getBlob(BLOB[0], BLOB[1]);
       const b = raw ? (JSON.parse(raw) as Book) : null;
       const words = b?.words ?? {};
-      set({ loaded: true, words, day: b?.day ?? today(), newToday: b?.newToday ?? 0, log: b?.log ?? backfill(words) });
+      set({ loaded: true, words, day: b?.day ?? today(), newToday: b?.newToday ?? 0, log: b?.log ?? backfill(words), known: b?.known ?? {} });
     } catch { set({ loaded: true }); }
   },
   add(w) {
@@ -89,6 +95,18 @@ export const useWords = create<WordsState>((set, get) => ({
     set((s) => ({ words: { ...s.words, [w.id]: { ...w, added: Date.now(), card: toSaved(createEmptyCard(new Date())) } } }));
     persist();
   },
+  know(ids) {
+    if (!ids.length) return;
+    const now = Date.now();
+    set((s) => ({ known: { ...s.known, ...Object.fromEntries(ids.map((id) => [id, now])) } }));
+    persist();
+  },
+  unknow(id) {
+    const { [id]: _, ...rest } = get().known;
+    set({ known: rest });
+    persist();
+  },
+  clearKnown() { set({ known: {} }); persist(); },
   update(id, patch) {
     const w = get().words[id];
     if (!w) return;

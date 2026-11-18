@@ -49,15 +49,15 @@ const dueLabel = (w: Word, now: number) => {
 
 // ---- subtitles: marked words -----------------------------------------------------------------------------
 
-export interface LearnMarks { data: NonNullable<ReturnType<typeof useDict.getState>["data"]>; level: LearnLevel; mark: boolean; saved: Record<string, Word> }
+export interface LearnMarks { data: NonNullable<ReturnType<typeof useDict.getState>["data"]>; level: LearnLevel; mark: boolean; saved: Record<string, Word>; known: Record<string, number> }
 
 /** The marks for English subtitle lines, or null when the learning mode does not apply. Stable between renders. */
 export function useLearnMarks(english: boolean): LearnMarks | null {
   const on = useLearnOn();
   const { level, mark, card } = useStore(useShallow((s) => ({ level: s.settings.learnLevel, mark: s.settings.learnMark, card: s.settings.learnCard })));
   const data = useDict((s) => s.data);
-  const saved = useWords((s) => s.words);
-  return useMemo(() => (on && english && data && (mark || card) ? { data, level, mark, saved } : null), [on, english, data, level, mark, card, saved]);
+  const { saved, known } = useWords(useShallow((s) => ({ saved: s.words, known: s.known })));
+  return useMemo(() => (on && english && data && (mark || card) ? { data, level, mark, saved, known } : null), [on, english, data, level, mark, card, saved, known]);
 }
 
 /** One English line with its words wrapped, so they can be marked and clicked. */
@@ -70,7 +70,9 @@ export const LearnText = memo(function LearnText({ text, marks }: { text: string
     const e = lookup(marks.data, m[0]);
     // Capitalised mid-sentence, or at the start but on no exam list: most likely a name (Chang, Jensen).
     const proper = /^[A-Z]/.test(m[0]) && ((i > 0 && !/[.?!]["”]?\s*$/.test(text.slice(0, i))) || !e?.tags);
-    const cls = e && marks.saved[e.lemma] ? " saved" : e && marks.mark && !proper && isNew(e, marks.level) ? " new" : "";
+    // In the word book: learning (tinted) or mastered (just coloured); otherwise new for this level, unless known.
+    const w = e && marks.saved[e.lemma];
+    const cls = w ? (isMastered(w) ? " got" : " saved") : e && marks.mark && !proper && !marks.known[e.lemma] && isNew(e, marks.level) ? " new" : "";
     out.push(<span key={i} className={`lw${cls}`}>{m[0]}</span>);
     last = i + m[0].length;
   }
@@ -87,6 +89,7 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
   const entry = useMemo(() => (data ? lookup(data, target.token) : null), [data, target.token]);
   const id = entry?.lemma ?? target.token.toLowerCase();
   const saved = useWords((s) => s.words[id]);
+  const known = useWords((s) => !!s.known[id]);
   const aiOn = useStore((s) => s.settings.learnAi);
   const [ctx, setCtx] = useState<string | null>(saved?.ctx ?? null);
   const [ctxState, setCtxState] = useState<"idle" | "loading" | "none" | "error">("idle");
@@ -176,7 +179,12 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
         <button className="btn sm play" onClick={() => void listen()}><ClipLabel k={clipKey(ep.id, target.seg.start, target.seg.end)} label={t("原声")} /></button>
         {saved
           ? <button className="btn sm ghost wc-saved" onClick={() => { onClose(); openWord(id); }}><Check size={13} />{t("已在生词本")}</button>
-          : <button className="btn sm primary" onClick={add}><Plus size={13} />{t("加入生词本")}</button>}
+          : <span className="wc-acts">
+              {known
+                ? <button className="btn sm ghost wc-saved" onClick={() => useWords.getState().unknow(id)} title={t("点一下撤销")}><Check size={13} />{t("已认识")}</button>
+                : <button className="btn sm ghost" onClick={() => { useWords.getState().know([id]); onClose(); }} title={t("以后不再标成生词")}>{t("认识")}</button>}
+              <button className="btn sm primary" onClick={add}><Plus size={13} />{t("加入生词本")}</button>
+            </span>}
       </div>
     </div>,
     document.body,
@@ -218,12 +226,12 @@ export function LearnTip() {
 interface Found { entry: Entry; token: string; seg: Segment; idx: number; count: number }
 
 /** Every word above the listener's level in this episode, rarest first. */
-function episodeWords(segments: Segment[], data: LearnMarks["data"], level: LearnLevel): Found[] {
+function episodeWords(segments: Segment[], data: LearnMarks["data"], level: LearnLevel, known: Record<string, number>): Found[] {
   const found = new Map<string, Found>();
   segments.forEach((seg, idx) => {
     for (const m of seg.text.matchAll(WORD_RE)) {
       const e = lookup(data, m[0]);
-      if (!e || !isNew(e, level)) continue;
+      if (!e || known[e.lemma] || !isNew(e, level)) continue;
       const i = m.index ?? 0;
       if (/^[A-Z]/.test(m[0]) && (i > 0 || !e.tags)) continue;
       const f = found.get(e.lemma);
@@ -239,7 +247,9 @@ export function EpisodeWords({ ep, segments, zh, onClose }: { ep: Episode; segme
   const data = useDict((s) => s.data);
   const level = useStore((s) => s.settings.learnLevel);
   const words = useWords((s) => s.words);
-  const list = useMemo(() => (data ? episodeWords(segments, data, level) : []), [data, segments, level]);
+  // Known words as of opening: marking the rest known shouldn't empty the list under you.
+  const [known] = useState(() => useWords.getState().known);
+  const list = useMemo(() => (data ? episodeWords(segments, data, level, known) : []), [data, segments, level, known]);
   const fresh = list.filter((f) => !words[f.entry.lemma]);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   useEffect(() => { setPicked(new Set(fresh.slice(0, 15).map((f) => f.entry.lemma))); }, [list.length]);
@@ -255,10 +265,17 @@ export function EpisodeWords({ ep, segments, zh, onClose }: { ep: Episode; segme
     useStore.getState().notify(t("已加入 {n} 个词到生词本", { n }));
     onClose();
   };
+  // Lute's "mark the rest known": the words left unticked stop being marked as new.
+  const rest = fresh.filter((f) => !picked.has(f.entry.lemma)).map((f) => f.entry.lemma);
+  const knowRest = () => {
+    useWords.getState().know(rest);
+    if (picked.size) addPicked();
+    else { useStore.getState().notify(t("已把 {n} 个词标为认识", { n: rest.length })); onClose(); }
+  };
   return (
     <Modal title={t("本期生词")} onClose={onClose}>
       {!data ? <div className="panel-empty"><Loader2 className="spin" size={18} /></div> : !list.length ? <EmptyState title={t("这一期没有超出你水平的词")} note={t("可以在 设置 › 学英语 里调高水平")} /> : <>
-        <p className="muted small ew-note">{t("按难度从高到低排列，默认勾选前 15 个还没收藏的词。")}</p>
+        <p className="muted small ew-note">{t("按难度从高到低排列，默认勾选前 15 个还没收藏的词。认识的词可以取消勾选，再标为认识。")}</p>
         <div className="ew-list">
           {list.map((f) => {
             const have = !!words[f.entry.lemma];
@@ -273,7 +290,10 @@ export function EpisodeWords({ ep, segments, zh, onClose }: { ep: Episode; segme
             );
           })}
         </div>
-        <div className="modal-foot"><button className="btn" onClick={onClose}>{t("取消")}</button><button className="btn primary" disabled={!picked.size} onClick={addPicked}>{t("加入 {n} 个词", { n: [...picked].filter((id) => !words[id]).length })}</button></div>
+        <div className="modal-foot">
+          <button className="btn ghost ew-know" disabled={!rest.length} onClick={knowRest} title={t("没勾选的词以后不再标成生词，可以在 设置 › 学英语 里清空")}>{picked.size ? t("加入，其余 {n} 个标为认识", { n: rest.length }) : t("{n} 个都标为认识", { n: rest.length })}</button>
+          <span className="spacer" />
+          <button className="btn" onClick={onClose}>{t("取消")}</button><button className="btn primary" disabled={!picked.size} onClick={addPicked}>{t("加入 {n} 个词", { n: [...picked].filter((id) => !words[id]).length })}</button></div>
       </>}
     </Modal>
   );
@@ -632,12 +652,85 @@ export async function exportWords(kind: "anki" | "csv", words: Word[]) {
 
 const GRADES: [Grade, string, string][] = [[Rating.Again, "again", tk("忘了")], [Rating.Hard, "", tk("困难")], [Rating.Good, "good", tk("记得")], [Rating.Easy, "", tk("简单")]];
 
-/** Spaced review: the front plays the sentence with the word blanked out; the back shows it, then you rate it. */
+type Mode = "recall" | "spell";
+const MODE_KEY = "subcast-review-mode";
+const readMode = (): Mode => { try { return localStorage.getItem(MODE_KEY) === "spell" ? "spell" : "recall"; } catch { return "recall"; } };
+const letter = (x: string) => x.toLowerCase().replace(/[’‘]/g, "'");
+
+/** Which letters of a and of b belong to their longest common subsequence (the rest were added or missed). */
+function common(a: string, b: string): [boolean[], boolean[]] {
+  const A = letter(a), B = letter(b);
+  const L = Array.from({ length: A.length + 1 }, () => new Array<number>(B.length + 1).fill(0));
+  for (let x = A.length - 1; x >= 0; x--) for (let y = B.length - 1; y >= 0; y--) L[x][y] = A[x] === B[y] ? L[x + 1][y + 1] + 1 : Math.max(L[x + 1][y], L[x][y + 1]);
+  const ma = new Array<boolean>(A.length).fill(false), mb = new Array<boolean>(B.length).fill(false);
+  for (let x = 0, y = 0; x < A.length && y < B.length;) {
+    if (A[x] === B[y]) { ma[x++] = true; mb[y++] = true; } else if (L[x + 1][y] >= L[x][y + 1]) x++; else y++;
+  }
+  return [ma, mb];
+}
+
+/** A wrong spelling against the answer: extra letters in what was typed, and missed ones in the answer. */
+function Diff({ typed, answer }: { typed: string; answer: string }) {
+  const [mt, ma] = common(typed, answer);
+  return <>
+    <span className="sp-typed">{[...typed].map((c, k) => <span key={k} className={mt[k] ? "" : "x"}>{c}</span>)}</span>
+    <span className="sp-arrow">→</span>
+    <span className="sp-ans">{[...answer].map((c, k) => <span key={k} className={ma[k] ? "" : "x"}>{c}</span>)}</span>
+  </>;
+}
+
+/** What is being typed, letter by letter against the answer. */
+function Letters({ typed, answer }: { typed: string; answer: string }) {
+  const cells = [];
+  for (let k = 0; k < Math.max(answer.length, typed.length); k++) {
+    const c = typed[k];
+    const cls = c == null ? (k === typed.length ? "cur" : "") : letter(c) === letter(answer[k] ?? "") ? "ok" : "bad";
+    cells.push(<span key={k} className={`sp-c ${cls}`}>{c ?? ""}</span>);
+  }
+  return <span className="sp-row">{cells}</span>;
+}
+
+/** The spelling front: type the blanked word, each letter checked as you go (after qwerty-learner). */
+function Spell({ w, onCheck, onExit }: { w: Word; onCheck: (r: { ok: boolean; typed: string; hints: number }) => void; onExit: () => void }) {
+  const [typed, setTyped] = useState("");
+  const [hints, setHints] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const answer = w.word;
+  const hint = () => {
+    let k = 0;
+    while (k < typed.length && letter(typed[k]) === letter(answer[k])) k++;
+    if (k >= answer.length) return;
+    setTyped(answer.slice(0, k + 1)); setHints((h) => h + 1);
+    input.current?.focus();
+  };
+  return (
+    <div className="sp" onClick={() => input.current?.focus()}>
+      <Letters typed={typed} answer={answer} />
+      <input ref={input} className="sp-in" autoFocus value={typed} maxLength={answer.length + 3} spellCheck={false} autoCapitalize="off" autoComplete="off" aria-label={t("拼写这个词")}
+        onChange={(e) => setTyped(e.target.value.replace(/\s/g, ""))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); onCheck({ ok: letter(typed) === letter(answer), typed, hints }); }
+          else if (e.key === "Tab") { e.preventDefault(); hint(); }
+          else if (e.key === " ") { e.preventDefault(); void playWord(w); }
+          else if (e.key === "Escape") onExit();
+        }} />
+      <p className="sp-help">{t("{n} 个字母", { n: answer.length })} · <span className="kbd">Tab</span> {t("提示一个字母")} · <span className="kbd">␣</span> {t("重听")} · <span className="kbd">↵</span> {t("检查")}</p>
+    </div>
+  );
+}
+
+/** Spaced review: the front plays the sentence with the word blanked out (to recall, or to spell); the back
+ *  shows it, then you rate it. */
 function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
   useLang((s) => s.lang);
   const [list] = useState(queue);
   const [i, setI] = useState(0);
   const [flipped, setFlipped] = useState(false);
+  const [mode, setModeState] = useState<Mode>(readMode);
+  const [spelled, setSpelled] = useState<{ ok: boolean; typed: string; hints: number } | null>(null);
+  const setMode = (m: Mode) => { setModeState(m); setFlipped(false); setSpelled(null); try { localStorage.setItem(MODE_KEY, m); } catch { /* ignore */ } };
+  // The answer Enter takes: a spelling result decides it; otherwise 记得.
+  const suggest: Grade = spelled ? (spelled.ok ? (spelled.hints ? Rating.Hard : Rating.Good) : Rating.Again) : Rating.Good;
   const w = list[i];
   const gaps = useMemo(() => (w ? intervals(useWords.getState().words[w.id] ?? w) : null), [w, flipped]);
   useEffect(() => {
@@ -653,12 +746,15 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
     // A word you forgot comes back at the end of this session.
     if (g === Rating.Again) list.push(w);
     setFlipped(false);
+    setSpelled(null);
     setI((x) => x + 1);
   }, [w, list]);
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest?.("input, textarea, select")) return;
-      if (e.key === " " || e.key === "Enter") { e.preventDefault(); if (!flipped) setFlipped(true); else rate(Rating.Good); }
+      // Spelling: keys go to the letters, wherever focus wandered.
+      if (mode === "spell" && !flipped && e.key !== "Escape" && !e.metaKey && !e.ctrlKey) { document.querySelector<HTMLInputElement>(".sp-in")?.focus(); return; }
+      if (e.key === " " || e.key === "Enter") { e.preventDefault(); if (!flipped) setFlipped(true); else rate(suggest); }
       else if (flipped && ["1", "2", "3", "4"].includes(e.key)) { e.preventDefault(); rate(Number(e.key) as Grade); }
       else if (e.key.toLowerCase() === "r") { e.preventDefault(); if (w) void playWord(w); }
       else if (flipped && e.key.toLowerCase() === "w") { e.preventDefault(); if (w) speak(w.id, 0.85); }
@@ -666,7 +762,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
     };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
-  }, [flipped, rate, w, onDone]);
+  }, [flipped, rate, w, onDone, suggest, mode]);
 
   if (!w) return (
     <div className="page review-page">
@@ -682,33 +778,45 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
         <button className="icon-btn sm" onClick={onDone} title={t("结束复习（Esc）")} aria-label={t("结束复习")}><X size={16} /></button>
         <span className="rv-meter"><i style={{ width: `${(i / list.length) * 100}%` }} /></span>
         <span className="rv-num">{i + 1} / {list.length}</span>
+        <div className="seg-control" role="radiogroup" aria-label={t("复习方式")}>
+          {([["recall", t("回想")], ["spell", t("拼写")]] as const).map(([m, label]) => <button key={m} role="radio" aria-checked={mode === m} className={mode === m ? "on" : ""} onClick={() => setMode(m)}>{label}</button>)}
+        </div>
       </div>
       <div className="rv-card">
         {flipped
           ? <button className="rv-src rv-src-link" onClick={() => void openSource(w)} title={t("打开这一集，从这句开始播放")}><span className="clamp1">{sourceOf(w)}</span><span className="wd-at">{clock(w.start)}<ArrowUpRight size={12} /></span></button>
           : <span className="rv-src clamp1">{sourceOf(w)} · {clock(w.start)}</span>}
         {flipped ? <>
+          {spelled && (spelled.ok
+            ? <p className="sp-result ok"><Check size={14} />{spelled.hints ? t("拼对了（用了 {n} 次提示）", { n: spelled.hints }) : t("拼对了")}</p>
+            : <p className="sp-result bad">{spelled.typed ? <Diff typed={spelled.typed} answer={w.word} /> : t("没拼出来")}</p>)}
           <p className="rv-word">{w.id}<button className="icon-btn sm rv-say" title={t("读单词（W）")} aria-label={t("读单词")} onClick={() => speak(w.id, 0.85)}><Volume2 size={16} /></button></p>
           {w.ipa && <p className="rv-ipa">/{w.ipa}/</p>}
           <div className="rv-def"><Meaning text={w.meaning} /></div>
           {w.ctx && <p className="rv-ctx"><span className="wc-ctx-h">{t("在这句里")}</span>{w.ctx}</p>}
           <p className="rv-sent"><Marked sentence={w.sentence} word={w.word} />{w.sentenceZh && <span className="rv-zh">{w.sentenceZh}</span>}</p>
         </> : <>
-          <p className="rv-q">{t("这句话里空着的是哪个词？")}</p>
+          <p className="rv-q">{mode === "spell" ? t("听原句，拼出空着的词") : t("这句话里空着的是哪个词？")}</p>
           <p className="rv-sent front">{blank}</p>
+          {mode === "spell" && <>
+            <p className="sp-mean">{w.ctx || w.meaning.split("\n")[0]}</p>
+            <Spell key={`${i}-${w.id}`} w={w} onExit={onDone} onCheck={(r) => { setSpelled(r); setFlipped(true); }} />
+          </>}
         </>}
         <button className="btn sm play rv-listen" onClick={() => void playWord(w, true)}><ClipLabel k={clipKey(w.episodeId, w.start, w.end)} label={t("再听原句")} /><span className="kbd">R</span></button>
         {flipped ? (
           <div className="rv-rate">
             {GRADES.map(([g, cls, label], k) => (
-              <button key={g} className={`btn ${cls}`} onClick={() => rate(g)}>
+              <button key={g} className={`btn ${cls === "good" ? "" : cls} ${g === suggest ? "good" : ""}`} onClick={() => rate(g)}>
                 <span className="t">{t(label)}</span>
                 <span className="s"><span className="kbd">{k + 1}</span>{gaps ? fmtWait(gaps[g]) : ""}</span>
               </button>
             ))}
           </div>
         ) : (
-          <button className="btn primary rv-show" onClick={() => setFlipped(true)}>{t("显示答案")}<span className="kbd">␣</span></button>
+          mode === "spell"
+            ? <button className="btn ghost rv-show" onClick={() => { setSpelled({ ok: false, typed: "", hints: 0 }); setFlipped(true); }}>{t("不会，看答案")}</button>
+            : <button className="btn primary rv-show" onClick={() => setFlipped(true)}>{t("显示答案")}<span className="kbd">␣</span></button>
         )}
       </div>
     </div>

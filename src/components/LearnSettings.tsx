@@ -6,6 +6,7 @@ import { t } from "../lib/i18n";
 import { LEVELS, loadDict, useDict } from "../lib/dict";
 import { useWords } from "../lib/words";
 import { exportWords } from "./Learn";
+import { ask } from "../lib/confirm";
 import type { LearnLevel } from "../lib/settings";
 
 const DAILY = [10, 20, 30];
@@ -13,6 +14,7 @@ const DAILY = [10, 20, 30];
 export function LearnSettings() {
   const { s, save } = useStore(useShallow((st) => ({ s: st.settings, save: st.saveSettings })));
   const count = useWords((w) => Object.keys(w.words).length);
+  const known = useWords((w) => Object.keys(w.known).length);
   const dictFailed = useDict((d) => d.failed);
   useEffect(() => { void useWords.getState().load(); if (s.learnOn) void loadDict(); }, [s.learnOn]);
 
@@ -71,6 +73,12 @@ export function LearnSettings() {
                 <button className="btn sm" disabled={!count} onClick={() => void exportAs("anki")}>{t("导出 Anki")}</button>
                 <button className="btn sm" disabled={!count} onClick={() => void exportAs("csv")}>{t("导出 CSV")}</button>
               </div>
+            </div>
+          </div>
+          <div className="ls-group">
+            <div className="ls-row">
+              <span>{t("标为认识的词 {n} 个", { n: known })}<span className="muted small"> · {t("这些词不再标成生词")}</span></span>
+              <button className="btn sm" disabled={!known} onClick={() => void ask({ title: t("清空标为认识的 {n} 个词？", { n: known }), message: t("清空后它们会按你的水平重新标出来。"), ok: t("清空"), danger: true }).then((yes) => { if (yes) useWords.getState().clearKnown(); })}>{t("清空")}</button>
             </div>
           </div>
           <p className="muted small">{t("词典来自开源的 ECDICT，离线可用。")}</p>

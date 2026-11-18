@@ -99,36 +99,36 @@ export function LearnStats({ onOpen }: { onOpen: (id: string) => void }) {
   const chips = sel ? [...new Set([...sel.added, ...sel.reviewed])].filter((id) => words[id]) : [];
 
   return (
-    <section className="ls">
-      <div className="ls-nums">
-        <div className="ls-num"><span className="ls-v">{stats.streak > 0 && <Flame size={16} className="ls-fire" />}{stats.streak}</span><span className="ls-k">{t("连续学习（天）")}</span></div>
-        <div className="ls-num"><span className="ls-v">{stats.week}</span><span className="ls-k">{t("近 7 天复习")}</span></div>
-        <div className="ls-num"><span className="ls-v">{stats.kept == null ? "—" : `${stats.kept}%`}</span><span className="ls-k" title={t("近 30 天复习时没有选「忘了」的比例（至少复习 10 次后显示）")}>{t("记住率")}</span></div>
-        <div className="ls-num"><span className="ls-v">{stats.mastered}<span className="ls-of"> / {stats.total}</span></span><span className="ls-k">{t("已掌握")}</span></div>
+    <section className="hm">
+      <div className="hm-nums">
+        <div className="hm-num"><span className="hm-v">{stats.streak > 0 && <Flame size={16} className="hm-fire" />}{stats.streak}</span><span className="hm-k">{t("连续学习（天）")}</span></div>
+        <div className="hm-num"><span className="hm-v">{stats.week}</span><span className="hm-k">{t("近 7 天复习")}</span></div>
+        <div className="hm-num"><span className="hm-v">{stats.kept == null ? "—" : `${stats.kept}%`}</span><span className="hm-k" title={t("近 30 天复习时没有选「忘了」的比例（至少复习 10 次后显示）")}>{t("记住率")}</span></div>
+        <div className="hm-num"><span className="hm-v">{stats.mastered}<span className="hm-of"> / {stats.total}</span></span><span className="hm-k">{t("已掌握")}</span></div>
       </div>
-      <div className="ls-map" ref={box}>
-        <div className="ls-months" style={{ paddingLeft: LABEL_W }}>
+      <div className="hm-map" ref={box}>
+        <div className="hm-months" style={{ paddingLeft: LABEL_W }}>
           {grid.map((c, i) => <span key={i} style={{ width: CELL + GAP }}>{c.month ?? ""}</span>)}
         </div>
-        <div className="ls-body">
-          <div className="ls-wd" style={{ width: LABEL_W }}>
+        <div className="hm-body">
+          <div className="hm-wd" style={{ width: LABEL_W }}>
             {[0, 1, 2, 3, 4, 5, 6].map((r) => <span key={r}>{r % 2 === 0 && r < 6 ? weekday.format(new Date(2024, 0, 1 + r)) : ""}</span>)}
           </div>
           {grid.map((c, i) => (
-            <div key={i} className="ls-col">
-              {c.days.map((d) => d.future ? <span key={d.key} className="ls-cell future" /> : (
-                <button key={d.key} className={`ls-cell l${level(d.n)} ${d.key === today ? "today" : ""} ${d.key === picked ? "on" : ""}`}
+            <div key={i} className="hm-col">
+              {c.days.map((d) => d.future ? <span key={d.key} className="hm-cell future" /> : (
+                <button key={d.key} className={`hm-cell l${level(d.n)} ${d.key === today ? "today" : ""} ${d.key === picked ? "on" : ""}`}
                   title={tip(d.key)} aria-label={tip(d.key)} onClick={() => setPicked(picked === d.key ? null : d.key)} />
               ))}
             </div>
           ))}
         </div>
-        <div className="ls-legend"><span>{t("少")}</span>{[0, 1, 2, 3, 4].map((l) => <span key={l} className={`ls-cell l${l}`} />)}<span>{t("多")}</span></div>
+        <div className="hm-legend"><span>{t("少")}</span>{[0, 1, 2, 3, 4].map((l) => <span key={l} className={`hm-cell l${l}`} />)}<span>{t("多")}</span></div>
       </div>
       {picked && (
-        <div className="ls-day">
-          <span className="ls-day-h">{tip(picked)}</span>
-          {chips.length > 0 && <div className="ls-chips">{chips.map((id) => <button key={id} className="ls-chip" onClick={() => onOpen(id)}>{id}</button>)}</div>}
+        <div className="hm-day">
+          <span className="hm-day-h">{tip(picked)}</span>
+          {chips.length > 0 && <div className="hm-chips">{chips.map((id) => <button key={id} className="hm-chip" onClick={() => onOpen(id)}>{id}</button>)}</div>}
         </div>
       )}
     </section>
