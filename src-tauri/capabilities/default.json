@@ -64,6 +64,7 @@
     "allow-tts-speak",
     "allow-cached-show",
     "allow-save-image",
+    "allow-save-file",
     "allow-set-menu-labels",
     "allow-download-episode",
     "allow-list-downloads",

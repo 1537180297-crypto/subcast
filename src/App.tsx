@@ -26,7 +26,8 @@ import { AudioEngine, cycleMode, noteListening, stepRate, toggleTheater } from "
 import { actionFor, comboOf, isPlain, useKeysHelp, type ActionId } from "./lib/shortcuts";
 import { useJobs } from "./lib/jobs";
 import { activeIndex } from "./components/TranscriptPanel";
-import { SettingsDialog } from "./components/SettingsDialog";
+import { SettingsView } from "./components/SettingsDialog";
+import { WordsView, remindReview } from "./components/Learn";
 import { stepVolume, toggleMute } from "./lib/volume";
 import { KeysHelp } from "./components/ShortcutSettings";
 import { t, useLang } from "./lib/i18n";
@@ -35,7 +36,7 @@ import { EqBars } from "./components/Illustrations";
 export default function App() {
   useReadingSettings();
   useRevealOnExpand();
-  const { ready, view, settingsOpen, addOpen, init } = useStore(useShallow((s) => ({ ready: s.ready, view: s.view, settingsOpen: s.settingsOpen, addOpen: s.addOpen, init: s.init })));
+  const { ready, view, addOpen, init } = useStore(useShallow((s) => ({ ready: s.ready, view: s.view, addOpen: s.addOpen, init: s.init })));
 
   useEffect(() => {
     startJobListeners();
@@ -46,7 +47,7 @@ export default function App() {
     const offPlaying = useStore.subscribe((s, prev) => { if (prev.playing && !s.playing && s.current) noteListening(s.current, false); });
     window.addEventListener("beforeunload", () => { const c = useStore.getState().current; if (c) noteListening(c, false); });
     // Local AI agents (Claude Code and the like): found once settings are loaded, put to work if nothing else is set up.
-    void init().then(() => { void firstRunSetup(); void detectAgents(); });
+    void init().then(() => { void firstRunSetup(); void detectAgents(); window.setTimeout(() => void remindReview(), 4000); });
     // Rendered: tells the app a hot-updated interface works (otherwise it falls back on its own; see ota.rs).
     void api.uiReady().then((info) => useStore.setState({ uiBuild: info.build })).catch(() => {});
     // Shortcuts come from one registry (lib/shortcuts.ts), so Settings › 快捷键 can change them.
@@ -124,7 +125,6 @@ export default function App() {
       <MiniPlayer />
       <AudioEngine />
       <VideoDock />
-      {settingsOpen && <SettingsDialog />}
       {keysHelp && <KeysHelp />}
       {addOpen && <AddDialog />}
       <SelectionTools />
@@ -149,6 +149,8 @@ const Main = memo(function Main({ view }: { view: View; lang: string }) {
       {view.kind === "show" && <ShowView key={view.id} id={view.id} />}
       {view.kind === "channel" && <ChannelView key={view.input} input={view.input} />}
       {view.kind === "episode" && <EpisodeView key={view.id} id={view.id} />}
+      {view.kind === "settings" && <SettingsView />}
+      {view.kind === "words" && <WordsView />}
     </main>
   );
 });

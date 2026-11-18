@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn } from "lucide-react";
+import { BookMarked, ChevronLeft, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { ImportPanel } from "./ImportPanel";
 import { useStore, type View } from "../store";
@@ -15,6 +15,7 @@ import { useOffline } from "../lib/offline";
 import logoUrl from "../assets/logo.png";
 import { showIcon } from "./Lists";
 import { EqBars, SearchArt, useKonami, useTaps } from "./Illustrations";
+import { useDueCount } from "./Learn";
 
 export function Sidebar() {
   const { shows, view, go, set } = useStore(useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })));
@@ -31,10 +32,12 @@ export function Sidebar() {
   const updateWaiting = useUpdate(hasUpdate);
   const rail = !sideOpen;
   const hasDownloads = useOffline((s) => Object.keys(s.saved).length + Object.keys(s.active).length > 0);
+  const wordsNav = useStore((s) => s.settings.learnOn && s.settings.learnSide);
+  const due = useDueCount();
   // A render function, not a component: defined inside Sidebar, a component would remount its button on
   // every render and swallow clicks that land mid-render.
-  const nav = (v: View, icon: React.ReactNode, label: string) => (
-    <button key={v.kind} className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)} title={rail ? label : undefined} aria-label={label}>{icon}<span className="label">{label}</span></button>
+  const nav = (v: View, icon: React.ReactNode, label: string, badge?: number) => (
+    <button key={v.kind} className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)} title={rail ? label : undefined} aria-label={badge ? `${label} · ${badge}` : label}>{icon}<span className="label">{label}</span>{badge ? <span className="nav-badge">{badge > 99 ? "99+" : badge}</span> : null}</button>
   );
   return (
     <aside className={`sidebar ${rail ? "rail" : ""}`}>
@@ -49,6 +52,7 @@ export function Sidebar() {
         {nav({ kind: "discover" }, <Compass size={16} />, t("发现"))}
         {nav({ kind: "stats" }, <ChartColumn size={16} />, t("收听统计"))}
         {(hasDownloads || view.kind === "downloads") && nav({ kind: "downloads" }, <Download size={16} />, t("已下载"))}
+        {(wordsNav || view.kind === "words") && nav({ kind: "words" }, <BookMarked size={16} />, t("生词本"), due)}
       </nav>
       <div className="side-sep" />
       <div className="side-head"><span className="label">{tx("sidebar", "订阅")}</span><button className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={14} /></button></div>
@@ -73,7 +77,7 @@ export function Sidebar() {
       </div>
       <TaskChip />
       <div className="side-foot">
-        <button className="nav settings-btn" onClick={() => useStore.getState().openSettings(updateWaiting ? "about" : undefined)} title={updateWaiting ? t("有新版本，点击更新") : rail ? t("设置") : undefined} aria-label={updateWaiting ? t("设置，有新版本") : t("设置")}><span className="cog-wrap"><Cog size={16} />{updateWaiting && <span className="update-dot" />}</span><span className="label">{t("设置")}</span>{updateWaiting && !rail && <span className="update-pill">{t("更新")}</span>}</button>
+        <button className={`nav settings-btn ${view.kind === "settings" ? "on" : ""}`} onClick={() => useStore.getState().openSettings(updateWaiting ? "about" : undefined)} title={updateWaiting ? t("有新版本，点击更新") : rail ? t("设置") : undefined} aria-label={updateWaiting ? t("设置，有新版本") : t("设置")}><span className="cog-wrap"><Cog size={16} />{updateWaiting && <span className="update-dot" />}</span><span className="label">{t("设置")}</span>{updateWaiting && !rail && <span className="update-pill">{t("更新")}</span>}</button>
         <button className="icon-btn side-toggle" onClick={() => putLayout({ sideOpen: rail })} title={rail ? t("展开侧栏（⌘B）") : t("收起为图标（⌘B）")} aria-label={rail ? t("展开侧栏") : t("收起侧栏")}>{rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
       </div>
     </aside>

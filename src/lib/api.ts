@@ -94,6 +94,7 @@ export const api = {
   /** Free Google translation with a persistent cache (no model needed). */
   previewShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number }>("preview_show", { input }),
   saveImage: (name: string, base64: string) => invoke<string>("save_image", { name, base64 }),
+  saveFile: (name: string, ext: string, text: string) => invoke<string>("save_file", { name, ext, text }),
   cachedShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number } | null>("cached_show", { input }),
   qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
   listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),
