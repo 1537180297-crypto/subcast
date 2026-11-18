@@ -7,7 +7,8 @@
 #
 # Usage: scripts/release.sh [--skip-mac] [--publish] [--notes "text"]
 # Needs: ~/.tauri/subcast-updater.key, the Developer ID certificate in the keychain,
-#        a notarytool keychain profile named "notary", gh logged in, ssh access to myvps.
+#        a notarytool keychain profile named "notary", gh logged in, ssh access to myvps,
+#        create-dmg (brew install create-dmg) for the Mac disk images.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -22,6 +23,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$SKIP_MAC" = 0 ] && ! command -v create-dmg >/dev/null; then
+  echo "create-dmg is missing (it lays out the DMG window): brew install create-dmg" >&2
+  exit 1
+fi
 
 VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')
 TAG="v$VERSION"
@@ -47,6 +53,10 @@ notarize() { # file
 }
 
 if [ "$SKIP_MAC" = 0 ]; then
+  # DMG window background (source: scripts/dmg/background.svg). One TIFF with 1x and 2x, so Retina stays sharp.
+  DMG_BG="$(mktemp -d)/background.tiff"
+  tiffutil -cathidpicheck scripts/dmg/background.png scripts/dmg/background@2x.png -out "$DMG_BG" >/dev/null
+
   for TARGET in aarch64-apple-darwin x86_64-apple-darwin; do
     ARCH=$([ "$TARGET" = aarch64-apple-darwin ] && echo aarch64 || echo x64)
     rustup target add "$TARGET" >/dev/null
@@ -72,9 +82,22 @@ if [ "$SKIP_MAC" = 0 ]; then
     DMG="$OUT/SubCast_${VERSION}_${ARCH}.dmg"
     STAGE="$(mktemp -d)"
     cp -R "$APP" "$STAGE/"
-    ln -s /Applications "$STAGE/Applications"
     rm -f "$DMG"
-    hdiutil create -volname "SubCast" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+    # The usual macOS layout: the app on the left, an Applications link on the right, an arrow and a
+    # drag hint in the background. The positions match scripts/dmg/background.svg; change them together.
+    # create-dmg drives Finder over AppleScript, so the first run asks to let Terminal control Finder.
+    create-dmg \
+      --volname "SubCast" \
+      --background "$DMG_BG" \
+      --window-pos 200 120 \
+      --window-size 660 400 \
+      --icon-size 128 \
+      --text-size 13 \
+      --icon "SubCast.app" 170 180 \
+      --hide-extension "SubCast.app" \
+      --app-drop-link 490 180 \
+      --hdiutil-quiet \
+      "$DMG" "$STAGE" >/dev/null
     codesign --sign "$IDENTITY" --timestamp "$DMG"
     notarize "$DMG"
     xcrun stapler staple "$DMG"
