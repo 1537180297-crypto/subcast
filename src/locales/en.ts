@@ -1085,8 +1085,6 @@ const dict: Record<string, string> = {
   "节目": "Show",
   "时间": "Time",
   "加入日期": "Added",
-  "已复制到剪贴板，可以粘贴到文本文件里再导入": "Copied to the clipboard. Paste it into a text file to import.",
-  "导出失败": "Export failed",
   "导出 Anki": "Export for Anki",
   "忘了": "Forgot",
   "困难": "Hard",
@@ -1132,6 +1130,16 @@ const dict: Record<string, string> = {
   "中考": "Middle school",
   "高考": "High school",
   "托福": "TOEFL",
+  "正在准备 {n} 个词的原声…": "Preparing the original audio for {n} words…",
+  "正在准备原声 {done}/{n}…": "Preparing audio {done}/{n}…",
+  "已导出 {n} 个词（{m} 个带原声）：{file}": "Exported {n} words ({m} with audio): {file}",
+  "已导出 {n} 个词：{file}": "Exported {n} words: {file}",
+  "导出失败：{why}": "Export failed: {why}",
+  "读单词（W）": "Say the word (W)",
+  "再听原句": "Replay sentence",
+  "不能写入这个位置": "Can't write to this location",
+  "这一集没有音频": "This episode has no audio",
+  "没能截取原声": "Couldn't cut the original audio",
 };
 
 export default dict;

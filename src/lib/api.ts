@@ -94,7 +94,11 @@ export const api = {
   /** Free Google translation with a persistent cache (no model needed). */
   previewShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number }>("preview_show", { input }),
   saveImage: (name: string, base64: string) => invoke<string>("save_image", { name, base64 }),
-  saveFile: (name: string, ext: string, text: string) => invoke<string>("save_file", { name, ext, text }),
+  /** The local file with one sentence of an episode in the speaker's voice (made once, then reused). */
+  learnClip: (episodeId: string, start: number, end: number) => invoke<string>("learn_clip", { episodeId, start, end }),
+  saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
+  /** Writes an Anki package; resolves to how many notes carry their sentence audio. */
+  exportAnki: (path: string, deck: string, model: string, notes: AnkiNote[]) => invoke<number>("export_anki", { path, deck, model, notes }),
   cachedShow: (input: string) => invoke<{ show: Show; episodes: Episode[]; fetchedAt: number } | null>("cached_show", { input }),
   qiaomuDetail: (episodeId: string) => invoke<{ audio?: string; deepRead?: string }>("qiaomu_detail", { episodeId }),
   listModels: (provider: Provider) => invoke<string[]>("list_models", { provider }),
@@ -170,6 +174,8 @@ export async function llmChat(opts: {
 /** The error as it came, for matching on its wording; show it with errorText (or tr). */
 export const rawErrorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
 /** YouTube's "confirm you're not a bot" check, as the backend words it (asr.rs with_bot_fallback). */
+export interface AnkiNote { id: string; word: string; ipa: string; meaning: string; context: string; sentence: string; translation: string; source: string; tags: string; clip: string | null }
+
 export const isBotCheck = (m: string) => m.includes("YouTube 要求验证「不是机器人」。选一个"); // i18n-ignore (matches the backend's text)
 export const errorText = (e: unknown) => tr(rawErrorText(e));
 /** macOS refused SubCast access to a browser's data (import.rs NEEDS_ACCESS). */

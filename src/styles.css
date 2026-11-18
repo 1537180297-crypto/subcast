@@ -1939,7 +1939,9 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .rv-card { max-width: 480px; margin: 32px auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; }
 .rv-src { font-size: 12px; color: var(--muted); max-width: 100%; }
 .rv-q { margin-top: 20px; font-size: 13px; color: var(--muted); }
-.rv-word { margin-top: 12px; font-size: 32px; font-weight: 650; letter-spacing: -.02em; line-height: 1.15; }
+.rv-word { margin-top: 12px; font-size: 32px; font-weight: 650; letter-spacing: -.02em; line-height: 1.15; display: inline-flex; align-items: center; gap: 6px; }
+.rv-say { color: var(--muted); }
+.rv-say:hover { color: var(--accent); }
 .rv-ipa { margin-top: 4px; font-size: 13px; color: var(--muted); }
 .rv-def { margin-top: 8px; }
 .rv-def .wc-def { align-items: center; font-size: 15px; }

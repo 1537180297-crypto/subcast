@@ -1,31 +1,61 @@
 // Plays one sentence of an episode in the speaker's own voice: through the main player when that episode is
-// loaded, otherwise through a separate audio element, so the episode you are listening to is left alone.
-import { api, type Episode } from "./api";
+// loaded, otherwise from a small local clip (learn_clip in the app cuts just that sentence out of the episode,
+// once), so replaying a saved word is instant and the episode you are listening to is left alone.
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { create } from "zustand";
+import { api } from "./api";
 import { useStore } from "../store";
+
+/** The clip being fetched for playback right now (its key), for a spinner on the button that asked. */
+export const useClipLoading = create<{ key: string | null }>(() => ({ key: null }));
+export const clipKey = (episodeId: string, start: number, end: number) => `${episodeId}|${start.toFixed(2)}|${end.toFixed(2)}`;
 
 let el: HTMLAudioElement | null = null;
 let stopTimer: number | undefined;
 let unwatch: (() => void) | null = null;
-/** Stream addresses for episodes that are not in the main player, by episode id. */
-const sources = new Map<string, string>();
+/** Bumped by every play and stop, so a clip that arrives late doesn't start over something newer. */
+let turn = 0;
 
-export function stopClip() {
-  window.clearTimeout(stopTimer);
-  unwatch?.(); unwatch = null;
-  if (el) { el.pause(); }
+const made = new Map<string, Promise<string | null>>();
+/** The local clip for a sentence, made once (null when it can't be made; asked again next time). */
+export function prepareClip(episodeId: string, start: number, end: number): Promise<string | null> {
+  const key = clipKey(episodeId, start, end);
+  let p = made.get(key);
+  if (!p) {
+    p = api.learnClip(episodeId, start, end).catch(() => { made.delete(key); return null; });
+    made.set(key, p);
+  }
+  return p;
 }
 
-async function sourceFor(ep: Pick<Episode, "id" | "audioUrl" | "videoId">): Promise<string | null> {
-  if (ep.audioUrl) return ep.audioUrl;
-  const known = sources.get(ep.id);
-  if (known) return known;
-  if (!ep.videoId) return null;
-  try { const s = await api.youtubeStream(ep.videoId, "mp4"); sources.set(ep.id, s.url); return s.url; } catch { return null; }
+// Clips for words just saved and cards coming up in review are made in the background, two at a time.
+const waiting: [string, number, number][] = [];
+let running = 0;
+export function prefetchClip(episodeId: string, start: number, end: number) {
+  if (made.has(clipKey(episodeId, start, end))) return;
+  waiting.push([episodeId, start, end]);
+  pump();
+}
+function pump() {
+  while (running < 2 && waiting.length) {
+    const [id, s, e] = waiting.shift()!;
+    running++;
+    void prepareClip(id, s, e).finally(() => { running--; pump(); });
+  }
+}
+
+export function stopClip() {
+  turn++;
+  window.clearTimeout(stopTimer);
+  unwatch?.(); unwatch = null;
+  if (el) el.pause();
+  useClipLoading.setState({ key: null });
 }
 
 /** Plays [start, end] of an episode. Resolves false when there is no way to play it (the caller can read the text aloud). */
-export async function playClip(ep: Pick<Episode, "id" | "audioUrl" | "videoId">, start: number, end: number): Promise<boolean> {
+export async function playClip(ep: { id: string }, start: number, end: number): Promise<boolean> {
   stopClip();
+  const mine = turn;
   const s = useStore.getState();
   const pad = 0.15;
   if (s.current?.id === ep.id && s.player) {
@@ -42,17 +72,16 @@ export async function playClip(ep: Pick<Episode, "id" | "audioUrl" | "videoId">,
     });
     return true;
   }
-  const src = await sourceFor(ep);
-  if (!src) return false;
-  if (!el) { el = new Audio(); el.preload = "auto"; }
-  if (el.src !== src) el.src = src;
-  const a = el;
-  const go = () => {
-    a.currentTime = Math.max(0, start - pad);
-    void a.play().catch(() => {});
-    stopTimer = window.setTimeout(() => a.pause(), (end - start + pad * 2) * 1000);
-  };
-  if (a.readyState >= 1) go(); else a.addEventListener("loadedmetadata", go, { once: true });
+  const key = clipKey(ep.id, start, end);
+  useClipLoading.setState({ key });
+  const path = await prepareClip(ep.id, start, end);
+  if (mine !== turn) return true;
+  useClipLoading.setState({ key: null });
+  if (!path) return false;
+  if (!el) el = new Audio();
+  el.src = convertFileSrc(path);
+  el.currentTime = 0;
+  try { await el.play(); } catch { return false; }
   return true;
 }
 

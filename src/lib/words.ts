@@ -124,18 +124,7 @@ export function intervals(w: Word): Record<Grade, number> {
 
 export { Rating, type Grade };
 
-const clean = (s: string) => s.replace(/[\t\r\n]+/g, " ").trim();
 const at = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
-
-/** Anki "Basic" notes as tab-separated text: front is the word, back has the meaning and the source sentence. */
-export function toAnki(words: Word[]): string {
-  const lines = ["#separator:tab", "#html:true", "#columns:Front\tBack\tTags"];
-  for (const w of words) {
-    const back = [w.ipa && `/${w.ipa}/`, w.meaning.replace(/\n/g, "<br>"), w.ctx, `<i>${clean(w.sentence)}</i>`, w.sentenceZh, `${w.showTitle ?? ""} · ${w.episodeTitle} · ${at(w.start)}`].filter(Boolean).map((x) => clean(String(x))).join("<br>");
-    lines.push([w.word, back, ["subcast", w.tag].filter(Boolean).join(" ")].map(clean).join("\t"));
-  }
-  return lines.join("\n") + "\n";
-}
 
 const csvCell = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 export function toCsv(words: Word[], header: string[]): string {

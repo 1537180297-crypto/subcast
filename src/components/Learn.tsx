@@ -4,10 +4,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { BookMarked, Check, Download, GraduationCap, Loader2, Play, Plus, Trash2, Volume2, X } from "lucide-react";
-import { api, llmChat, type Episode, type Segment } from "../lib/api";
+import { api, errorText, llmChat, type AnkiNote, type Episode, type Segment } from "../lib/api";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { WORD_RE, isNew, loadDict, lookup, tagLabel, useDict, type Entry } from "../lib/dict";
-import { playClip, speak, stopClip } from "../lib/clip";
-import { Rating, intervals, isMastered, reviewQueue, toAnki, toCsv, useWords, type Grade, type Word } from "../lib/words";
+import { clipKey, playClip, prefetchClip, prepareClip, speak, stopClip, useClipLoading } from "../lib/clip";
+import { Rating, intervals, isMastered, reviewQueue, toCsv, useWords, type Grade, type Word } from "../lib/words";
 import { llmReady } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
 import { clock } from "../lib/format";
@@ -145,6 +147,8 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
       episodeId: ep.id, episodeTitle: ep.title, showTitle: ep.showTitle, start: target.seg.start, end: target.seg.end,
     });
     useStore.getState().notify(t("已加入生词本：{word}", { word: entry?.lemma ?? target.token }));
+    // The sentence's own audio, cut now, so review plays it at once.
+    prefetchClip(ep.id, target.seg.start, target.seg.end);
   };
   const listen = async () => { if (!(await playClip(ep, target.seg.start, target.seg.end))) speak(target.seg.text); };
   const label = entry ? tagLabel(entry.tags) : "";
@@ -165,7 +169,7 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
         </div>
       )}
       <div className="wc-foot">
-        <button className="btn sm play" onClick={() => void listen()}><Play size={12} className="fill-ico" />{t("原声")}</button>
+        <button className="btn sm play" onClick={() => void listen()}><ClipIcon k={clipKey(ep.id, target.seg.start, target.seg.end)} />{t("原声")}</button>
         {saved
           ? <button className="btn sm ghost wc-saved" onClick={() => useStore.getState().go({ kind: "words" })}><Check size={13} />{t("已在生词本")}</button>
           : <button className="btn sm primary" onClick={add}><Plus size={13} />{t("加入生词本")}</button>}
@@ -240,6 +244,7 @@ export function EpisodeWords({ ep, segments, zh, onClose }: { ep: Episode; segme
     const add = useWords.getState().add;
     let n = 0;
     for (const f of fresh) if (picked.has(f.entry.lemma)) {
+      prefetchClip(ep.id, f.seg.start, f.seg.end);
       add({ id: f.entry.lemma, word: f.token, ipa: f.entry.ipa, meaning: f.entry.meaning, tag: tagLabel(f.entry.tags), sentence: f.seg.text, sentenceZh: typeof zh?.[f.idx] === "string" ? (zh[f.idx] as string) : undefined, episodeId: ep.id, episodeTitle: ep.title, showTitle: ep.showTitle, start: f.seg.start, end: f.seg.end });
       n++;
     }
@@ -364,12 +369,14 @@ export function Dictation({ ep, segments, from, onClose }: { ep: Episode; segmen
 
 type Filter = "due" | "all" | "mastered";
 
-/** Episodes for playing a saved word's sentence, fetched once each. */
-const episodes = new Map<string, Promise<Episode | null>>();
-const episodeFor = (id: string) => { let p = episodes.get(id); if (!p) { p = api.getEpisode(id).catch(() => null); episodes.set(id, p); } return p; };
 async function playWord(w: Word) {
-  const ep = await episodeFor(w.episodeId);
-  if (!ep || !(await playClip(ep, w.start, w.end))) speak(w.sentence);
+  if (!(await playClip({ id: w.episodeId }, w.start, w.end))) speak(w.sentence);
+}
+
+/** Play, or a spinner while the sentence's clip is being cut. */
+function ClipIcon({ k, size = 12 }: { k: string; size?: number }) {
+  const loading = useClipLoading((s) => s.key === k);
+  return loading ? <Loader2 size={size} className="spin" /> : <Play size={size} className="fill-ico" />;
 }
 
 export function WordsView() {
@@ -385,6 +392,8 @@ export function WordsView() {
   const all = useMemo(() => Object.values(words).sort((a, b) => b.added - a.added), [words]);
   const queue = useMemo(() => reviewQueue({ words, day, newToday }, dailyNew), [words, day, newToday, dailyNew, reviewing]);
   const mastered = all.filter(isMastered);
+  // The first cards of today's review get their audio ready while you look at the list.
+  useEffect(() => { for (const w of queue.slice(0, 4)) prefetchClip(w.episodeId, w.start, w.end); }, [queue]);
   const shown = filter === "due" ? queue : filter === "mastered" ? mastered : all;
 
   if (reviewing) return <Review queue={queue} onDone={() => setReviewing(false)} />;
@@ -416,7 +425,7 @@ export function WordsView() {
                   <div className="wb-main">
                     <div className="wb-l1"><span className="wb-w">{w.id}</span>{w.ipa && <span className="wb-ipa">/{w.ipa}/</span>}{w.tag && <span className="pill">{t(w.tag)}</span>}</div>
                     <p className="wb-d">{(w.ctx || w.meaning.split("\n")[0])}</p>
-                    <p className="wb-src"><span className="clamp1">{w.showTitle || w.episodeTitle}</span><button className="ts-link" onClick={() => void playWord(w)} title={t("播放原句")}><Play size={10} className="fill-ico" />{clock(w.start)}</button></p>
+                    <p className="wb-src"><span className="clamp1">{w.showTitle || w.episodeTitle}</span><button className="ts-link" onClick={() => void playWord(w)} title={t("播放原句")}><ClipIcon k={clipKey(w.episodeId, w.start, w.end)} size={10} />{clock(w.start)}</button></p>
                   </div>
                   <span className={`due ${due.now ? "now" : ""}`}>{due.text}</span>
                   <button className="icon-btn sm wb-del" title={t("从生词本删除")} aria-label={t("从生词本删除")} onClick={() => useWords.getState().remove(w.id)}><Trash2 size={14} /></button>
@@ -431,22 +440,56 @@ export function WordsView() {
 }
 
 function ExportButtons({ words }: { words: Word[] }) {
-  const save = async (kind: "anki" | "csv") => {
-    const text = kind === "anki" ? toAnki(words) : toCsv(words, [t("单词"), t("音标"), t("释义"), t("在这句里"), t("原句"), t("译文"), t("节目"), t("单集"), t("时间"), t("加入日期")]);
-    const name = kind === "anki" ? `SubCast ${t("生词本")} (Anki)` : `SubCast ${t("生词本")}`;
-    try {
-      const path = await api.saveFile(name, kind === "anki" ? "txt" : "csv", text);
-      useStore.getState().notify(t("已导出到「下载」：{name}", { name: path.split(/[\\/]/).pop() ?? "" }));
-    } catch {
-      // An older app without file export: the text goes to the clipboard instead.
-      try { await navigator.clipboard.writeText(text); useStore.getState().notify(t("已复制到剪贴板，可以粘贴到文本文件里再导入")); }
-      catch { useStore.getState().notify(t("导出失败")); }
-    }
-  };
   return <>
-    <button className="btn sm" onClick={() => void save("anki")}><Download size={13} />{t("导出 Anki")}</button>
-    <button className="btn sm ghost" onClick={() => void save("csv")}>CSV</button>
+    <button className="btn sm" onClick={() => void exportWords("anki", words)}><Download size={13} />{t("导出 Anki")}</button>
+    <button className="btn sm ghost" onClick={() => void exportWords("csv", words)}>CSV</button>
   </>;
+}
+
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const wordRe = (w: string, flags = "i") => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, flags);
+
+let exporting = false;
+/** Asks where to save, then writes the word book: an Anki package with each sentence's audio, or a CSV. */
+export async function exportWords(kind: "anki" | "csv", words: Word[]) {
+  if (exporting || !words.length) return;
+  const notify = useStore.getState().notify;
+  const name = `SubCast ${t("生词本")}`;
+  const path = await saveDialog({ defaultPath: `${name}.${kind === "anki" ? "apkg" : "csv"}`, filters: [kind === "anki" ? { name: "Anki", extensions: ["apkg"] } : { name: "CSV", extensions: ["csv"] }] }).catch(() => null);
+  if (!path) return;
+  exporting = true;
+  try {
+    if (kind === "csv") {
+      await api.saveText(path, toCsv(words, [t("单词"), t("音标"), t("释义"), t("在这句里"), t("原句"), t("译文"), t("节目"), t("单集"), t("时间"), t("加入日期")]));
+    } else {
+      // Every card carries its sentence in the speaker's voice: clips not cut yet are made now, a few at a time.
+      const clips = new Map<string, string | null>();
+      let done = 0;
+      const todo = [...words];
+      notify(t("正在准备 {n} 个词的原声…", { n: words.length }));
+      await Promise.all([0, 1, 2].map(async () => {
+        for (let w = todo.shift(); w; w = todo.shift()) {
+          clips.set(w.id, await prepareClip(w.episodeId, w.start, w.end));
+          if (++done % 10 === 0 && done < words.length) notify(t("正在准备原声 {done}/{n}…", { done, n: words.length }));
+        }
+      }));
+      const notes: AnkiNote[] = words.map((w) => ({
+        id: w.id, word: esc(w.id), ipa: esc(w.ipa), meaning: esc(w.meaning).replace(/\n/g, "<br>"), context: esc(w.ctx ?? ""),
+        sentence: esc(w.sentence).replace(wordRe(esc(w.word)), (m) => `<b>${m}</b>`), translation: esc(w.sentenceZh ?? ""),
+        source: esc([w.showTitle, w.episodeTitle, clock(w.start)].filter(Boolean).join(" · ")),
+        tags: ["subcast", w.tag].filter(Boolean).map((x) => x.replace(/\s+/g, "_")).join(" "), clip: clips.get(w.id) ?? null,
+      }));
+      const withAudio = await api.exportAnki(path, name, `SubCast ${t("单词")}`, notes);
+      notify(withAudio < words.length
+        ? t("已导出 {n} 个词（{m} 个带原声）：{file}", { n: words.length, m: withAudio, file: path.split(/[\\/]/).pop() ?? "" })
+        : t("已导出 {n} 个词：{file}", { n: words.length, file: path.split(/[\\/]/).pop() ?? "" }));
+      void revealItemInDir(path).catch(() => {});
+      return;
+    }
+    notify(t("已导出 {n} 个词：{file}", { n: words.length, file: path.split(/[\\/]/).pop() ?? "" }));
+    void revealItemInDir(path).catch(() => {});
+  } catch (e) { notify(t("导出失败：{why}", { why: errorText(e) })); }
+  finally { exporting = false; }
 }
 
 const GRADES: [Grade, string, string][] = [[Rating.Again, "again", tk("忘了")], [Rating.Hard, "", tk("困难")], [Rating.Good, "good", tk("记得")], [Rating.Easy, "", tk("简单")]];
@@ -459,7 +502,13 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
   const [flipped, setFlipped] = useState(false);
   const w = list[i];
   const gaps = useMemo(() => (w ? intervals(useWords.getState().words[w.id] ?? w) : null), [w, flipped]);
-  useEffect(() => { if (w) void playWord(w); return () => stopClip(); }, [i]);
+  useEffect(() => {
+    if (w) void playWord(w);
+    for (const n of list.slice(i + 1, i + 4)) prefetchClip(n.episodeId, n.start, n.end);
+    return () => stopClip();
+  }, [i]);
+  // The answer side says the word itself (system voice, instant).
+  useEffect(() => { if (flipped && w) speak(w.id, 0.85); }, [flipped]);
   const rate = useCallback((g: Grade) => {
     if (!w) return;
     useWords.getState().rate(w.id, g);
@@ -474,6 +523,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
       if (e.key === " " || e.key === "Enter") { e.preventDefault(); if (!flipped) setFlipped(true); else rate(Rating.Good); }
       else if (flipped && ["1", "2", "3", "4"].includes(e.key)) { e.preventDefault(); rate(Number(e.key) as Grade); }
       else if (e.key.toLowerCase() === "r") { e.preventDefault(); if (w) void playWord(w); }
+      else if (flipped && e.key.toLowerCase() === "w") { e.preventDefault(); if (w) speak(w.id, 0.85); }
       else if (e.key === "Escape") onDone();
     };
     window.addEventListener("keydown", k);
@@ -499,7 +549,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
       <div className="rv-card">
         <span className="rv-src clamp1">{w.showTitle ? `${w.showTitle} · ` : ""}{clock(w.start)}</span>
         {flipped ? <>
-          <p className="rv-word">{w.id}</p>
+          <p className="rv-word">{w.id}<button className="icon-btn sm rv-say" title={t("读单词（W）")} aria-label={t("读单词")} onClick={() => speak(w.id, 0.85)}><Volume2 size={16} /></button></p>
           {w.ipa && <p className="rv-ipa">/{w.ipa}/</p>}
           <div className="rv-def"><Meaning text={w.meaning} /></div>
           {w.ctx && <p className="rv-ctx"><span className="wc-ctx-h">{t("在这句里")}</span>{w.ctx}</p>}
@@ -508,7 +558,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
           <p className="rv-q">{t("这句话里空着的是哪个词？")}</p>
           <p className="rv-sent front">{blank}</p>
         </>}
-        <button className="btn sm play rv-listen" onClick={() => void playWord(w)}><Play size={12} className="fill-ico" />{t("再听一遍")}<span className="kbd">R</span></button>
+        <button className="btn sm play rv-listen" onClick={() => void playWord(w)}><ClipIcon k={clipKey(w.episodeId, w.start, w.end)} />{t("再听原句")}<span className="kbd">R</span></button>
         {flipped ? (
           <div className="rv-rate">
             {GRADES.map(([g, cls, label], k) => (

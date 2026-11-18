@@ -4,8 +4,8 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { t } from "../lib/i18n";
 import { LEVELS, loadDict, useDict } from "../lib/dict";
-import { toAnki, toCsv, useWords } from "../lib/words";
-import { api } from "../lib/api";
+import { useWords } from "../lib/words";
+import { exportWords } from "./Learn";
 import type { LearnLevel } from "../lib/settings";
 
 const DAILY = [10, 20, 30];
@@ -16,17 +16,7 @@ export function LearnSettings() {
   const dictFailed = useDict((d) => d.failed);
   useEffect(() => { void useWords.getState().load(); if (s.learnOn) void loadDict(); }, [s.learnOn]);
 
-  const exportAs = async (kind: "anki" | "csv") => {
-    const words = Object.values(useWords.getState().words).sort((a, b) => b.added - a.added);
-    const text = kind === "anki" ? toAnki(words) : toCsv(words, [t("单词"), t("音标"), t("释义"), t("在这句里"), t("原句"), t("译文"), t("节目"), t("单集"), t("时间"), t("加入日期")]);
-    try {
-      const path = await api.saveFile(kind === "anki" ? `SubCast ${t("生词本")} (Anki)` : `SubCast ${t("生词本")}`, kind === "anki" ? "txt" : "csv", text);
-      useStore.getState().notify(t("已导出到「下载」：{name}", { name: path.split(/[\\/]/).pop() ?? "" }));
-    } catch {
-      try { await navigator.clipboard.writeText(text); useStore.getState().notify(t("已复制到剪贴板，可以粘贴到文本文件里再导入")); }
-      catch { useStore.getState().notify(t("导出失败")); }
-    }
-  };
+  const exportAs = (kind: "anki" | "csv") => exportWords(kind, Object.values(useWords.getState().words).sort((x, y) => y.added - x.added));
 
   return (
     <div className="learn-settings">
