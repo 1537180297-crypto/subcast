@@ -4,7 +4,6 @@ use crate::model::Segment;
 use crate::net;
 use anyhow::{anyhow, Result};
 use base64::Engine;
-use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -136,26 +135,33 @@ pub async fn transcribe(cfg: &CloudAsr, samples: Vec<f32>, language: &str, ctx: 
         .or_else(|| (cfg.protocol == "deepseek").then(|| crate::llm::get_key("deepseek")).flatten()).unwrap_or_default();
     if cfg.needs_key.unwrap_or(true) && key.is_empty() { return Err(anyhow!("请先在设置里填写这个识别服务的 API Key")); }
     let chunk = (cfg.chunk_secs.unwrap_or(if cfg.protocol == "doubao" { 300.0 } else { 20.0 }) * RATE as f64) as usize;
-    let chunks: Vec<(usize, Vec<f32>)> = samples.chunks(chunk.max(RATE as usize)).enumerate().map(|(i, c)| (i, c.to_vec())).collect();
+    // Borrowed slices, not copies: a long episode's samples are already hundreds of MB.
+    let chunks: Vec<(usize, &[f32])> = samples.chunks(chunk.max(RATE as usize)).enumerate().collect();
     let total = chunks.len().max(1);
     let done = std::sync::atomic::AtomicUsize::new(0);
     let parallel = match cfg.protocol.as_str() { "doubao" => 2, "deepseek" => 4, _ => 4 };
-    let results: Vec<Result<Vec<Segment>>> = futures_util::stream::iter(chunks.into_iter().map(|(i, c)| {
-        let (key, cfg, cancel, done, on_progress) = (key.clone(), cfg.clone(), cancel.clone(), &done, &on_progress);
+    let slots = tokio::sync::Semaphore::new(parallel);
+    let parts: Vec<Vec<Segment>> = futures_util::future::try_join_all(chunks.into_iter().map(|(i, c)| {
+        let (key, cfg, cancel, done, on_progress, slots) = (key.clone(), cfg.clone(), cancel.clone(), &done, &on_progress, &slots);
         let (language, ctx) = (language.to_string(), ctx.clone());
         async move {
+            let _slot = slots.acquire().await;
             if cancel.load(Ordering::Relaxed) { return Err(anyhow!("已取消")); }
             let offset = (i * chunk) as f64 / RATE as f64;
             let len = c.len() as f64 / RATE as f64;
-            let r = recognize_chunk(&cfg, &key, wav_bytes(&c, RATE), offset, len, &language, &ctx).await;
+            // A cancel stops the request in flight too, instead of waiting out its timeout and retries.
+            let watch = async { while !cancel.load(Ordering::Relaxed) { tokio::time::sleep(std::time::Duration::from_millis(300)).await; } };
+            let r = tokio::select! {
+                r = recognize_chunk(&cfg, &key, wav_bytes(c, RATE), offset, len, &language, &ctx) => r,
+                _ = watch => Err(anyhow!("已取消")),
+            };
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             on_progress(n as f64 / total as f64);
             r
         }
-    })).buffered(parallel).collect().await;
-    let mut out = vec![];
-    for r in results { out.extend(r?); }
-    Ok(out)
+    // The first error (a wrong key, say) stops the rest instead of sending every remaining chunk.
+    })).await?;
+    Ok(parts.into_iter().flatten().collect())
 }
 
 // ---- Doubao TTS (seed-tts-2.0) ------------------------------------------------------------------

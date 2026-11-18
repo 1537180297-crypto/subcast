@@ -1,18 +1,20 @@
 import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { BookA, ChevronDown, Languages, Loader2, Search, X } from "lucide-react";
+import { BookA, Check, ChevronDown, Ellipsis, Languages, ListChecks, Loader2, Mic, PenLine, RefreshCw, Search, X } from "lucide-react";
 import { Modal } from "./Chrome";
 import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { bytes } from "../lib/offline";
 import { api, errorText, rawErrorText, type Episode, type ModelInfo, type Segment } from "../lib/api";
-import { clock } from "../lib/format";
+import { clock, sizeMb } from "../lib/format";
 import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, switchYoutubeTrack, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
-import { ASR_SERVICES } from "../lib/settings";
+import { ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { lang, t, tk, tr, useLang } from "../lib/i18n";
+import { looksEnglish } from "../lib/dict";
+import { Dictation, EpisodeWords, LearnText, LearnTip, WordCard, useLearnMarks, useShadowing, type CardTarget, type LearnMarks } from "./Learn";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
 
@@ -31,15 +33,18 @@ function highlight(text: string, query: string) {
   return i < 0 ? text : <>{text.slice(0, i)}<mark>{text.slice(i, i + query.length)}</mark>{text.slice(i + query.length)}</>;
 }
 
-const Row = memo(function Row({ seg, zh, active, mode, pending, onSeek, query, current }: { seg: Segment; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean }) {
+const NO_SEGMENTS: Segment[] = [];
+
+const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean; marks: LearnMarks | null }) {
   const showZh = mode !== "original";
-  const showOrig = mode !== "translation" || (!zh && !pending);
+  // Learning English: the original stays visible even in "中文" mode, it is what you are learning.
+  const showOrig = mode !== "translation" || (!zh && !pending) || !!marks;
   return (
-    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""}`} data-active={active || undefined} data-hit={current || undefined} role="button" tabIndex={0} onClick={() => onSeek(seg.start)} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
+    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""}`} data-i={i} data-active={active || undefined} data-hit={current || undefined} role="button" tabIndex={0} onClick={() => onSeek(seg.start)} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
       <span className="line-time">{clock(seg.start)}</span>
       <div className="line-text">
         {showZh && (zh ? <p className="zh">{highlight(zh, query)}</p> : pending ? <span className="skeleton" /> : null)}
-        {showOrig && <p className="orig">{highlight(seg.text, query)}</p>}
+        {showOrig && <p className="orig">{marks && !query ? <LearnText text={seg.text} marks={marks} /> : highlight(seg.text, query)}</p>}
       </div>
     </div>
   );
@@ -58,9 +63,14 @@ export function useModelDownload(onDone: () => void) {
     const un = listen<{ id: string; received: number; total?: number }>("model-download", (e) => setDownloading(e.payload));
     return () => { void un.then((f) => f()); };
   }, []);
-  const start = async (id: string, mirrorFirst: boolean) => {
+  /** Tries the China mirror first, then the original source if that fails: no setting needed. */
+  const start = async (id: string, _legacy?: boolean) => {
     setDownloading({ id, received: 0 });
-    try { await api.downloadModel(id, mirrorFirst); onDone(); return true; }
+    try {
+      try { await api.downloadModel(id, true); }
+      catch (e) { if (rawErrorText(e).includes("取消")) throw e; setDownloading({ id, received: 0 }); await api.downloadModel(id, false); } // i18n-ignore (matches the backend's cancel message)
+      onDone(); return true;
+    }
     catch (e) { if (!rawErrorText(e).includes("取消")) useStore.getState().notify(t("模型下载失败：{error}", { error: errorText(e) })); return false; } // i18n-ignore (matches the backend's cancel message)
     finally { setDownloading(null); }
   };
@@ -68,9 +78,9 @@ export function useModelDownload(onDone: () => void) {
 }
 
 /** The one line under the tabs that says how this episode's subtitles stand, with the one action that applies. */
-function StatusLine({ left, text, spin, progress, action, right }: { left?: React.ReactNode; text: React.ReactNode; spin?: boolean; progress?: number; action?: React.ReactNode; right?: React.ReactNode }) {
+function StatusLine({ left, text, spin, progress, action, right, title }: { left?: React.ReactNode; text: React.ReactNode; spin?: boolean; progress?: number; action?: React.ReactNode; right?: React.ReactNode; title?: string }) {
   return (
-    <div className="status-line">
+    <div className="status-line" title={title}>
       {left}
       <span className="status-text" key={typeof text === "string" ? text : undefined}>{spin && <Loader2 size={13} className="spin" />}{text}</span>
       {progress != null && <div className="bar slim"><div style={{ width: `${Math.max(2, progress * 100)}%` }} /></div>}
@@ -86,7 +96,8 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const official = useJobs((s) => s.officialChecked[ep.id]);
   const officialError = useJobs((s) => s.officialError[ep.id]);
   const translation = useJobs((s) => s.translations[ep.id]);
-  const { time, player, settings, saveSettings, current, openSettings } = useStore(useShallow((s) => ({ time: s.time, player: s.player, settings: s.settings, saveSettings: s.saveSettings, current: s.current, openSettings: s.openSettings })));
+  // Not `time`: it changes several times a second, and only the active line matters here (selected below).
+  const { player, settings, saveSettings, current, openSettings } = useStore(useShallow((s) => ({ player: s.player, settings: s.settings, saveSettings: s.saveSettings, current: s.current, openSettings: s.openSettings })));
   const isCurrent = current?.id === ep.id;
   const list = useRef<HTMLDivElement>(null);
   const userScrolled = useRef(0);
@@ -96,14 +107,35 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const [hit, setHit] = useState(0);
   const [startError, setStartError] = useState<string | null>(null);
   const [canUpgrade, setCanUpgrade] = useState(false);
-  const segments = transcript?.segments ?? [];
-  const active = isCurrent ? activeIndex(segments, time) : -1;
-  const seek = (t: number) => { if (isCurrent) player?.seek(t); };
+  const segments = transcript?.segments ?? NO_SEGMENTS;
+  // Re-renders when the active line changes, not on every time update.
+  const active = useStore((s) => (s.current?.id === ep.id ? activeIndex(segments, s.time) : -1));
+  // Stable, so the memoised rows don't all re-render whenever this panel does.
+  const seek = useCallback((t: number) => { if (isCurrent) player?.seek(t); }, [isCurrent, player]);
   const wantsZh = transcript ? needsTranslation(transcript) : false;
   const mode = wantsZh ? settings.subtitleMode : "original";
+  const english = transcript ? looksEnglish(transcript.language, segments.slice(0, 20).map((x) => x.text).join(" ")) : false;
+  const marks = useLearnMarks(english);
+  const learning = !!marks || (english && settings.learnOn);
+  const [card, setCard] = useState<CardTarget | null>(null);
+  const [shadow, setShadow] = useState(false);
+  useShadowing(shadow && isCurrent, ep.id, segments);
+  useEffect(() => { if (!learning) setShadow(false); }, [learning]);
+  const closeCard = useCallback(() => setCard(null), []);
+  // A click on a word opens its card instead of seeking (the rest of the line still seeks).
+  const onWordClick = (e: React.MouseEvent) => {
+    if (!marks || !settings.learnCard) return;
+    const el = (e.target as HTMLElement).closest<HTMLElement>(".lw");
+    if (!el || window.getSelection()?.toString()) return;
+    const i = Number(el.closest<HTMLElement>("[data-i]")?.dataset.i);
+    const seg = segments[i];
+    if (!seg) return;
+    e.stopPropagation();
+    setCard((c) => (c?.el === el ? null : { el, token: el.textContent ?? "", seg, zh: translation?.items[i] }));
+  };
 
   useEffect(() => { if (transcript) void loadTranslation(ep.id, transcript.segments.length); }, [transcript, ep.id]);
-  useEffect(() => { void llmReady("translate").then(setCanUpgrade); }, [settings]);
+  useEffect(() => { void llmReady("translate").then(setCanUpgrade); }, [settings.translateProvider, settings.translateMode, settings.providers]);
 
 
   useEffect(() => {
@@ -134,7 +166,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const providerName = providerFor(settings, "translate")?.name;
   const engineName = translation?.engine === "shared" ? t("共享译文") : translation?.engine === "youtube" ? t("节目方中文字幕") : translation?.engine === "google" ? t("谷歌翻译") : t("{name}翻译", { name: providerName ? t(providerName) : t("模型") });
   const error = startError ?? translation?.error;
-  const pending = wantsZh && (running || (settings.autoTranslate && !error && done < total));
+  const pending = wantsZh && (running || (!error && done < total));
   const start = (force?: "llm" | "google") => { setStartError(null); translateEpisode(ep, transcript, force).catch((e) => setStartError(rawErrorText(e))); };
 
   const modeControl = wantsZh && (
@@ -147,9 +179,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     </div>
   );
   const searchBtn = <>
-    {wantsZh && canUpgrade && <GlossaryButton ep={ep} onRetranslate={() => start("llm")} />}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
+    {((wantsZh && canUpgrade) || learning) && <PanelMenu ep={ep} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, active, shadow, setShadow, canShadow: isCurrent } : undefined} />}
   </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
 
@@ -159,7 +191,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   else if (error && /设置|API Key|模型/.test(error)) status = <StatusLine left={modeControl} text={tr(error)} action={<button className="btn primary sm" onClick={() => openSettings("model")}>{t("去设置")}</button>} right={searchBtn} />;
   else if (done < total && (error || translation?.failed)) status = <StatusLine left={modeControl} text={`${t("已翻译 {done}/{total}", { done, total })}${error ? ` · ${tr(error).slice(0, 40)}` : ""}`} action={<button className="btn primary sm" onClick={() => start()}>{t("重试")}</button>} right={searchBtn} />;
   else if (done < total) status = <StatusLine left={modeControl} text={done ? t("已翻译 {done}/{total}", { done, total }) : source} action={<button className="btn primary sm" onClick={() => start()}>{done ? t("继续翻译") : t("翻译成中文")}</button>} right={searchBtn} />;
-  else status = <StatusLine left={modeControl} text={`${source} · ${engineName}`} action={translation?.engine === "google" && canUpgrade ? <button className="btn ghost sm" onClick={() => start("llm")}>{t("用模型重译")}</button> : undefined} right={searchBtn} />;
+  else status = <StatusLine left={modeControl} text="" title={`${source} · ${engineName}`} action={translation?.engine === "google" && canUpgrade ? <button className="btn ghost sm" onClick={() => start("llm")}>{t("用模型重译")}</button> : undefined} right={searchBtn} />;
 
   const rows = matches ?? segments.map((_, i) => i);
   return (
@@ -177,10 +209,15 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
           <button className="icon-btn sm" onClick={() => { setQuery(""); setSearching(false); }} aria-label={t("关闭搜索")}><X size={14} /></button>
         </div>
       )}
-      <div className="lines" ref={list} onWheel={() => (userScrolled.current = Date.now())}>
+      {shadow && isCurrent && (
+        <div className="shadow-bar"><Mic size={13} /><span>{t("跟读模式：每句说完会停一下，跟着说一遍")}</span><button className="btn ghost sm" onClick={() => setShadow(false)}>{t("退出")}</button></div>
+      )}
+      <div className={`lines${marks && settings.learnCard ? " learning" : ""}`} ref={list} onWheel={() => (userScrolled.current = Date.now())} onClickCapture={onWordClick}>
+        {english && <LearnTip />}
         {rows.map((i, k) => (
-          <Row key={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={seek} query={query} current={!!matches && k === hit} />
+          <Row key={i} i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={seek} query={query} current={!!matches && k === hit} marks={marks} />
         ))}
+        {card && <WordCard target={card} ep={ep} onClose={closeCard} />}
         {!matches && total > 0 && (
           <div className={`lines-end ${active === total - 1 ? "reached" : ""}`}>
             <FlatLineArt />
@@ -192,9 +229,50 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   );
 }
 
+/** "…" on the subtitle bar: the rarer tools (本集术语表, retranslating with the model). */
+interface LearnMenu { segments: Segment[]; zh: (string | null | undefined)[] | undefined; active: number; shadow: boolean; setShadow: (v: boolean) => void; canShadow: boolean }
+
+function PanelMenu({ ep, onRetranslate, learn }: { ep: Episode; onRetranslate?: () => void; learn?: LearnMenu }) {
+  const [menu, setMenu] = useState(false);
+  const [gloss, setGloss] = useState(false);
+  const [words, setWords] = useState(false);
+  const [dictation, setDictation] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const h = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setMenu(false); };
+    document.addEventListener("pointerdown", h);
+    return () => document.removeEventListener("pointerdown", h);
+  }, [menu]);
+  return (
+    <div className="panel-menu" ref={box}>
+      <button className="icon-btn" title={t("更多")} aria-label={t("更多")} aria-expanded={menu} onClick={() => setMenu(!menu)}><Ellipsis size={15} /></button>
+      {menu && (
+        <div className="panel-menu-pop" role="menu">
+          {learn && <>
+            <button role="menuitem" onClick={() => { setMenu(false); setWords(true); }}><ListChecks size={14} /> {t("本期生词…")}</button>
+            <button role="menuitemcheckbox" aria-checked={learn.shadow} disabled={!learn.canShadow} title={learn.canShadow ? undefined : t("先播放这一集")} onClick={() => { setMenu(false); learn.setShadow(!learn.shadow); }}><Mic size={14} /> {learn.shadow ? t("退出跟读模式") : t("跟读模式")}</button>
+            <button role="menuitem" onClick={() => { setMenu(false); setDictation(true); }}><PenLine size={14} /> {t("听写练习…")}</button>
+          </>}
+          {learn && onRetranslate && <div className="menu-sep" role="separator" />}
+          {onRetranslate && <>
+            <button role="menuitem" onClick={() => { setMenu(false); setGloss(true); }}><BookA size={14} /> {t("本集术语表…")}</button>
+            <button role="menuitem" onClick={() => { setMenu(false); onRetranslate(); }}><RefreshCw size={14} /> {t("用模型重新翻译")}</button>
+          </>}
+        </div>
+      )}
+      {gloss && onRetranslate && <Glossary ep={ep} onRetranslate={onRetranslate} onClose={() => setGloss(false)} />}
+      {words && learn && <EpisodeWords ep={ep} segments={learn.segments} zh={learn.zh} onClose={() => setWords(false)} />}
+      {dictation && learn && <Dictation ep={ep} segments={learn.segments} from={Math.max(0, learn.active)} onClose={() => setDictation(false)} />}
+    </div>
+  );
+}
+
 /** The episode's names and terms (made before translating), editable; edits are kept when it is remade. */
-function GlossaryButton({ ep, onRetranslate }: { ep: Episode; onRetranslate: () => void }) {
-  const [open, setOpen] = useState(false);
+function Glossary({ ep, onRetranslate, onClose }: { ep: Episode; onRetranslate: () => void; onClose: () => void }) {
+  const [open, setOpenRaw] = useState(false);
+  const setOpen = (v: boolean) => { setOpenRaw(v); if (!v) onClose(); };
+  useEffect(() => { void load(); }, []);
   const [ctx, setCtx] = useState<EpisodeContext | null>(null);
   const [rows, setRows] = useState<{ src: string; zh: string; user?: boolean }[]>([]);
   useLang((s) => s.lang);
@@ -212,7 +290,6 @@ function GlossaryButton({ ep, onRetranslate }: { ep: Episode; onRetranslate: () 
   };
   return (
     <>
-      <button className="icon-btn" title={t("本集术语表")} aria-label={t("本集术语表")} onClick={() => void load()}><BookA size={15} /></button>
       {open && (
         <Modal title={t("本集术语表")} onClose={() => setOpen(false)}>
           <div className="gloss">
@@ -247,7 +324,16 @@ const trackCache = new Map<string, { language: string; auto: boolean }[]>();
 function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; auto: boolean }) {
   const [tracks, setTracks] = useState(trackCache.get(ep.id) ?? null);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   useLang((s) => s.lang);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", h); document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("pointerdown", h); document.removeEventListener("keydown", k); };
+  }, [open]);
   useEffect(() => {
     if (tracks) return;
     void api.youtubeTracks(ep.id).then((list) => { trackCache.set(ep.id, list); setTracks(list); }).catch(() => {});
@@ -256,24 +342,41 @@ function TrackPicker({ ep, language, auto }: { ep: Episode; language: string; au
   let names: Intl.DisplayNames | null = null;
   try { names = new Intl.DisplayNames([lang()], { type: "language" }); } catch { /* old WebView */ }
   const name = (l: string) => { try { return names?.of(l) ?? l; } catch { return l; } };
-  const value = `${auto ? "a" : "m"}:${language}`;
-  const pick = async (v: string) => {
-    const [kind, ...rest] = v.split(":");
+  const label = (x: { language: string; auto: boolean }) => `${name(x.language)}${x.auto ? ` · ${t("自动生成")}` : ""}`;
+  const pick = async (x: { language: string; auto: boolean }) => {
+    setOpen(false);
+    if (x.language === language && x.auto === auto) return;
     setBusy(true);
-    try { await switchYoutubeTrack(ep, rest.join(":"), kind === "a"); }
+    try { await switchYoutubeTrack(ep, x.language, x.auto); }
     catch (e) { useStore.getState().notify(t("切换字幕失败：{error}", { error: errorText(e) })); }
     finally { setBusy(false); }
   };
   return (
-    <label className="track-pick" title={t("字幕语言")}>
-      {busy ? <Loader2 size={13} className="spin" /> : <Languages size={14} />}
-      <select value={value} disabled={busy} onChange={(e) => void pick(e.target.value)} aria-label={t("字幕语言")}>
-        {tracks.map((x) => <option key={`${x.auto}:${x.language}`} value={`${x.auto ? "a" : "m"}:${x.language}`}>{name(x.language)}{x.auto ? ` · ${t("自动生成")}` : ""}</option>)}
-      </select>
-      <ChevronDown size={12} />
-    </label>
+    <div className="panel-menu" ref={box}>
+      <button className="track-pick" title={t("字幕语言")} aria-label={t("字幕语言")} aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen(!open)}>
+        {busy ? <Loader2 size={13} className="spin" /> : <Languages size={14} />}
+        <span>{label({ language, auto })}</span>
+        <ChevronDown size={12} className={open ? "flip" : ""} />
+      </button>
+      {open && (
+        <div className="panel-menu-pop" role="menu">
+          {tracks.map((x) => {
+            const on = x.language === language && x.auto === auto;
+            return <button key={`${x.auto}:${x.language}`} role="menuitemradio" aria-checked={on} className={on ? "on" : ""} onClick={() => void pick(x)}><Check size={14} className="pick-check" />{label(x)}</button>;
+          })}
+        </div>
+      )}
+    </div>
   );
 }
+
+/** What the episode's pickers offer: Qwen3-ASR, models already on this computer, the main cloud services and
+ *  whatever is in use. The rest are in Settings (the 「更多…」 entry opens it). */
+const pickerModels = (models: ModelInfo[], s: Settings) => models.filter((m) => m.id === "qwen3-asr" || m.installed || (s.asrEngine === "local" && s.asrModel === m.id));
+const pickerCloud = (s: Settings) => ASR_SERVICES.filter((a) => CLOUD_ASR_MAIN.includes(a.id) || s.asrEngine === a.id);
+
+/** Episodes transcription was started for automatically this session (never twice). */
+const autoStarted = new Set<string>();
 
 function NoTranscript({ ep, official, officialError }: { ep: Episode; official?: string; officialError?: string }) {
   const asr = useJobs((s) => s.asr[ep.id]);
@@ -292,6 +395,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   }, [cloud?.id, settingsOpen]);
   const missingKey = !!cloud?.needsKey && cloudKey === false;
   const pickEngine = (value: string) => {
+    if (value === "more") { useStore.getState().openSettings("asr"); return; }
     const [kind, id] = value.split(":");
     void saveSettings(kind === "cloud" ? { asrEngine: id } : { asrEngine: "local", asrModel: id });
   };
@@ -302,6 +406,14 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
     void generateTranscript(ep, model.id, settings.asrLanguage);
   };
   const retry = () => useJobs.setState((s) => { const a = { ...s.asr }; delete a[ep.id]; return { asr: a }; });
+  // Once a way of transcribing is ready (local model downloaded, or a cloud service the listener chose with its
+  // key), pressing play on an episode that has no subtitles anywhere (cache, publisher, shared library: all
+  // checked by now) starts transcribing by itself. The first time still takes a click (it downloads ~1 GB).
+  const playing = useStore((s) => s.playing && s.current?.id === ep.id);
+  const ready = !!model && (cloud ? cloudKey === true || !cloud.needsKey : model.installed);
+  useEffect(() => {
+    if (playing && ready && official === "none" && !asr && !autoStarted.has(ep.id)) { autoStarted.add(ep.id); void generateTranscript(ep, model!.id, settings.asrLanguage); }
+  }, [playing, ready, official, !!asr, ep.id]);
   /** Stops the running transcription and waits until it has stopped. */
   const stopRunning = async () => {
     await api.cancelJob(ep.id);
@@ -310,6 +422,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
   };
   /** Mid-way, switch to another way of transcribing: the running one stops, the new one starts from the beginning. */
   const switchEngine = async (value: string) => {
+    if (value === "more") { useStore.getState().openSettings("asr"); return; }
     const [kind, id] = value.split(":");
     await saveSettings(kind === "cloud" ? { asrEngine: id } : { asrEngine: "local", asrModel: id });
     await stopRunning();
@@ -349,11 +462,12 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
             <select className="engine-switch-mini" aria-label={t("换一种识别方式")} title={t("换一种识别方式（从头开始）")} value="" onChange={(e) => e.target.value && void switchEngine(e.target.value)}>
               <option value="">{t("换一种方式…")}</option>
               <optgroup label={t("本机模型 · 音频不出本机")}>
-                {models.filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${m.sizeMb} MB`}</option>)}
+                {pickerModels(models, settings).filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id)).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
               </optgroup>
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
-                {ASR_SERVICES.filter((a) => settings.asrEngine !== a.id).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
+                {pickerCloud(settings).filter((a) => settings.asrEngine !== a.id).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
               </optgroup>
+              <option value="more">{t("更多")}…</option>
             </select>
             <button className="btn ghost sm" onClick={() => void stopRunning()}>{t("取消")}</button>
           </span>
@@ -376,7 +490,7 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
     );
   }
   const needsDownload = !cloud && model && !model.installed;
-  const size = model ? (model.sizeMb >= 900 ? `${(model.sizeMb / 1024).toFixed(1)} GB` : `${model.sizeMb} MB`) : "";
+  const size = model ? sizeMb(model.sizeMb) : "";
   return (
     <GenCard icon={<WaveToTextArt />} title={t("这集还没有字幕")}
       note={cloud ? t("用{name}生成，音频会上传到该服务，速度更快。生成后自动翻译成中文。", { name: t(cloud.name) }) : t("用本机模型生成，音频只在这台电脑上处理。生成后自动翻译成中文。")}>
@@ -396,16 +510,12 @@ function NoTranscript({ ep, official, officialError }: { ep: Episode; official?:
           <label><span>{t("识别方式")}</span>
             <select value={cloud ? `cloud:${cloud.id}` : `local:${model?.id}`} onChange={(e) => pickEngine(e.target.value)}>
               <optgroup label={t("本机模型 · 音频不出本机")}>
-                {models.map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${m.sizeMb} MB`}</option>)}
+                {pickerModels(models, settings).map((m) => <option key={m.id} value={`local:${m.id}`}>{tr(m.name)}{m.installed ? "" : ` · ${sizeMb(m.sizeMb)}`}</option>)}
               </optgroup>
               <optgroup label={t("云端服务 · 更快，需要 Key")}>
-                {ASR_SERVICES.map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
+                {pickerCloud(settings).map((a) => <option key={a.id} value={`cloud:${a.id}`}>{t(a.name)}</option>)}
               </optgroup>
-            </select>
-          </label>
-          <label><span>{t("说话语言")}</span>
-            <select value={settings.asrLanguage} onChange={(e) => saveSettings({ asrLanguage: e.target.value })}>
-              <option value="auto">{t("自动识别")}</option><option value="en">{t("英语")}</option><option value="zh">{t("中文")}</option><option value="ja">{t("日语")}</option><option value="ko">{t("韩语")}</option><option value="de">{t("德语")}</option><option value="fr">{t("法语")}</option><option value="es">{t("西班牙语")}</option>
+              <option value="more">{t("更多")}…</option>
             </select>
           </label>
         </div>

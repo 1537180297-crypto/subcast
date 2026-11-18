@@ -1,3 +1,4 @@
+import { agentProviderId, useAgents } from "../lib/agents";
 import { useEffect, useRef, useState } from "react";
 import { BookOpen, Check, ChevronsUpDown, Clock, Languages, Lightbulb, MessageCircleQuestion, MessageSquareText, Pencil, Plus, Scale, Search, Settings2, Share2, Trash2, TrendingUp, User, Wrench } from "lucide-react";
 import { api, type Provider } from "../lib/api";
@@ -25,21 +26,26 @@ export function useChatModels(): Group[] | null {
   const settings = useStore((s) => s.settings);
   const open = useStore((s) => s.settingsOpen);
   const [groups, setGroups] = useState<Group[] | null>(null);
+  const agents = useAgents((s) => s.found);
   useEffect(() => {
     if (open) return;
     let live = true;
-    const ps = Object.values(settings.providers).filter((p) => p.baseUrl && p.model);
+    // Local agents (Claude Code and the like) have no model of their own set: "" means the agent's default.
+    const found = new Set((agents ?? []).filter((f) => f.login !== "needsLogin").map((f) => agentProviderId(f.kind)));
+    const ps = Object.values(settings.providers).filter((p) => p.protocol === "cli" ? found.has(p.id) : p.baseUrl && p.model);
     const inUse = (p: Provider) => p.id === settings.chatProvider || p.id === settings.translateProvider;
-    void Promise.all(ps.map((p) => (p.needsKey ? api.hasApiKey(p.id) : Promise.resolve(inUse(p))))).then((ok) => {
+    void Promise.all(ps.map((p) => (p.protocol === "cli" ? Promise.resolve(true) : p.needsKey ? api.hasApiKey(p.id) : Promise.resolve(inUse(p))))).then((ok) => {
       if (!live) return;
       const usable = ps.filter((_, i) => ok[i]).sort((a, b) => Number(b.id === settings.chatProvider) - Number(a.id === settings.chatProvider));
       setGroups(usable.map((p) => ({
         provider: p,
-        models: [...new Set([p.model, ...(p.id === settings.chatProvider && settings.chatModel ? [settings.chatModel] : []), ...(p.models ?? [])])].filter(Boolean),
+        models: p.protocol === "cli"
+          ? ["", ...new Set([...(p.id === settings.chatProvider && settings.chatModel ? [settings.chatModel] : []), ...(p.models ?? [])])].filter((m, i) => i === 0 || m)
+          : [...new Set([p.model, ...(p.id === settings.chatProvider && settings.chatModel ? [settings.chatModel] : []), ...(p.models ?? [])])].filter(Boolean),
       })));
     });
     return () => { live = false; };
-  }, [settings.providers, settings.chatProvider, settings.translateProvider, settings.chatModel, open]);
+  }, [settings.providers, settings.chatProvider, settings.translateProvider, settings.chatModel, open, agents]);
   return groups;
 }
 
@@ -76,7 +82,7 @@ export function ModelPicker({ disabled }: { disabled?: boolean }) {
   }
   const close = () => { setOpen(false); trigger.current?.focus(); };
   const choose = (o: { provider: Provider; model: string }) => {
-    void saveSettings({ chatProvider: o.provider.id, chatModel: o.model === o.provider.model ? "" : o.model });
+    void saveSettings({ chatProvider: o.provider.id, chatModel: o.model === o.provider.model ? "" : o.model, modelChosen: true });
     close();
   };
   const onKey = (e: React.KeyboardEvent) => {
@@ -92,9 +98,9 @@ export function ModelPicker({ disabled }: { disabled?: boolean }) {
   return (
     <div className="mp" ref={wrap}>
       <button ref={trigger} type="button" className="mp-trigger" aria-haspopup="listbox" aria-expanded={open} disabled={disabled || !groups}
-        title={cur ? t("{name} · {model}（切换后从下一个问题开始生效）", { name: t(cur.name), model: cur.model }) : ""}
+        title={cur ? t("{name} · {model}（切换后从下一个问题开始生效）", { name: t(cur.name), model: cur.model || t("默认模型") }) : ""}
         onClick={() => { if (open) { setOpen(false); return; } setQ(""); setOpen(true); requestAnimationFrame(() => search.current?.focus()); }}>
-        <span className="mp-name">{cur ? shortModel(cur.model) : t("选择模型")}</span>
+        <span className="mp-name">{cur ? (cur.model ? shortModel(cur.model) : t(cur.name)) : t("选择模型")}</span>
         <ChevronsUpDown size={12} />
       </button>
       {open && (
@@ -112,10 +118,10 @@ export function ModelPicker({ disabled }: { disabled?: boolean }) {
                   const i = ++n;
                   const o = { provider: g.provider, model: m };
                   return (
-                    <div key={m} role="option" aria-selected={isCur(o)} title={m} className={`mp-row ${isCur(o) ? "is-current" : ""} ${i === active ? "is-active" : ""}`}
+                    <div key={m || "default"} role="option" aria-selected={isCur(o)} title={m} className={`mp-row ${isCur(o) ? "is-current" : ""} ${i === active ? "is-active" : ""}`}
                       onMouseEnter={() => setActive(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(o)}>
                       <span className="mp-check">{isCur(o) && <Check size={14} />}</span>
-                      <span className="mp-model">{shortModel(m)}</span>
+                      <span className="mp-model">{m ? shortModel(m) : t("默认模型")}</span>
                     </div>
                   );
                 })}
@@ -194,7 +200,7 @@ export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
           </div>
           <textarea className="cp-instr" rows={3} value={settings.chatPrompt} disabled={!settings.chatPromptOn} maxLength={4000}
             placeholder={t("例如：先给结论再展开；简洁，不说套话；术语保留英文原文。")} aria-label={t("全局指令")}
-            onChange={(e) => void saveSettings({ chatPrompt: e.target.value })} />
+            onChange={(e) => void saveSettings({ chatPrompt: e.target.value }, true)} />
           <div className="cp-hints"><span className="muted small">{t("试试：")}</span>{PROMPT_HINTS.map((h) => <button key={h} type="button" className="chip sm" onClick={() => addHint(t(h))}>{t(h)}</button>)}</div>
           <p className="muted small">{t("每次提问都会带上这段话，从下一个问题开始生效，已有回答不变。")}</p>
         </section>

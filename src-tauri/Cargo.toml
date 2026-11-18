@@ -1,6 +1,6 @@
 [package]
 name = "subcast"
-version = "0.2.4"
+version = "0.2.8"
 license = "AGPL-3.0-only"
 description = "SubCast · 声渡 — overseas podcasts and YouTube with bilingual subtitles and AI Q&A"
 authors = ["Qiaomu"]
@@ -47,6 +47,7 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.14", features = ["metal"] }

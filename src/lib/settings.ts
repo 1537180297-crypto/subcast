@@ -22,6 +22,15 @@ export interface Settings {
   /** When YouTube asks to confirm "not a bot", download with this browser's YouTube sign-in ("" = never). */
   ytCookiesBrowser?: string;
   /** Shortcuts the listener changed (Settings › 快捷键); the rest use the defaults in lib/shortcuts.ts. */
+  /** Reading: subtitle size step, font, video subtitle look, Q&A text size, the next line on audio, skips, auto-next. */
+  subtitleSize?: "s" | "m" | "l" | "xl";
+  subtitleFont?: "system" | "serif" | "kai" | "sans";
+  subtitleLook?: "box" | "outline";
+  chatSize?: "m" | "l";
+  audioNextLine?: boolean;
+  skipBack?: number;
+  skipForward?: number;
+  autoNext?: boolean;
   shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;
   /** The local agent SubCast switched in on its own (shown as such in settings). */
   autoPicked?: string;
@@ -47,9 +56,27 @@ export interface Settings {
   autoUpdate: boolean;
   /** The Discover banner for our own show was closed by the user. */
   homeBannerHidden: boolean;
+  /** List the 乔木精读 shows not yet followed under the sidebar's subscriptions. */
+  sideCurated: boolean;
+  /** English learning mode (设置 › 学英语). Off by default; everything below only applies when it is on. */
+  learnOn: boolean;
+  /** The listener's level: words above it are marked in English subtitles. */
+  learnLevel: LearnLevel;
+  learnMark: boolean;
+  learnCard: boolean;
+  /** Ask the default model what a word means in its sentence. */
+  learnAi: boolean;
+  learnSide: boolean;
+  /** New words introduced per day in review. */
+  learnDaily: number;
+  learnRemind: boolean;
+  /** The one-time "想顺便学英语吗？" tip was answered. */
+  learnAsked: boolean;
   /** Upload transcripts we make to the shared library (anonymous; reading shared ones is always on). */
   shareTranscripts: boolean;
 }
+
+export type LearnLevel = "cet4" | "cet6" | "ky" | "ielts";
 
 export interface QuickPrompt { id: string; title: string; body: string; enabled: boolean }
 
@@ -114,6 +141,9 @@ export const GROUPS: { id: NonNullable<G>; name: string; note: string }[] = [
   { id: "local", name: tk("本机运行"), note: tk("不需要 Key") },
 ];
 
+/** The cloud services shown up front (Settings and the episode's pickers); the rest sit behind 「更多」. */
+export const CLOUD_ASR_MAIN = ["doubao", "siliconflow", "groq"];
+
 /** Cloud transcription services, ported from Capwise. */
 export const ASR_SERVICES: CloudAsr[] = [
   { id: "doubao", name: tk("豆包语音（极速版）"), note: tk("中文最准，5 分钟一段，速度快"), protocol: "doubao", baseUrl: "https://openspeech.bytedance.com/api/v3", model: "bigmodel", models: ["bigmodel"], keyUrl: "https://console.volcengine.com/speech/new/experience/asr", needsKey: true, chunkSecs: 300 },
@@ -169,6 +199,16 @@ export const DEFAULTS: Settings = {
   youtubePromo: true,
   autoUpdate: true,
   homeBannerHidden: false,
+  sideCurated: true,
+  learnOn: false,
+  learnLevel: "cet6",
+  learnMark: true,
+  learnCard: true,
+  learnAi: true,
+  learnSide: true,
+  learnDaily: 20,
+  learnRemind: false,
+  learnAsked: false,
   shareTranscripts: true,
 };
 
@@ -180,5 +220,17 @@ export async function loadSettings(): Promise<Settings> {
   for (const p of PRESETS) providers[p.id] = { ...p, ...(raw.providers?.[p.id] ?? {}), keyUrl: p.keyUrl, models: p.models, needsKey: p.needsKey, name: p.name, group: p.group };
   const cloudAsr: Record<string, CloudAsr> = {};
   for (const a of ASR_SERVICES) cloudAsr[a.id] = { ...a, ...(raw.cloudAsr?.[a.id] ?? {}), name: a.name, note: a.note, models: a.models, keyUrl: a.keyUrl, needsKey: a.needsKey, protocol: a.protocol };
-  return { ...DEFAULTS, ...raw, providers, cloudAsr };
+  return migrate({ ...DEFAULTS, ...raw, providers, cloudAsr });
+}
+
+/** 0.2.6 removed several switches; carry what each one meant into what remains. Idempotent. */
+export function migrate(s: Settings): Settings {
+  const out = { ...s };
+  // "Always use the model" is now just the default; "always Google" stays as translation assigned to Google.
+  if (out.translateMode === "llm") out.translateMode = "auto";
+  // Translation is always on; someone who turned it off wanted the original only.
+  if (out.autoTranslate === false) { out.subtitleMode = "original"; out.autoTranslate = true; }
+  out.useShowNotes = true;
+  out.asrLanguage = "auto";
+  return out;
 }

@@ -2,7 +2,7 @@ import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { TopBar } from "./Chrome";
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { isChineseUi, lang, t, tk } from "../lib/i18n";
+import { t, tk } from "../lib/i18n";
 
 class PanelBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -14,21 +14,21 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { ArrowDownToLine, BookOpen, Captions, ChevronDown, ScrollText, ExternalLink, Loader2, MessageCircle, PanelRightClose, PanelRightOpen, Play, WandSparkles, FolderOpen, Trash2, Youtube, Bookmark, Pause } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Captions, ChevronDown, ScrollText, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, FolderOpen, Trash2, Youtube, Bookmark, Pause } from "lucide-react";
 import { BookArt, DoneCheck, EmptyState } from "./Illustrations";
 import { Splitter } from "./Splitter";
 import { DeepRead } from "./DeepRead";
 import { SkeletonEpisode } from "./Skeleton";
 import { PANEL, useLayout } from "../lib/layout";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, errorText, llmChat, type Episode } from "../lib/api";
+import { api, errorText, type Episode } from "../lib/api";
 import { date, duration, notesText } from "../lib/format";
 import { showName } from "../lib/picks";
 import { isZh, useZh, useZhParagraphs } from "../lib/zh";
 import { autoTranslate, loadTranscript, useJobs } from "../lib/jobs";
-import { providerFor, useStore } from "../store";
+import { seekSoon, useStore } from "../store";
 import { ChatPanel, SummaryPanel } from "./AiPanels";
-import { Controls } from "./Players";
+import { Controls, playSoon } from "./Players";
 import { VideoSlot } from "./VideoDock";
 import { bytes, cancelDownload, downloadEpisode, isSaved, removeDownload, useOffline } from "../lib/offline";
 import { showLinks } from "../lib/showLinks";
@@ -37,23 +37,29 @@ import { YtVideoStrip } from "./YtPromo";
 import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 
 type Tab = "transcript" | "deep" | "chat" | "summary";
-const TAB_NAMES: Record<Tab, string> = { transcript: tk("字幕"), deep: tk("乔木精读"), chat: tk("AI 问答"), summary: tk("导读 · 节目简介与 AI 总结") };
+const TAB_NAMES: Record<Tab, string> = { transcript: tk("字幕"), deep: tk("乔木精读"), chat: tk("AI 问答"), summary: tk("AI 导读") };
 
 /** Splits a subtitle block into reading-sized pieces: at the end of each sentence, at a comma once a piece is
  *  long enough, and between words only when a sentence runs on too long. */
 export function pieces(text: string, cjk: boolean): string[] {
   const soft = cjk ? 14 : 38, hard = cjk ? 30 : 80;
-  const units = cjk ? text.split(/(?<=[，。！？；：、,.!?;])/) : text.split(/(?<=\s)/);
+  // A "." inside a number ("1.5") doesn't end anything.
+  const units = cjk ? text.split(/(?<=[，。！？；：、,!?;]|\.(?!\d))/) : text.split(/(?<=\s)/);
   const out: string[] = [];
   let cur = "";
-  for (const u of units) {
+  for (let n = 0; n < units.length; n++) {
+    const u = units[n];
+    // A sentence only ends at "." when what follows starts a new one (a capital, a digit-free quote, CJK), so
+    // "raised to 1. point five" or "e.g. this" stay together.
+    const nextStart = (units[n + 1] ?? "").trimStart()[0] ?? "";
+    const continues = !cjk && /\.$/.test(u.trim()) && /[a-z0-9]/.test(nextStart);
     if (cur && (cur + u).trim().length > hard) { out.push(cur.trim()); cur = ""; }
     cur += u;
     const t = cur.trim();
     // Initials and titles end in a full stop without ending the sentence ("J.P.", "Mr.", "U.S.").
     const last = u.trim();
     const abbrev = !cjk && /^(?:[A-Z]\.)+(?:[A-Z]\.?)?$|^(?:Mr|Mrs|Ms|Dr|St|vs|etc|Inc|Co|Jr|Sr|No|Vol)\.$/.test(last);
-    if ((!abbrev && /[。！？.!?]["”')）]*$/.test(t)) || (t.length >= soft && /[，；：,;:]$/.test(t))) { out.push(t); cur = ""; }
+    if ((!abbrev && !continues && /[。！？.!?]["”')）]*$/.test(t)) || (t.length >= soft && /[，；：,;:]$/.test(t))) { out.push(t); cur = ""; }
   }
   if (cur.trim()) out.push(cur.trim());
   return out.length ? out : [text];
@@ -125,8 +131,10 @@ function SubtitleOverlay({ ep }: { ep: Episode }) {
   const cjk = /[\u4e00-\u9fff]/.test(seg.text);
   return (
     <div className="subtitle-overlay">
-      {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
-      {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
+      <div className="sub-box">
+        {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
+        {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
+      </div>
     </div>
   );
 }
@@ -160,12 +168,6 @@ export function EpisodeView({ id }: { id: string }) {
   return <EpisodeBody ep={ep} tab={tab} setTab={setTab} startAudio={startAudio} />;
 }
 
-// i18n-ignore-start
-const notesSystem = () => `你把播客的「本集简介」翻译成通顺、准确的${lang() === "zh-TW" ? "繁體中文" : "简体中文"}。
-保留段落划分（段落之间空一行）、人名、公司名、产品名和链接；时间戳、列表符号原样保留。
-广告、赞助商信息照常翻译，不要删减，也不要添加解释。只输出译文。`;
-// i18n-ignore-end
-
 /** Chapter times in show notes ("00:00 开场", "1:02:30") become buttons that seek; links open in the browser. */
 function withStamps(text: string, seek: (s: number) => void): ReactNode[] {
   return text.split(/(https?:\/\/[^\s<>"'）)】]+|\b(?:\d{1,2}:)?\d{1,2}:\d{2}\b)/g).map((part, i) => {
@@ -179,41 +181,22 @@ function withStamps(text: string, seek: (s: number) => void): ReactNode[] {
 function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   const [orig, setOrig] = useState(false);
-  const settings = useStore((s) => s.settings);
   const zhAlready = isZh(text);
   // Translated with Google in the background as soon as the page opens, so it is ready before the card is.
   const google = useZhParagraphs(text, !zhAlready);
   const [model, setModel] = useState<{ paras: string[]; by: string; src?: string } | null>(null);
-  const [busy, setBusy] = useState(false);
   const paras = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
   const srcKey = `${text.length}:${text.slice(0, 40)}`;
   const seek = (sec: number) => {
     const s = useStore.getState();
     if (s.current?.id === ep.id) s.player?.seek(sec);
-    else { s.load({ ...ep, progress: sec }); window.setTimeout(() => useStore.getState().player?.seek(sec), 600); }
+    else { s.load({ ...ep, progress: sec }); seekSoon(sec); }
   };
-  const provider = providerFor(settings, "translate");
 
   useEffect(() => {
     setModel(null);
     api.getBlob(ep.id, "notes-zh").then((raw) => { if (raw) try { const m = JSON.parse(raw); if (!m.src || m.src === srcKey) setModel(m); } catch { /* ignore */ } });
   }, [ep.id, srcKey]);
-
-  const retranslate = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const s = useStore.getState();
-    const p = providerFor(s.settings, "translate");
-    if (!p?.model || !p.baseUrl || (p.needsKey && !(await api.hasApiKey(p.id)))) { s.notify(t("先连接一个 AI 模型，就能用它重新翻译")); s.openSettings("model"); return; }
-    setBusy(true); setOrig(false); setOpen(true);
-    const split = (t: string) => t.split(/\n{2,}/).map((x) => x.trim()).filter(Boolean);
-    try {
-      const out = await llmChat({ provider: p, system: notesSystem(), messages: [{ role: "user", content: paras.join("\n\n").slice(0, 20000) }], maxTokens: 6000, onDelta: (d) => setModel({ paras: split(d), by: p.name }) });
-      const next = { paras: split(out), by: p.name, src: srcKey };
-      setModel(next);
-      void api.setBlob(ep.id, "notes-zh", JSON.stringify(next));
-    } catch (err) { s.notify(t("翻译失败：{error}", { error: errorText(err) })); }
-    finally { setBusy(false); }
-  };
 
   const zh = model?.paras.length ? model.paras : google;
   const shown = zhAlready || orig || !zh ? paras : zh;
@@ -223,11 +206,6 @@ function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; d
         <span>{t("本集简介")}</span>
         {open && zh && !zhAlready && <span className="notes-by">{model?.paras.length ? t("{name} 翻译", { name: t(model.by) }) : t("谷歌翻译")}</span>}
         {open && zh && !zhAlready && <button className="link-btn" onClick={(e) => { e.stopPropagation(); setOrig(!orig); }}>{orig ? t("看中文") : t("原文")}</button>}
-        {!zhAlready && isChineseUi() && (
-          <button className="icon-btn sm" title={busy ? t("正在翻译…") : t("用 {name} 重新翻译", { name: provider ? t(provider.name) : t("AI 模型") })} aria-label={t("用 AI 模型重新翻译")} disabled={busy} onClick={retranslate}>
-            {busy ? <Loader2 size={14} className="spin" /> : <WandSparkles size={14} />}
-          </button>
-        )}
         <ChevronDown size={14} className={open ? "flip" : ""} />
       </div>
       {open && (
@@ -239,21 +217,6 @@ function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; d
     </div>
   );
 }
-/** The AI summary of the whole episode, folded under the show notes until asked for. */
-function GuideCard({ ep }: { ep: Episode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className={`notes guide-card ${open ? "open" : ""}`}>
-      <div className="notes-head" role="button" tabIndex={0} onClick={() => setOpen(!open)} onKeyDown={(e) => e.key === "Enter" && setOpen(!open)}>
-        <span><ScrollText size={14} className="accent" /> {t("AI 导读")}</span>
-        <span className="muted small guide-hint">{t("要点与时间线")}</span>
-        <ChevronDown size={14} className={open ? "flip" : ""} />
-      </div>
-      {open && <div className="guide-body"><SummaryPanel ep={ep} /></div>}
-    </div>
-  );
-}
-
 /** Save for offline listening; shows progress while saving and the saved state after. */
 function DownloadButton({ ep }: { ep: Episode }) {
   const [menu, setMenu] = useState(false);
@@ -295,6 +258,8 @@ function DownloadButton({ ep }: { ep: Episode }) {
 }
 
 function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; setTab: (t: Tab) => void; startAudio: boolean }) {
+  // Feeds sometimes mark a deep-read that isn't there: then the tab goes away.
+  const [noDeep, setNoDeep] = useState<string | null>(null);
   const { current, load } = useStore(useShallow((s) => ({ current: s.current, load: s.load })));
   const titleZh = useZh(ep.title);
   const isCurrent = current?.id === ep.id;
@@ -302,11 +267,11 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   const fav = useLibrary((s) => s.favorites.some((f) => f.id === ep.id));
   // Translate foreign-language subtitles whichever tab is open: the video's subtitles need the Chinese too.
   const transcript = useJobs((s) => s.transcripts[ep.id]);
-  const autoOn = useStore((s) => s.settings.autoTranslate);
-  useEffect(() => { if (transcript) autoTranslate(ep); }, [transcript, autoOn]);
+  const mode = useStore((s) => s.settings.subtitleMode);
+  useEffect(() => { if (transcript) autoTranslate(ep); }, [transcript, mode]);
   const coverToggle = () => {
     if (isCurrent) { useStore.getState().player?.toggle(); return; }
-    load(ep); window.setTimeout(() => useStore.getState().player?.play(), 400);
+    load(ep); playSoon(ep.id);
   };
   // When the player controls scroll out of view, a copy docks at the bottom of the column.
   const leftRef = useRef<HTMLElement>(null);
@@ -327,7 +292,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
     if (short && (ep.videoId || ep.link?.includes("xiaoyuzhoufm.com/episode/"))) void api.fullNotes(ep.id).then((n) => n && setFullNotes(n)).catch(() => {});
   }, [ep.id]);
   const notes = notesText(fullNotes ?? ep.notes);
-  const { panel, panelOpen, put } = useLayout();
+  const { panel, panelOpen, put } = useLayout(useShallow((l) => ({ panel: l.panel, panelOpen: l.panelOpen, put: l.put })));
   // Video first; the audio file is the fallback (and a choice, for listening without the picture).
   const [audioMode, setAudioMode] = useState(startAudio);
   const saved = useOffline((s) => !!s.saved[ep.id]);
@@ -340,7 +305,12 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
     const s = useStore.getState();
     const t = s.current?.id === ep.id ? s.time : ep.progress;
     setAudioMode(audio);
-    s.set({ current: audio ? { ...ep, videoId: undefined, progress: t } : { ...ep, progress: t }, time: t, player: null, playing: false });
+    // Another episode is playing (this page was only opened): switch this page, leave the player alone.
+    if (s.current?.id !== ep.id) return;
+    // Play was pressed and is still waiting: the other kind of player starts when it is ready.
+    const wanted = !!s.loadingSince;
+    s.set({ current: audio ? { ...ep, videoId: undefined, progress: t } : { ...ep, progress: t }, time: t, player: null, playing: false, loadingSince: null });
+    if (wanted) playSoon(ep.id);
     if (why) s.notify(why);
   };
 
@@ -387,11 +357,10 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             </div>
           )}
           {isCurrent ? <div className="controls-slot" ref={controlsRef}><Controls /></div> : (
-            <button className="btn primary" onClick={() => { load(ep); setTimeout(() => useStore.getState().player?.play(), 400); }}><Play size={14} /> {t("播放这一集")}</button>
+            <button className="btn primary" onClick={() => { load(ep); playSoon(ep.id); }}><Play size={14} /> {t("播放这一集")}</button>
           )}
           {ytPromo && ytChannel && <YtVideoStrip channel={ytChannel} name={showName(epShow?.title ?? "")} cover={epShow?.cover} />}
-          {notes && <Notes ep={ep} text={notes} />}
-          <GuideCard ep={ep} />
+          {notes && <Notes ep={ep} text={notes} defaultOpen />}
           {isCurrent && docked && <div className="controls-dock"><Controls /></div>}
         </section>
         </div>
@@ -399,7 +368,8 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
         {panelOpen && <section className="ep-right">
           <div className="tabs" role="tablist" data-tauri-drag-region>
             <button role="tab" title={t(TAB_NAMES.transcript)} aria-label={t(TAB_NAMES.transcript)} aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}><Captions size={15} /><span className="tab-label">{t("字幕")}</span></button>
-            {ep.deep && <button role="tab" title={t(TAB_NAMES.deep)} aria-label={t(TAB_NAMES.deep)} aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /><span className="tab-label">{t("精读")}</span></button>}
+            {ep.deep && noDeep !== ep.id && <button role="tab" title={t(TAB_NAMES.deep)} aria-label={t(TAB_NAMES.deep)} aria-selected={tab === "deep"} className={tab === "deep" ? "on" : ""} onClick={() => setTab("deep")}><BookOpen size={15} /><span className="tab-label">{t("精读")}</span></button>}
+            <button role="tab" title={t(TAB_NAMES.summary)} aria-label={t(TAB_NAMES.summary)} aria-selected={tab === "summary"} className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}><ScrollText size={15} /><span className="tab-label">{t("导读")}</span></button>
             <button role="tab" title={t(TAB_NAMES.chat)} aria-label={t(TAB_NAMES.chat)} aria-selected={tab === "chat"} className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}><MessageCircle size={15} /><span className="tab-label">{t("问答")}</span></button>
             <span className="spacer" data-tauri-drag-region />
             <button className="icon-btn tabs-close" title={t("收起字幕栏（⌘\\）")} onClick={() => put({ panelOpen: false })}><PanelRightClose size={16} /></button>
@@ -408,7 +378,8 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             <PanelBoundary key={tab}>
               {tab === "transcript" && <TranscriptPanel ep={ep} />}
               {tab === "chat" && <ChatPanel ep={ep} />}
-              {tab === "deep" && <DeepRead ep={ep}><EmptyState art={<BookArt />} title={t("这一集还没有精读")} note={t("这期没有精读长文，字幕和 AI 导读依然可以帮你")} /></DeepRead>}
+              {tab === "summary" && <SummaryPanel ep={ep} />}
+              {tab === "deep" && <DeepRead ep={ep} onMissing={() => { setNoDeep(ep.id); setTab("transcript"); }}><EmptyState art={<BookArt />} title={t("这一集还没有精读")} note={t("这期没有精读长文，字幕和 AI 导读依然可以帮你")} /></DeepRead>}
 
             </PanelBoundary>
           </div>

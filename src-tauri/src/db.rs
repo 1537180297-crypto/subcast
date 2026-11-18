@@ -7,6 +7,9 @@ pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
+        -- In WAL mode NORMAL is still crash-safe, and commits stop waiting on a disk flush each time.
+        PRAGMA synchronous=NORMAL;
+        PRAGMA busy_timeout=5000;
         CREATE TABLE IF NOT EXISTS shows(
             id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, author TEXT, cover TEXT,
             feed_url TEXT NOT NULL, link TEXT, description TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
@@ -15,12 +18,16 @@ pub fn open(path: &Path) -> Result<Connection> {
             published INTEGER, duration REAL, audio_url TEXT, video_id TEXT, link TEXT, cover TEXT, notes TEXT,
             transcript_url TEXT, transcript_type TEXT, progress REAL NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS episodes_show ON episodes(show_id, published DESC);
+        CREATE INDEX IF NOT EXISTS episodes_published ON episodes(published DESC);
         CREATE TABLE IF NOT EXISTS transcripts(
             episode_id TEXT PRIMARY KEY, source TEXT NOT NULL, language TEXT NOT NULL, segments TEXT NOT NULL, created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS blobs(
             episode_id TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(episode_id, kind));
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS tr_cache(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        CREATE TABLE IF NOT EXISTS tr_cache(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        -- Time actually spent listening (playing, not seeking), per local day and hour, for 我的收听.
+        CREATE TABLE IF NOT EXISTS listens(day TEXT NOT NULL, hour INTEGER NOT NULL, episode_id TEXT NOT NULL, show_id TEXT NOT NULL,
+            seconds REAL NOT NULL, translated INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, hour, episode_id));",
     )?;
     let has_deep: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('episodes') WHERE name='deep'", [], |r| r.get::<_, i64>(0))? > 0;
     if !has_deep {
@@ -91,6 +98,16 @@ pub fn delete_show(conn: &Connection, id: &str) -> Result<()> {
 const EPISODE_COLS: &str = "e.id,e.show_id,e.guid,e.title,e.published,e.duration,e.audio_url,e.video_id,e.link,e.cover,e.notes,e.transcript_url,e.transcript_type,e.progress,
     EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id), s.title, e.deep";
 
+/// The same columns without show notes, which are large and lists don't show.
+fn list_cols() -> String { EPISODE_COLS.replacen("e.notes", "NULL", 1) }
+
+/// Every show note of a show, by episode (for searching inside it).
+pub fn show_notes(conn: &Connection, show_id: &str) -> Result<std::collections::HashMap<String, String>> {
+    let mut st = conn.prepare("SELECT id, notes FROM episodes WHERE show_id=?1 AND notes IS NOT NULL")?;
+    let rows = st.query_map([show_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 fn episode_from(r: &rusqlite::Row) -> rusqlite::Result<Episode> {
     Ok(Episode {
         id: r.get(0)?, show_id: r.get(1)?, guid: r.get(2)?, title: r.get(3)?, published: r.get(4)?, duration: r.get(5)?,
@@ -103,7 +120,8 @@ fn episode_from(r: &rusqlite::Row) -> rusqlite::Result<Episode> {
 pub fn list_episodes(conn: &Connection, show_id: Option<&str>, limit: i64) -> Result<Vec<Episode>> {
     // Notes are large; the list does not need them.
     let sql = format!(
-        "SELECT {EPISODE_COLS} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id {} ORDER BY e.published DESC LIMIT ?1",
+        "SELECT {} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id {} ORDER BY e.published DESC LIMIT ?1",
+        list_cols(),
         if show_id.is_some() { "WHERE e.show_id=?2" } else { "WHERE s.kind != 'single'" }
     );
     let mut st = conn.prepare(&sql)?;
@@ -117,9 +135,10 @@ pub fn list_episodes(conn: &Connection, show_id: Option<&str>, limit: i64) -> Re
 
 pub fn recent_episodes(conn: &Connection, limit: i64) -> Result<Vec<Episode>> {
     let sql = format!(
-        "SELECT {EPISODE_COLS} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id
+        "SELECT {} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id
          WHERE e.progress > 0 OR EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id) OR s.kind='single'
-         ORDER BY e.rowid DESC LIMIT ?1"
+         ORDER BY e.rowid DESC LIMIT ?1",
+        list_cols()
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![limit], |r| episode_from(r).map(|mut e| { e.notes = None; e }))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -186,6 +205,32 @@ pub fn tr_get(conn: &Connection, key: &str) -> Result<Option<String>> {
 pub fn tr_put(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute("INSERT OR REPLACE INTO tr_cache(key,value) VALUES(?1,?2)", params![key, value])?;
     Ok(())
+}
+
+/// Adds listening time to today's row for this hour (local time).
+pub fn log_listen(conn: &Connection, episode_id: &str, show_id: &str, seconds: f64, translated: bool) -> Result<()> {
+    let now = chrono::Local::now();
+    conn.execute(
+        "INSERT INTO listens(day,hour,episode_id,show_id,seconds,translated) VALUES(?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(day,hour,episode_id) DO UPDATE SET seconds = seconds + excluded.seconds, translated = MAX(translated, excluded.translated)",
+        params![now.format("%Y-%m-%d").to_string(), now.format("%H").to_string().parse::<i64>().unwrap_or(0), episode_id, show_id, seconds.clamp(0.0, 120.0), translated as i64],
+    )?;
+    Ok(())
+}
+
+/// Every listening row since a day (YYYY-MM-DD), with the episode's show and kind for grouping.
+pub fn listens_since(conn: &Connection, since: &str) -> Result<Vec<serde_json::Value>> {
+    let mut st = conn.prepare(
+        "SELECT l.day, l.hour, l.episode_id, l.show_id, l.seconds, l.translated, COALESCE(s.title,''), COALESCE(s.kind,''), COALESCE(s.cover,''), COALESCE(e.title,''), COALESCE(e.video_id,''),
+                COALESCE(e.duration,0), COALESCE(e.progress,0), COALESCE(e.published,0)
+         FROM listens l LEFT JOIN shows s ON s.id = l.show_id LEFT JOIN episodes e ON e.id = l.episode_id WHERE l.day >= ?1 ORDER BY l.day")?;
+    let rows = st.query_map([since], |r| Ok(serde_json::json!({
+        "day": r.get::<_, String>(0)?, "hour": r.get::<_, i64>(1)?, "episodeId": r.get::<_, String>(2)?, "showId": r.get::<_, String>(3)?,
+        "seconds": r.get::<_, f64>(4)?, "translated": r.get::<_, i64>(5)? == 1, "showTitle": r.get::<_, String>(6)?, "kind": r.get::<_, String>(7)?,
+        "cover": r.get::<_, String>(8)?, "episodeTitle": r.get::<_, String>(9)?, "video": !r.get::<_, String>(10)?.is_empty(),
+        "duration": r.get::<_, f64>(11)?, "progress": r.get::<_, f64>(12)?, "published": r.get::<_, i64>(13)?,
+    })))?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
 }
 
 #[cfg(test)]

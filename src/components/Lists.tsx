@@ -1,12 +1,14 @@
+import { playSoon } from "./Players";
 import { ask } from "../lib/confirm";
+import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, Link2, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Search, Trash2, X, Youtube } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Search, Trash2, X, Youtube } from "lucide-react";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
 import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, type Pick, type Topic } from "../lib/picks";
-import { isChineseUi, t } from "../lib/i18n";
+import { isChineseUi, t, useLang } from "../lib/i18n";
 import { HOME_SHOW_FEED, showLinks } from "../lib/showLinks";
 import { AlsoOn, HomeShowBanner, YtButton, usePromo } from "./YtPromo";
 import { useShowName, useZh } from "../lib/zh";
@@ -42,20 +44,22 @@ function openAt(ep: Episode, time: number) {
   void api.setProgress(ep.id, at.progress);
   s.load(at);
   s.openEpisode(at);
-  window.setTimeout(() => useStore.getState().player?.play(), 700);
+  playSoon(ep.id);
 }
 
-function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boolean; hit?: ShowHit; query?: string }) {
+// Memoised, and watching only whether this row is the one playing: a show page can list hundreds.
+const EpisodeRow = memo(function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boolean; hit?: ShowHit; query?: string }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const open = () => (hit?.time != null ? openAt(ep, hit.time) : openEpisode(ep));
-  const current = useStore((s) => s.current);
+  const isPlaying = useStore((s) => s.current?.id === ep.id);
+  useLang((s) => s.lang); // memoised: follow a language change itself
   const zh = useZh(ep.title);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const deep = !!ep.deep;
   const saved = useOffline((s) => !!s.saved[ep.id]);
   const loading = useOffline((s) => s.active[ep.id]);
   return (
-    <div className={`ep-item ${current?.id === ep.id ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
+    <div className={`ep-item ${isPlaying ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
       <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>
         {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" onError={(e) => {
@@ -93,7 +97,7 @@ function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boole
       </div>
     </div>
   );
-}
+});
 
 function groupLabel(ms?: number | null): string {
   if (!ms) return t("更早");
@@ -139,18 +143,20 @@ function ContinueHero({ ep }: { ep: Episode }) {
   const pct = ep.duration ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const left = ep.duration ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
   // The whole card resumes: open the episode and start playing where it stopped.
-  const resume = () => { openEpisode(ep); window.setTimeout(() => useStore.getState().player?.play(), 600); };
+  const resume = () => { openEpisode(ep); playSoon(ep.id); };
   return (
     <div className="hero" role="button" tabIndex={0} title={t("继续播放")} onClick={resume} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), resume())}>
-      {ep.cover ? <img className={ep.videoId ? "wide" : ""} src={ep.cover} alt="" /> : <div className="cover-fallback" />}
+      <div className={`hero-cover ${ep.videoId ? "wide" : ""}`}>
+        {ep.cover ? <img src={ep.cover} alt="" /> : <div className="cover-fallback" />}
+        {pct > 0 && <span className="hero-bar" aria-hidden><span style={{ width: `${pct}%` }} /></span>}
+      </div>
       <div className="hero-meta">
         <p className="meta-line">{t("继续收听")}{ep.showTitle && ep.showId !== "single" ? <> · <ShowName title={ep.showTitle} /></> : null}</p>
         <p className="hero-title">{zh ?? ep.title}</p>
         {zh && zh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
         <div className="hero-foot">
           <span className="btn primary hero-play" aria-hidden><Play size={15} fill="currentColor" /> {t("继续播放")}</span>
-          {pct > 0 && <div className="hero-bar"><div style={{ width: `${pct}%` }} /></div>}
-          {left > 0 && <span className="muted small">{t("还剩 {left} 分钟", { left })}</span>}
+          {left > 0 && <span className="hero-left">{t("还剩 {left} 分钟", { left })}</span>}
         </div>
       </div>
     </div>
@@ -170,10 +176,27 @@ function ShowTile({ show }: { show: Show }) {
 }
 
 /** A compact episode card for the home rows: picture, show and date, title, and a play button on hover. */
+/** Subtitles open with the episode, no transcription: already made here, the publisher's (YouTube captions,
+ *  a feed transcript), a 精读 transcript, or one someone shared (asked for in one batch, see checkShared). */
+const ownSubs = (e: Episode) => !!(e.hasTranscript || e.transcriptUrl || e.deep || e.videoId);
+const useSharedHits = create<{ ids: Record<string, true> }>(() => ({ ids: {} }));
+const hasSubs = (e: Episode, shared: Record<string, true>) => ownSubs(e) || !!shared[e.id];
+/** Episodes already asked about this session (an answer doesn't change often enough to ask again). */
+const askedShared = new Set<string>();
+function checkShared(eps: Episode[]) {
+  const ids = eps.filter((e) => !ownSubs(e) && !askedShared.has(e.id)).map((e) => e.id).slice(0, 100);
+  if (!ids.length) return;
+  ids.forEach((id) => askedShared.add(id));
+  void api.sharedExists(ids).then((hit) => {
+    if (hit.length) useSharedHits.setState((s) => ({ ids: { ...s.ids, ...Object.fromEntries(hit.map((id) => [id, true as const])) } }));
+  }).catch(() => {});
+}
+
 function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const zh = useZh(ep.title);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
+  const shared = useSharedHits((s) => !!s.ids[ep.id]);
   const left = ep.duration && pct > 0 ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
   const play = (e: React.MouseEvent) => { e.stopPropagation(); playAll([ep]); };
   return (
@@ -182,6 +205,7 @@ function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
         {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" /> : <div className="cover-fallback" />}
         {pct > 0 && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
+        {(ownSubs(ep) || shared) && <span className="thumb-subs">{t("有字幕")}</span>}
         <button type="button" className="card-play" title={t("播放")} aria-label={t("播放")} onClick={play}><Play size={16} fill="currentColor" /></button>
       </div>
       <p className="ep-kicker">{ep.showId !== "single" && <ShowName title={ep.showTitle} />}<span>{left ? t("剩 {n} 分钟", { n: left }) : date(ep.published)}</span></p>
@@ -207,7 +231,7 @@ function RecRow({ r, onAdd, adding, done }: { r: Recommendation; onAdd: () => vo
 }
 
 export function LatestView() {
-  const { shows, settings, set, go, reloadShows, notify } = useStore(useShallow((s) => ({ shows: s.shows, settings: s.settings, set: s.set, go: s.go, reloadShows: s.reloadShows, notify: s.notify })));
+  const { shows, set, go, reloadShows, notify } = useStore(useShallow((s) => ({ shows: s.shows, set: s.set, go: s.go, reloadShows: s.reloadShows, notify: s.notify })));
   const favorites = useLibrary((s) => s.favorites);
   const savedIds = useOffline((s) => Object.keys(s.saved).join());
   const [eps, setEps] = useState<Episode[] | null>(null);
@@ -228,21 +252,30 @@ export function LatestView() {
   // Up next: other unfinished episodes, then saved ones not started yet.
   const upNext = [...recent.filter((e) => unfinished(e) && e.id !== hero?.id), ...favEps.filter((e) => !unfinished(e) && !(e.duration && e.progress >= e.duration * 0.97))]
     .filter((e, i, a) => a.findIndex((x) => x.id === e.id) === i).slice(0, 12);
-  const fresh = (eps ?? []).filter((e) => !(e.duration && e.progress >= e.duration * 0.97));
+  // Latest first, but in the top grid episodes that open with subtitles come before ones that need transcribing.
+  const unheard = (eps ?? []).filter((e) => !(e.duration && e.progress >= e.duration * 0.97));
+  const shared = useSharedHits((s) => s.ids);
+  useEffect(() => { checkShared(unheard.slice(0, 18)); }, [eps]);
+  const fresh = [...unheard.slice(0, 18).filter((e) => hasSubs(e, shared)), ...unheard.slice(0, 18).filter((e) => !hasSubs(e, shared)), ...unheard.slice(18)];
   const recs = useMemo(() => recommend({ shows, recent, favorites: favEps, downloads: dlEps }, 6), [shows, recent, favEps, dlEps]);
   const subscribe = async (input: string, name: string) => {
     setAdding(input);
     try { const r = await api.addSubscription(input); await reloadShows(); if (r.show) notify(t("已订阅「{name}」", { name })); }
     catch (err) { notify(errorText(err)); } finally { setAdding(null); }
   };
-  if (!shows.length && !settings.onboarded) return <Onboarding />;
+  const welcome = useStore((s) => s.welcome);
+  const settingUp = useStore((s) => s.settingUp);
   return (
     <div className="page home">
+      {welcome && <WelcomeCard />}
       {hero && <ContinueHero ep={hero} />}
-      {upNext.length > 0 && (
+      {(upNext.length > 0 || hero || favorites.length > 0) && (
         <section>
-          <h2 className="module-title" role="button" tabIndex={0} onClick={() => go({ kind: "recent" })}>{t("接下来听")} <ChevronRight size={16} /></h2>
-          <div className="card-strip">{upNext.map((e) => <EpisodeCard key={e.id} ep={e} />)}</div>
+          <div className="module-head">
+            <h2 className="module-title">{t("接下来听")}</h2>
+            <button className="link-btn" onClick={() => go({ kind: "recent" })}>{favorites.length ? t("全部 · 收藏 {n}", { n: favorites.length }) : t("全部")} <ChevronRight size={13} /></button>
+          </div>
+          {upNext.length > 0 && <div className="card-strip">{upNext.map((e) => <EpisodeCard key={e.id} ep={e} />)}</div>}
         </section>
       )}
       <div className="home-grid">
@@ -251,7 +284,7 @@ export function LatestView() {
             <h2 className="module-title">{t("最新单集")}</h2>
             {fresh.length > 9 && <button className="link-btn" onClick={() => setAll(!all)}>{all ? t("收起") : t("查看全部")}</button>}
           </div>
-          {!shows.length ? <EmptyState art={<HeadphonesArt />} title={t("还没有订阅节目")} note={t("从精选里挑几档好节目，字幕会自动准备好")}><button className="btn primary" onClick={() => go({ kind: "discover" })}>{t("去发现节目")}</button></EmptyState>
+          {!shows.length && settingUp ? <SkeletonFeed /> : !shows.length ? <EmptyState art={<HeadphonesArt />} title={t("还没有订阅节目")} note={t("从精选里挑几档好节目，字幕会自动准备好")}><button className="btn primary" onClick={() => go({ kind: "discover" })}>{t("去发现节目")}</button></EmptyState>
             : eps == null ? <SkeletonFeed />
             : all ? <>
                 <EpisodeList episodes={eps.slice(0, limit)} showShow />
@@ -299,7 +332,7 @@ export function RecentView() {
   return (
     <div className="page">
       <div className="page-head">
-        <h1 className="page-title">{t("继续收听")}</h1>
+        <h1 className="page-title">{t("接下来听")}</h1>
         <div className="seg-control" role="tablist">
           <button role="tab" aria-selected={tab === "recent"} className={tab === "recent" ? "on" : ""} onClick={() => setTab("recent")}>{t("最近播放")}</button>
           <button role="tab" aria-selected={tab === "saved"} className={tab === "saved" ? "on" : ""} onClick={() => setTab("saved")}>{t("收藏")}{favorites.length ? ` ${favorites.length}` : ""}</button>
@@ -479,7 +512,7 @@ function PickCard({ p, selected, subscribed, onClick, onOpen, action }: { p: Pic
       <div className="tile-cover">
         <img src={p.cover} alt="" loading="lazy" />
         {p.deep ? <span className="tile-badge deep">{t("精读")}</span> : p.video && <span className="tile-badge"><Youtube size={11} /> {t("视频")}</span>}
-        {onClick ? <span className={`pick-check ${selected ? "on" : ""}`}>{selected && <Check size={13} strokeWidth={3} />}</span> : <div className="tile-action">{action}</div>}
+        {onClick ? <span className={`pick-check ${selected ? "on" : ""}`}>{selected && <Check size={13} strokeWidth={3} />}</span> : <div className="tile-action" onClick={(e) => e.stopPropagation()}>{action}</div>}
       </div>
       <p className="tile-name clamp1">{pickName(p)}</p>
       <p className="tile-sub clamp1">{pickSub(p)}</p>
@@ -500,39 +533,36 @@ function TopicChips({ topics, setTopics }: { topics: Topic[]; setTopics: (t: Top
 
 const visible = (topics: Topic[]) => PICKS.filter((p) => !topics.length || p.topics.some((x) => topics.includes(x)));
 
-function Onboarding() {
-  const { reloadShows, saveSettings, set, notify } = useStore(useShallow((s) => ({ reloadShows: s.reloadShows, saveSettings: s.saveSettings, set: s.set, notify: s.notify })));
-  const [topics, setTopics] = useState<Topic[]>(["AI 前沿", "创业投资"]); // i18n-ignore
-  const [chosen, setChosen] = useState<Set<string>>(() => new Set(["nexttoken", "no-priors", "lex", "zhang", "latetalk"]));
-  const [progress, setProgress] = useState<string | null>(null);
-  const toggle = (id: string) => setChosen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const start = async () => {
-    const picks = PICKS.filter((p) => chosen.has(p.id));
-    let ok = 0;
-    for (const p of picks) {
-      setProgress(t("正在订阅 {name}…（{i}/{n}）", { name: pickName(p), i: ok + 1, n: picks.length }));
-      try { await api.addSubscription(p.input); ok++; } catch { /* keep going with the rest */ }
+/** First run: no picking screen. A few curated shows are subscribed in the background and the home page fills in
+ *  as they arrive; a welcome card says what happened and how to bring in your own. */
+const STARTER = ["nexttoken", "no-priors", "lex", "zhang", "latetalk"];
+export async function firstRunSetup() {
+  const { settings, shows, saveSettings, reloadShows } = useStore.getState();
+  if (settings.onboarded || shows.length) return;
+  await saveSettings({ onboarded: true });
+  useStore.setState({ welcome: true, settingUp: true });
+  const queue = PICKS.filter((p) => STARTER.includes(p.id));
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    for (let p = queue.shift(); p; p = queue.shift()) {
+      try { await api.addSubscription(p.input); await reloadShows(); } catch { /* the rest still come */ }
     }
-    await reloadShows();
-    await saveSettings({ onboarded: true });
-    setProgress(null);
-    notify(ok === picks.length ? t("点任意一集，中文字幕会自动准备好") : t("订阅了 {ok} 个，{failed} 个暂时连不上，可稍后在「发现」里重试", { ok, failed: picks.length - ok }));
-  };
+  }));
+  useStore.setState({ settingUp: false });
+}
+
+function WelcomeCard() {
+  const { set, shows, settingUp } = useStore(useShallow((s) => ({ set: s.set, shows: s.shows, settingUp: s.settingUp })));
   return (
-    <div className="page onboarding">
-      <h1 className="hero-title">{t("先挑几个想听的节目")}</h1>
-      <p className="hero-sub">{t("订阅后自动拉取最新几集，字幕和中文翻译开箱即用。")}</p>
-      <TopicChips topics={topics} setTopics={setTopics} />
-      <div className="tile-grid">
-        {visible(topics).map((p) => <PickCard key={p.id} p={p} selected={chosen.has(p.id)} subscribed={false} onClick={() => toggle(p.id)} />)}
+    <div className="welcome-card">
+      <div className="welcome-text">
+        <p className="welcome-title">{t("欢迎使用 SubCast")}</p>
+        <p className="muted small">{settingUp ? t("正在为你准备几档精选节目…") : t("已经为你订阅了 {n} 档精选节目，点任意一集就有双语字幕。", { n: shows.length })}{" "}{t("想听自己的？")}</p>
       </div>
-      <div className="onboard-bar">
-        <span className="muted">{progress ?? t("已选 {n} 个", { n: chosen.size })}</span>
-        <div className="spacer" />
-        <button className="btn ghost" onClick={() => set({ addOpen: true, addTab: "import" })} disabled={!!progress}><Youtube size={14} /> {t("从 YouTube / 小宇宙导入")}</button>
-        <button className="btn ghost" onClick={() => set({ addOpen: true, addTab: "link" })} disabled={!!progress}><Link2 size={14} /> {t("我有自己的链接")}</button>
-        <button className="btn primary" onClick={start} disabled={!chosen.size || !!progress}>{progress ? <Loader2 size={14} className="spin" /> : null} {t("开始收听")}</button>
+      <div className="row-actions">
+        <button className="btn sm primary" onClick={() => set({ addOpen: true, addTab: "import" })}><Youtube size={14} /> {t("导入 YouTube / 小宇宙订阅")}</button>
+        <button className="btn sm" onClick={() => useStore.getState().go({ kind: "discover" })}>{t("发现更多节目")}</button>
       </div>
+      <button className="icon-btn sm welcome-close" aria-label={t("关闭")} onClick={() => set({ welcome: false })}><X size={14} /></button>
     </div>
   );
 }
@@ -551,7 +581,7 @@ export function DiscoverView() {
     try {
       const r = await api.addSubscription(input);
       await reloadShows();
-      if (r.show) { notify(t("已订阅「{name}」", { name: title })); go({ kind: "show", id: r.show.id }); }
+      if (r.show) notify(t("已订阅「{name}」", { name: title }));
     } catch (err) { notify(errorText(err)); } finally { setAdding(null); }
   };
   const subBtn = (input: string, title: string, done: boolean) => done

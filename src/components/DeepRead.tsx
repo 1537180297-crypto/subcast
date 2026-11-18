@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, ExternalLink, Square, Volume2 } from "lucide-react";
+import { BookOpen, ExternalLink } from "lucide-react";
 import { SkeletonArticle } from "./Skeleton";
-import { speak, stopSpeaking } from "../lib/tts";
+import { ReadAloud } from "./ReadAloud";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
 import { useStore } from "../store";
-import { t, tr } from "../lib/i18n";
+import { t } from "../lib/i18n";
 
 const KEEP = new Set(["P", "H2", "H3", "H4", "BLOCKQUOTE", "UL", "OL", "LI", "STRONG", "EM", "B", "I", "A", "BR", "HR", "SPAN", "ASIDE", "FIGURE", "FIGCAPTION", "CODE", "PRE"]);
 
@@ -32,7 +32,8 @@ function sanitize(html: string): string {
 const seconds = (t: string) => t.split(":").reduce((n, p) => n * 60 + Number(p), 0);
 
 /** The 乔木精读 article for an episode, cached after the first fetch. */
-export function DeepRead({ ep, children }: { ep: Episode; children?: React.ReactNode }) {
+/** `onMissing`: the feed promised a deep-read but there is none to fetch. */
+export function DeepRead({ ep, children, onMissing }: { ep: Episode; children?: React.ReactNode; onMissing?: () => void }) {
   const [html, setHtml] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
@@ -43,13 +44,12 @@ export function DeepRead({ ep, children }: { ep: Episode; children?: React.React
     });
     return () => { live = false; };
   }, [ep.id]);
+  useEffect(() => { if (html === null) onMissing?.(); }, [html]);
   const clean = useMemo(() => (html ? sanitize(html) : ""), [html]);
-  const speaking = useStore((s) => s.speaking);
-  const read = () => {
+  const readText = () => {
     const doc = new DOMParser().parseFromString(clean, "text/html");
     doc.querySelectorAll("[data-t]").forEach((n) => n.remove());
-    const text = Array.from(doc.body.querySelectorAll("p, h2, h3, h4, li, blockquote")).map((n) => n.textContent?.trim()).filter(Boolean).join("\n");
-    void speak(text, (m) => useStore.getState().notify(m.includes("Key") ? t("{message}（设置 › 朗读）", { message: tr(m) }) : tr(m)));
+    return Array.from(doc.body.querySelectorAll("p, h2, h3, h4, li, blockquote")).map((n) => n.textContent?.trim()).filter(Boolean).join("\n");
   };
   if (html === undefined) return <SkeletonArticle />;
   if (!html) return <>{children}</>;
@@ -58,9 +58,7 @@ export function DeepRead({ ep, children }: { ep: Episode; children?: React.React
       <div className="deep-head">
         <span className="deep-badge" title={t("AI 基于完整访谈改写的中文长文，不是逐字翻译")}><BookOpen size={13} /> {t("乔木精读")}</span>
         <span className="spacer" />
-        {speaking
-          ? <button className="btn sm" onClick={stopSpeaking}><Square size={11} /> {t("停止朗读")}</button>
-          : <button className="btn sm" title={t("用豆包语音朗读精读全文")} onClick={read}><Volume2 size={13} /> {t("朗读")}</button>}
+        <ReadAloud text={readText} title={t("用豆包语音朗读精读全文")} />
         {ep.link && <button className="icon-btn" title={t("在网页中打开")} onClick={() => openUrl(ep.link!)}><ExternalLink size={14} /></button>}
       </div>
       <article

@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS confirmations (
   PRIMARY KEY (version_id, install_hash)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS confirmations_install ON confirmations(install_hash);
+CREATE TABLE IF NOT EXISTS guides (
+  episode_id INTEGER PRIMARY KEY REFERENCES episodes(id) ON DELETE CASCADE,
+  install_hash TEXT NOT NULL,
+  lang TEXT NOT NULL,
+  model TEXT NOT NULL,
+  text BLOB NOT NULL,
+  chars INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 PRAGMA user_version = 1;
 `;
 
@@ -133,6 +143,13 @@ export class Store {
       deleteEpisode: p('DELETE FROM episodes WHERE id = ?'),
       moveKeys: p('UPDATE episode_keys SET episode_id = ? WHERE episode_id = ?'),
       moveVersions: p('UPDATE versions SET episode_id = ? WHERE episode_id = ?'),
+      moveGuide: p('UPDATE OR IGNORE guides SET episode_id = ? WHERE episode_id = ?'),
+      guideFor: p(`SELECT g.lang, g.model, g.text, g.created_at FROM guides g
+        WHERE g.episode_id IN (SELECT episode_id FROM episode_keys WHERE key IN (?, ?, ?, ?)) ORDER BY g.created_at LIMIT 1`),
+      guideOf: p('SELECT install_hash FROM guides WHERE episode_id = ?'),
+      putGuide: p(`INSERT INTO guides (episode_id, install_hash, lang, model, text, chars, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(episode_id) DO UPDATE SET install_hash = excluded.install_hash, lang = excluded.lang, model = excluded.model,
+        text = excluded.text, chars = excluded.chars, updated_at = excluded.updated_at`),
       insertKey: p('INSERT OR IGNORE INTO episode_keys (key, episode_id) VALUES (?, ?)'),
       versionsMeta: p(`SELECT ${META_COLUMNS} FROM versions WHERE episode_id = ?`),
       versionMeta: p(`SELECT ${META_COLUMNS} FROM versions WHERE id = ?`),
@@ -157,6 +174,8 @@ export class Store {
         FROM versions v JOIN episodes e ON e.id = v.episode_id
         WHERE v.episode_id IN (SELECT episode_id FROM episode_keys WHERE key IN (?, ?, ?, ?)) AND v.hidden = 0
         ORDER BY v.score DESC, v.votes DESC, v.created_at DESC, v.id DESC LIMIT 1`),
+      keyHasVersion: p(`SELECT 1 AS ok FROM episode_keys k JOIN versions v ON v.episode_id = k.episode_id
+        WHERE k.key = ? AND v.hidden = 0 LIMIT 1`),
       countEpisodeVersions: p('SELECT COUNT(*) AS n FROM versions WHERE episode_id = ? AND hidden = 0'),
       countVersions: p('SELECT COUNT(*) AS n FROM versions'),
       stats: p(`SELECT (SELECT COUNT(*) FROM episodes) AS episodes, (SELECT COUNT(*) FROM episode_keys) AS keys,
@@ -186,6 +205,11 @@ export class Store {
 
   countTranscripts() {
     return this.q.countVersions.get().n;
+  }
+
+  // The keys (of those given) that lead to at least one visible version.
+  existing(keys) {
+    return keys.filter((k) => this.q.keyHasVersion.get(k));
   }
 
   // Returns { etag, json } or null. json is assembled from the stored JSON so the segment
@@ -238,12 +262,32 @@ export class Store {
       for (const other of ids.slice(1)) {
         this.q.moveKeys.run(episodeId, other);
         this.q.moveVersions.run(episodeId, other);
+        this.q.moveGuide.run(episodeId, other);
         this.q.deleteEpisode.run(other);
       }
     }
     for (const key of keys) this.q.insertKey.run(key, episodeId);
     this.q.touchEpisode.run(meta.title, meta.title, meta.show, meta.show, now, episodeId);
     return { episodeId, merged: ids.length > 1 };
+  }
+
+  // 导读: one per episode. The first one stays; the install that wrote it may replace it (regenerated).
+  uploadGuide(p) {
+    const now = Date.now();
+    const installHash = this.hashInstall(p.client.install);
+    return this.tx(() => {
+      const { episodeId } = this.resolveEpisode(p.keys, { title: p.title, show: p.show, duration: 0 }, now);
+      const have = this.q.guideOf.get(episodeId);
+      if (have && have.install_hash !== installHash) return { action: 'kept' };
+      this.q.putGuide.run(episodeId, installHash, p.lang, p.model, gzipSync(Buffer.from(p.text, 'utf8')), p.text.length, now, now);
+      return { action: have ? 'replaced' : 'stored' };
+    });
+  }
+
+  guide(keys) {
+    const k = [0, 1, 2, 3].map((i) => keys[i] ?? keys[0]);
+    const row = this.q.guideFor.get(...k);
+    return row ? { lang: row.lang, model: row.model, text: unz(row.text), createdAt: row.created_at } : null;
   }
 
   upload(p) {

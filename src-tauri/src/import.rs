@@ -75,8 +75,74 @@ pub fn channels_in(data: &Value) -> (Vec<Channel>, Option<String>) {
     (out, next)
 }
 
+/// Text the interface looks for to offer the 「打开系统设置」 button (i18n: matched on the backend wording).
+pub const NEEDS_ACCESS: &str = "需要你允许 SubCast 读取"; // i18n-ignore (the interface shows its own text)
+
+fn browser_name(browser: &str) -> &'static str {
+    match browser { "chrome" => "Chrome", "safari" => "Safari", "edge" => "Edge", "firefox" => "Firefox", "brave" => "Brave", "chromium" => "Chromium", "opera" => "Opera", "vivaldi" => "Vivaldi", _ => "浏览器" }
+}
+
+#[cfg(target_os = "macos")]
+fn browser_dir(browser: &str) -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    let sub = match browser {
+        "chrome" => "Library/Application Support/Google/Chrome",
+        "edge" => "Library/Application Support/Microsoft Edge",
+        "brave" => "Library/Application Support/BraveSoftware/Brave-Browser",
+        "chromium" => "Library/Application Support/Chromium",
+        "vivaldi" => "Library/Application Support/Vivaldi",
+        "opera" => "Library/Application Support/com.operasoftware.Opera",
+        "firefox" => "Library/Application Support/Firefox/Profiles",
+        "safari" => "Library/Containers/com.apple.Safari/Data/Library/Cookies",
+        _ => return None,
+    };
+    Some(home.join(sub))
+}
+
+/// macOS (26 and later) guards other apps' data. yt-dlp is a child process: when it is blocked it gets no prompt
+/// and only reports "could not find … cookies". So SubCast itself opens the browser's cookie store first: macOS
+/// then asks the listener on SubCast's behalf, and a refusal becomes a clear message with a way to Settings.
+pub fn ensure_browser_access(browser: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::ErrorKind;
+        let name = browser_name(browser);
+        let Some(dir) = browser_dir(browser) else { return Ok(()) };
+        let denied = || anyhow!("{NEEDS_ACCESS} {name} 的数据：在 系统设置 › 隐私与安全性 › 文件和文件夹 里，打开 SubCast 下的「{name}」，然后重试"); // i18n-ignore (the interface shows its own text)
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Err(anyhow!("没有找到 {name} 的数据，这台电脑可能没有用过 {name}。换一个浏览器试试")), // i18n-ignore (the interface shows its own text)
+            Err(e) if e.kind() == ErrorKind::PermissionDenied => return Err(denied()),
+            Err(_) => return Ok(()),
+        };
+        // Open one cookie database (the file itself is what macOS guards in some versions).
+        let mut cands: Vec<std::path::PathBuf> = vec![dir.join("Cookies.binarycookies")];
+        for e in entries.flatten() {
+            let p = e.path();
+            cands.extend([p.join("Cookies"), p.join("Network/Cookies"), p.join("cookies.sqlite")]);
+        }
+        for c in cands.iter().filter(|c| c.exists()) {
+            match std::fs::File::open(c) {
+                Ok(_) => return Ok(()),
+                Err(e) if e.kind() == ErrorKind::PermissionDenied => return Err(denied()),
+                Err(_) => continue,
+            }
+        }
+    }
+    let _ = browser;
+    Ok(())
+}
+
+/// Opens System Settings at Privacy & Security › Files and Folders (macOS).
+pub fn open_privacy_settings() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders").spawn()?;
+    Ok(())
+}
+
 /// The listener's YouTube subscriptions, read with the cookies of `browser` (chrome, safari, firefox, edge, brave…).
 pub async fn youtube_subscriptions(ytdlp: &Path, browser: &str) -> Result<Vec<Channel>> {
+    { let b = browser.to_string(); tokio::task::spawn_blocking(move || ensure_browser_access(&b)).await??; }
     let dir = std::env::temp_dir().join(format!("subcast-cookies-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir)?;
     let jar = dir.join("cookies.txt");
@@ -86,7 +152,7 @@ pub async fn youtube_subscriptions(ytdlp: &Path, browser: &str) -> Result<Vec<Ch
         cmd.args(["--cookies-from-browser", browser, "--cookies"]).arg(&jar)
             .args(["--skip-download", "--flat-playlist", "--no-warnings", "--playlist-items", "0", "https://www.youtube.com/feed/channels"])
             .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
-        let proxy = net::proxy();
+        let proxy = net::effective_proxy();
         if !proxy.is_empty() { cmd.args(["--proxy", &proxy]); }
         #[cfg(windows)]
         { cmd.creation_flags(0x08000000); }
@@ -95,7 +161,11 @@ pub async fn youtube_subscriptions(ytdlp: &Path, browser: &str) -> Result<Vec<Ch
         if !file.contains("youtube.com") {
             let err = String::from_utf8_lossy(&out.stderr);
             let why = err.lines().rev().find(|l| l.contains("ERROR")).unwrap_or("").to_string();
-            if why.to_lowercase().contains("could not find") || why.to_lowercase().contains("not found") { return Err(anyhow!("没有找到这个浏览器的数据，换一个浏览器试试")); }
+            // Our own check passed, so "could not find" from yt-dlp means it was blocked (macOS) or the
+            // browser keeps no cookies yet.
+            if why.to_lowercase().contains("could not find") || why.to_lowercase().contains("not found") {
+                return Err(if cfg!(target_os = "macos") { anyhow!("{NEEDS_ACCESS} {} 的数据：在 系统设置 › 隐私与安全性 › 文件和文件夹 里，打开 SubCast 下的「{}」，然后重试", browser_name(browser), browser_name(browser)) } else { anyhow!("没有找到这个浏览器的数据，换一个浏览器试试") }); // i18n-ignore (the interface shows its own text)
+            }
             if why.contains("Operation not permitted") || why.to_lowercase().contains("permission") { return Err(anyhow!("没有权限读取这个浏览器的数据（Safari 需要在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许 SubCast）")); }
             return Err(anyhow!("这个浏览器里没有登录 YouTube{}", if why.is_empty() { String::new() } else { format!("：{}", why.chars().take(160).collect::<String>()) }));
         }

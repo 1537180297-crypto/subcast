@@ -71,7 +71,7 @@ fn search_dirs() -> Vec<PathBuf> {
 }
 
 /// PATH for the agents themselves (they start node, git and the like).
-fn child_path() -> std::ffi::OsString { std::env::join_paths(search_dirs()).unwrap_or_default() }
+pub fn child_path() -> std::ffi::OsString { std::env::join_paths(search_dirs()).unwrap_or_default() }
 
 fn find(kind: Kind) -> Option<PathBuf> {
     let names: Vec<String> = if cfg!(windows) { ["exe", "cmd", "bat"].iter().map(|e| format!("{}.{e}", kind.exe())).collect() } else { vec![kind.exe().to_string()] };
@@ -95,7 +95,7 @@ fn command(path: &Path) -> Command {
     #[cfg(windows)]
     { c.creation_flags(0x08000000); }
     // CLIs only honour HTTPS_PROXY; apps opened from the Dock don't inherit it from the shell.
-    let proxy = crate::net::proxy();
+    let proxy = crate::net::effective_proxy();
     if !proxy.is_empty() { c.env("HTTPS_PROXY", &proxy).env("HTTP_PROXY", &proxy); }
     c
 }
@@ -174,6 +174,57 @@ pub async fn probe(kind: Kind, path: &Path) -> Result<&'static str> {
     }
 }
 
+/// A model the agent offers (its id, as passed back when asking, and a display name).
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct AgentModel { pub id: String, pub name: String }
+
+/// The models the agent itself says it can use. Claude Code has no listing (its aliases are fixed in the app).
+pub async fn models(kind: Kind, path: &Path) -> Result<Vec<AgentModel>> {
+    match kind {
+        Kind::Claude => Ok(Vec::new()),
+        Kind::Codex => {
+            let c = Codex::start(path).await?;
+            let r = c.rpc.request("model/list", json!({}), 30).await;
+            c.rpc.close().await;
+            Ok(parse_codex_models(&r?))
+        }
+        _ => {
+            let conn = Acp::start(kind, path).await?;
+            let r = conn.rpc.request("session/new", json!({ "cwd": work_dir()?.to_string_lossy(), "mcpServers": [] }), 60).await;
+            conn.close().await;
+            Ok(parse_acp_models(&r?))
+        }
+    }
+}
+
+fn parse_codex_models(v: &Value) -> Vec<AgentModel> {
+    let list = v["data"].as_array().or(v["models"].as_array()).cloned().unwrap_or_default();
+    list.iter().filter(|m| m["hidden"].as_bool() != Some(true)).filter_map(|m| {
+        let id = m["model"].as_str().or(m["id"].as_str())?.to_string();
+        let name = m["displayName"].as_str().or(m["name"].as_str()).unwrap_or(&id).to_string();
+        Some(AgentModel { id, name })
+    }).collect()
+}
+
+/// session/new answers with models.availableModels (older agents) or a configOptions entry for "model".
+fn parse_acp_models(v: &Value) -> Vec<AgentModel> {
+    let mut out: Vec<AgentModel> = Vec::new();
+    for m in v["models"]["availableModels"].as_array().into_iter().flatten() {
+        if let Some(id) = m["modelId"].as_str() { out.push(AgentModel { id: id.into(), name: m["name"].as_str().unwrap_or(id).into() }); }
+    }
+    if out.is_empty() {
+        for o in v["configOptions"].as_array().into_iter().flatten().filter(|o| o["id"].as_str() == Some("model") || o["category"].as_str() == Some("model")) {
+            let opts = o["options"].as_array().cloned().unwrap_or_default();
+            // Options may be grouped: [{ group, options: [...] }].
+            for x in opts.iter().flat_map(|x| x["options"].as_array().cloned().unwrap_or_else(|| vec![x.clone()])) {
+                if let Some(id) = x["value"].as_str() { out.push(AgentModel { id: id.into(), name: x["name"].as_str().unwrap_or(id).into() }); }
+            }
+        }
+    }
+    out
+}
+
+
 // ---- requests --------------------------------------------------------------------------------------------
 
 pub struct Request<'a> {
@@ -192,7 +243,12 @@ pub async fn complete(kind: Kind, path: &Path, mut req: Request<'_>, cancel: Arc
     let conn = POOL.take(kind, path, req.system, req.model).await?;
     let result = conn.ask(&req, cancel, &on_delta).await;
     POOL.give_back(conn, result.is_ok()).await;
-    result.map_err(|e| friendly(kind, e))
+    match result {
+        // An agent can finish a turn with nothing to show (only thinking, a refusal, a cut-off): say so.
+        Ok(text) if text.trim().is_empty() => Err(anyhow!("{} 没有给出回答（可能只输出了思考过程，或被中途打断），请重试或换一个模型", display(kind))),
+        Ok(text) => Ok(text),
+        Err(e) => Err(friendly(kind, e)),
+    }
 }
 
 fn friendly(kind: Kind, e: anyhow::Error) -> anyhow::Error {
@@ -498,6 +554,10 @@ impl Codex {
             if v["params"]["threadId"].as_str().is_some_and(|t| t != thread_id) { continue; }
             match m {
                 "item/agentMessage/delta" => if let Some(d) = v["params"]["delta"].as_str() { text.push_str(d); on_delta(d); },
+                // The finished message, in case its pieces never came as deltas.
+                "item/completed" => if text.is_empty() && v["params"]["item"]["type"].as_str() == Some("agentMessage") {
+                    if let Some(t) = v["params"]["item"]["text"].as_str() { text.push_str(t); on_delta(t); }
+                },
                 "turn/completed" => {
                     let turn = &v["params"]["turn"];
                     if turn["status"].as_str() == Some("failed") {
@@ -617,5 +677,19 @@ mod live {
                 println!("  {round}: {:.1}s -> {:?}", t0.elapsed().as_secs_f64(), r.map(|s| s.chars().take(80).collect::<String>()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::*;
+    #[test]
+    fn reads_codex_and_acp_listings() {
+        let codex = json!({ "data": [{ "id": "a", "model": "gpt-x", "displayName": "GPT X" }, { "model": "old", "hidden": true }] });
+        assert_eq!(parse_codex_models(&codex), vec![AgentModel { id: "gpt-x".into(), name: "GPT X".into() }]);
+        let acp = json!({ "sessionId": "s", "models": { "currentModelId": "k3", "availableModels": [{ "modelId": "k3", "name": "Kimi K3" }] } });
+        assert_eq!(parse_acp_models(&acp)[0].id, "k3");
+        let cfg = json!({ "configOptions": [{ "id": "model", "options": [{ "group": "x", "options": [{ "value": "m1", "name": "M1" }] }, { "value": "m2" }] }] });
+        assert_eq!(parse_acp_models(&cfg).iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m1", "m2"]);
     }
 }

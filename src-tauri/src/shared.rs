@@ -52,6 +52,48 @@ pub async fn lookup(keys: &[String]) -> Option<Shared> {
     (!hit.segments.is_empty()).then_some(hit)
 }
 
+/// Which of these key lists (one per episode) the shared library has subtitles for, by index. One
+/// request for a whole list of episodes; an older server or a network problem just means "none known".
+pub async fn existing(lists: &[Vec<String>]) -> Vec<bool> {
+    let mut out = vec![false; lists.len()];
+    let all: Vec<&String> = lists.iter().flatten().collect();
+    for chunk in all.chunks(400) {
+        let body = serde_json::json!({ "keys": chunk });
+        let Ok(resp) = net::client().post(format!("{API}/exists")).json(&body).timeout(Duration::from_secs(8)).send().await else { break };
+        if !resp.status().is_success() { break; }
+        #[derive(Deserialize)]
+        struct Found { found: Vec<String> }
+        let Ok(f) = resp.json::<Found>().await else { break };
+        // The server normalizes keys (lowercased hashes); ours are already in that form.
+        for (i, keys) in lists.iter().enumerate() { if keys.iter().any(|k| f.found.contains(k)) { out[i] = true; } }
+    }
+    out
+}
+
+const GUIDES: &str = "https://subcast.qiaomu.ai/api/v1/guides";
+
+/// Someone's 导读 for this episode (Markdown), if shared.
+pub async fn lookup_guide(keys: &[String]) -> Option<String> {
+    if keys.is_empty() { return None; }
+    let qs = keys.iter().map(|k| format!("key={}", urlencoding::encode(k))).collect::<Vec<_>>().join("&");
+    let resp = net::client().get(format!("{GUIDES}?{qs}")).timeout(Duration::from_secs(8)).send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    #[derive(Deserialize)]
+    struct Hit { text: String }
+    let hit: Hit = resp.json().await.ok()?;
+    (!hit.text.trim().is_empty()).then_some(hit.text)
+}
+
+/// Shares a 导读 we made (anonymous, like transcripts). Returns the server's action.
+pub async fn upload_guide(keys: &[String], title: &str, show: &str, model: &str, text: &str, install: String) -> anyhow::Result<String> {
+    let body = serde_json::json!({ "keys": keys, "title": title, "show": show, "lang": "zh", "model": model, "text": text,
+        "client": { "app": "subcast", "version": env!("CARGO_PKG_VERSION"), "install": install } });
+    let resp = net::client().post(GUIDES).json(&body).timeout(Duration::from_secs(20)).send().await?;
+    if !resp.status().is_success() { anyhow::bail!("shared guides: HTTP {}", resp.status()); }
+    let v: serde_json::Value = resp.json().await?;
+    Ok(v["action"].as_str().unwrap_or("").to_string())
+}
+
 #[derive(Serialize)]
 struct UploadTranslation {
     lang: String,

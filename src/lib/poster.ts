@@ -1,7 +1,6 @@
 // Quote posters, after elon.qiaomu.ai's kit.js: a 1080 × 1350 (4:5) canvas with the quote (Chinese first,
 // original below), where it came from, and a QR code back to the episode. Themes and open-source fonts
 // are picked in the poster dialog; web fonts load on demand and only for the characters on the poster.
-import qrcode from "qrcode-generator";
 import { t, tk } from "./i18n";
 
 const SYS_SERIF = '"Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif';
@@ -31,7 +30,7 @@ export const POSTER_THEMES: PosterTheme[] = [
 ];
 
 const loaded = new Map<string, Promise<void>>();
-function loadCss(href: string): Promise<void> {
+export function loadCss(href: string): Promise<void> {
   let p = loaded.get(href);
   if (!p) {
     p = new Promise((res, rej) => {
@@ -198,6 +197,8 @@ export async function drawPoster(o: PosterInput, logo?: HTMLImageElement, theme:
   if (o.url) {
     g.fillStyle = theme.accent; g.font = `600 25px ${SANS}`; g.fillText(t("扫码收听原节目这一段 →"), P, fy + 158);
     try {
+      // Loaded only when a poster is made, not with the app.
+      const { default: qrcode } = await import("qrcode-generator");
       const qr = qrcode(0, "M"); qr.addData(o.url); qr.make();
       const n = qr.getModuleCount(), q = 12, cell = (S - q * 2) / n, qx = W - P - S, qy = fy;
       g.fillStyle = "#ffffff"; g.beginPath(); if (g.roundRect) g.roundRect(qx, qy, S, S, 16); else g.rect(qx, qy, S, S); g.fill();
