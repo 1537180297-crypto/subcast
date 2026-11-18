@@ -72,6 +72,8 @@ export interface Settings {
   learnRemind: boolean;
   /** Key, wrong-letter and right-word sounds in spelling review. */
   learnSounds: boolean;
+  /** Pause playback while a word card is open (and resume when it closes). */
+  learnPause: boolean;
   /** The one-time "想顺便学英语吗？" tip was answered. */
   learnAsked: boolean;
   /** Upload transcripts we make to the shared library (anonymous; reading shared ones is always on). */
@@ -211,6 +213,7 @@ export const DEFAULTS: Settings = {
   learnDaily: 20,
   learnRemind: false,
   learnSounds: true,
+  learnPause: true,
   learnAsked: false,
   shareTranscripts: true,
 };

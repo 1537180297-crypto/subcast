@@ -82,9 +82,10 @@ export function isNew(e: Entry, level: LearnLevel): boolean {
 /** Word tokens in a line of English, with their offsets, for marking and clicking. */
 export const WORD_RE = /[A-Za-z][A-Za-z'’-]*[A-Za-z]|[A-Za-z]/g;
 
-/** A rough check that a transcript is English, for transcripts whose language code is missing. */
+/** Whether a transcript is English: by its language code, or by its text when the code says nothing (missing,
+ *  or "auto", which cloud and RSS transcripts store when no language was chosen). */
 export function looksEnglish(language: string | undefined, sample: string): boolean {
-  if (language) return /^en\b|^en-|^en$/i.test(language);
+  if (language && !/^(auto|und|mul)$/i.test(language)) return /^en\b|^en-|^en$/i.test(language);
   const letters = sample.replace(/[^A-Za-z一-鿿]/g, "");
   return letters.length > 0 && (letters.match(/[A-Za-z]/g)?.length ?? 0) / letters.length > 0.8;
 }
