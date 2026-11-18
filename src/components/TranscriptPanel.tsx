@@ -35,12 +35,24 @@ function highlight(text: string, query: string) {
 
 const NO_SEGMENTS: Segment[] = [];
 
+// A click on a line plays from it, but selecting text never touches playback: the jump waits out a possible
+// double-click (which selects a word) and is dropped when the click ended a drag-selection.
+let lineClick: number | undefined;
+let downAt: { x: number; y: number } | null = null;
+function onLinePointerDown(e: React.PointerEvent) { downAt = { x: e.clientX, y: e.clientY }; }
+function onLineClick(e: React.MouseEvent, seek: () => void) {
+  window.clearTimeout(lineClick);
+  const dragged = downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4;
+  if (e.detail > 1 || dragged || window.getSelection()?.toString().trim()) return;
+  lineClick = window.setTimeout(() => { if (!window.getSelection()?.toString().trim()) seek(); }, 260);
+}
+
 const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean; marks: LearnMarks | null }) {
   const showZh = mode !== "original";
   // Learning English: the original stays visible even in "中文" mode, it is what you are learning.
   const showOrig = mode !== "translation" || (!zh && !pending) || !!marks;
   return (
-    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""}`} data-i={i} data-active={active || undefined} data-hit={current || undefined} role="button" tabIndex={0} onClick={() => onSeek(seg.start)} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
+    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""}`} data-i={i} data-active={active || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
       <span className="line-time">{clock(seg.start)}</span>
       <div className="line-text">
         {showZh && (zh ? <p className="zh">{highlight(zh, query)}</p> : pending ? <span className="skeleton" /> : null)}
@@ -122,6 +134,19 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   useShadowing(shadow && isCurrent, ep.id, segments);
   useEffect(() => { if (!learning) setShadow(false); }, [learning]);
   const closeCard = useCallback(() => setCard(null), []);
+  // Looking a word up pauses playback (as Language Reactor and asbplayer do), and closing the card resumes it
+  // when the card was what paused it.
+  const pausedForCard = useRef(false);
+  const cardOpen = !!card;
+  useEffect(() => {
+    const s = useStore.getState();
+    if (cardOpen) {
+      if (settings.learnPause && isCurrent && s.playing) { s.player?.toggle(); pausedForCard.current = true; }
+    } else if (pausedForCard.current) {
+      pausedForCard.current = false;
+      if (!s.playing) s.player?.toggle();
+    }
+  }, [cardOpen]);
   // A click on a word opens its card instead of seeking (the rest of the line still seeks).
   const onWordClick = (e: React.MouseEvent) => {
     if (!marks || !settings.learnCard) return;
