@@ -18,7 +18,8 @@ import { providerFor, useStore } from "../store";
 import { ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { lang, t, tk, tr, useLang } from "../lib/i18n";
 import { looksEnglish } from "../lib/dict";
-import { Dictation, EpisodeWords, LearnText, LearnTip, WordCard, useLearnMarks, useShadowing, type CardTarget, type LearnMarks } from "./Learn";
+import { Dictation, EpisodeWords, LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget, type LearnMarks } from "./Learn";
+import { ShadowBar, useShadowing } from "./Shadowing";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
 
@@ -139,7 +140,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const learning = !!marks || (english && settings.learnOn);
   const [card, setCard] = useState<CardTarget | null>(null);
   const [shadow, setShadow] = useState(false);
-  useShadowing(shadow && isCurrent, ep.id, segments);
+  useShadowing(shadow && isCurrent, ep.id, segments, transcript?.language?.startsWith("en") ? "en" : "auto");
   useEffect(() => { if (!learning) setShadow(false); }, [learning]);
   const closeCard = useCallback(() => setCard(null), []);
   // Looking a word up pauses playback (as Language Reactor and asbplayer do), and closing the card resumes it
@@ -281,7 +282,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       )}
       {aligning && canAlign && <AlignBar onClose={() => setAligning(false)} />}
       {shadow && isCurrent && (
-        <div className="shadow-bar"><Mic size={13} /><span>{t("跟读模式：每句说完会停一下，跟着说一遍")}</span><button className="btn ghost sm" onClick={() => setShadow(false)}>{t("退出")}</button></div>
+        <ShadowBar onExit={() => setShadow(false)} />
       )}
       <div className={`lines${marks && settings.learnCard ? " learning" : ""}`} ref={list} onWheel={() => (userScrolled.current = Date.now())} onClickCapture={onWordClick}>
         {english && <LearnTip />}
