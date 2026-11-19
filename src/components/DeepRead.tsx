@@ -58,7 +58,7 @@ export function DeepRead({ ep, children, onMissing }: { ep: Episode; children?: 
       <div className="deep-head">
         <span className="deep-badge" title={t("AI 基于完整访谈改写的中文长文，不是逐字翻译")}><BookOpen size={13} /> {t("乔木精读")}</span>
         <span className="spacer" />
-        <ReadAloud text={readText} title={t("用豆包语音朗读精读全文")} />
+        <ReadAloud text={readText} title={t("朗读精读全文")} />
         {ep.link && <button className="icon-btn" title={t("在网页中打开")} onClick={() => openUrl(ep.link!)}><ExternalLink size={14} /></button>}
       </div>
       <article
