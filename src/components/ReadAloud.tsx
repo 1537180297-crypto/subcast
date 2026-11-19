@@ -10,6 +10,7 @@ import { t, tr } from "../lib/i18n";
 import { localInstalled, refreshLocalTts, useLocalTts } from "../lib/localTts";
 import { KeyField, NO_AUTO } from "./SettingsDialog";
 import { PreviewButton, isLocalEngine, useSystemVoices } from "./TtsSettings";
+import { RateControl, RatePicker } from "./RatePicker";
 
 export function ReadAloud({ text, title }: { text: () => string; title?: string }) {
   const speaking = useStore((s) => s.speaking);
@@ -30,6 +31,7 @@ export function ReadAloud({ text, title }: { text: () => string; title?: string 
       {speaking
         ? <button className="btn sm" onClick={stopSpeaking}><Square size={11} /> {t("停止朗读")}</button>
         : <button className="btn sm" title={title ?? t("朗读")} onClick={read}><Volume2 size={13} /> {t("朗读")}</button>}
+      <RatePicker />
       <button className="icon-btn sm" aria-label={t("朗读设置")} title={t("朗读设置")} aria-expanded={open} onClick={() => setOpen(!open)}><ChevronDown size={13} /></button>
       {open && <ReadAloudSettings onClose={() => setOpen(false)} />}
     </div>
@@ -211,6 +213,9 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
           )}
         </>
       )}
+
+      <p className="setup-title">{t("朗读语速")}</p>
+      <RateControl />
 
       <p className="muted small">
         {isLocalEngine(svc.id)
