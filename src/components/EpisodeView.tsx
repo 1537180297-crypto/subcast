@@ -261,6 +261,9 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   // Feeds sometimes mark a deep-read that isn't there: then the tab goes away.
   const [noDeep, setNoDeep] = useState<string | null>(null);
   const { current, load } = useStore(useShallow((s) => ({ current: s.current, load: s.load })));
+  const go = useStore((s) => s.go);
+  // Only a subscribed show has a page to go back to; others (opened from search or Discover) stay plain text.
+  const hasShow = useStore((s) => s.shows.some((x) => x.id === ep.showId));
   const titleZh = useZh(ep.title);
   const isCurrent = current?.id === ep.id;
   const playing = useStore((s) => s.playing);
@@ -328,7 +331,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
         <section className="ep-left" ref={leftRef}>
           <div className="ep-title-block">
             <div className="ep-title">
-              <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? <span key="s">{showName(ep.showTitle)}</span> : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
+              <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? (hasShow ? <button key="s" className="show-link" title={t("查看这档节目的全部单集")} onClick={() => go({ kind: "show", id: ep.showId })}>{showName(ep.showTitle)}</button> : <span key="s">{showName(ep.showTitle)}</span>) : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
               <h1>{titleZh ?? ep.title}</h1>
               {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
             </div>
