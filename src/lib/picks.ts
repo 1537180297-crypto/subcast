@@ -1,5 +1,5 @@
 // Shows suggested on first launch and in Discover. Covers and feeds are fixed here so the page needs no lookups.
-import { isChineseUi, t, tk } from "./i18n";
+import { isChineseUi, showNamesTranslated, t, tk } from "./i18n";
 
 export type Topic = "乔木精读" | "AI 前沿" | "AI 工程" | "创业投资" | "产品与增长" | "科技评论" | "中文播客" | "人文社科" | "个人成长";
 export const TOPICS: Topic[] = ["乔木精读", "AI 前沿", "AI 工程", "创业投资", "产品与增长", "科技评论", "中文播客", "人文社科", "个人成长"];
@@ -88,7 +88,7 @@ export function shortName(title: string): string {
 export function showName(title: string): string {
   const short = shortName(title);
   const p = PICKS.find((x) => x.title === title || shortName(x.title) === short || x.by === title || x.channel === title);
-  return p && isChineseUi() ? t(p.zh) : short;
+  return p && showNamesTranslated() ? t(p.zh) : short;
 }
 
 /** A pick's name in the interface language: the curated Chinese name in Chinese UIs, its own title elsewhere. */

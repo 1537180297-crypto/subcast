@@ -112,9 +112,12 @@ const isTransliteration = (zh: string) => /^[\u4e00-\u9fff]{1,8}(·[\u4e00-\u9ff
  *  translation, or the interface is not Chinese. */
 export function useShowName(title: string): { zh?: string; orig: string } {
   const chinese = targetOf(useLang((s) => s.lang)) != null;
+  const names = useLang((s) => s.names);
+  const on = chinese && names;
   const orig = shortName(title);
   const pick = PICKS.find((x) => x.title === title || shortName(x.title) === orig);
-  const auto = useZh(pick ? undefined : orig);
-  const zh = !chinese ? undefined : pick ? t(pick.zh) : auto && !isTransliteration(auto) ? auto : undefined;
+  // Not requested at all when off: no translation work for names the user does not want translated.
+  const auto = useZh(on && !pick ? orig : undefined);
+  const zh = !on ? undefined : pick ? t(pick.zh) : auto && !isTransliteration(auto) ? auto : undefined;
   return { zh: zh && zh !== orig && !isZh(orig) ? zh : undefined, orig };
 }
