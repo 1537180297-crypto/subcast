@@ -61,6 +61,8 @@ interface State {
   /** Bumped by each openSettings call, so a page already open still jumps to the asked section. */
   settingsNonce?: number;
   addOpen: boolean;
+  /** The bulk "manage subscriptions" dialog is open. */
+  manageOpen: boolean;
   init(): Promise<void>;
   go(view: View): void;
   back(): void;
@@ -97,6 +99,7 @@ export const useStore = create<State>((set, get) => ({
   toast: null,
   settingsOpen: false,
   addOpen: false,
+  manageOpen: false,
   async init() {
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
     setLang(settings.uiLang);

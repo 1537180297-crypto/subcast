@@ -1531,6 +1531,30 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .import-row.done { color: var(--muted); cursor: default; }
 .import-row img, .import-ph { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: var(--line); display: grid; place-items: center; font-size: 12px; }
 .import-row .clamp1 { flex: 1; min-width: 0; }
+/* Pick lists (import, 管理订阅): a filter box, the type switch and select-visible on one line. */
+.pick-count { flex: none; color: var(--accent-text); font-weight: 600; }
+.import-list-head { gap: 12px; }
+.pick-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pick-side { display: inline-flex; align-items: center; gap: 12px; flex: none; }
+.pick-side .link-btn { white-space: nowrap; }
+.pick-side .link-btn:disabled { opacity: 0.45; cursor: default; text-decoration: none; }
+.list-filter { flex: 1 1 180px; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
+.list-filter:focus-within, .list-filter.on { border-color: var(--line-strong); color: var(--text); }
+.list-filter input { flex: 1; min-width: 0; height: auto; padding: 0; border: 0; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 13px; }
+.list-filter .icon-btn.sm { width: 20px; height: 20px; }
+.list-empty { margin: 0; padding: 18px 12px; text-align: center; }
+.manage { display: flex; flex-direction: column; gap: 12px; }
+.import .modal-foot, .manage .modal-foot { align-items: center; }
+.manage-list { height: min(46vh, 420px); max-height: none; }
+.manage-row { padding: 6px 10px; }
+.manage-cover { flex: none; width: 32px; height: 32px; border-radius: 7px; overflow: hidden; }
+.manage-row .manage-cover img, .manage-cover .cover-fallback { width: 100%; height: 100%; border-radius: 0; object-fit: cover; font-size: 12px; }
+.manage-names { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.manage-meta { font-size: 11.5px; color: var(--muted); }
+.manage-names .clamp1 { flex: none; }
+.import-row input[type="checkbox"] { flex: none; accent-color: var(--accent); }
+.side-head-actions { display: inline-flex; align-items: center; gap: 2px; }
+.sidebar.rail .side-manage { display: none; }
 /* Full screen: the control strip sits on the dark gradient, not on a card. */
 .theater-bar .controls { background: transparent; border: 0; box-shadow: none; padding: 0; }
 .theater-bar .controls, .theater-bar .controls .time, .theater-bar .controls .icon-btn, .theater-bar .controls .round-btn { color: #fff; }

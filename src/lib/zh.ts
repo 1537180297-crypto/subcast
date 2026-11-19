@@ -65,6 +65,29 @@ export function useZh(text: string | undefined | null): string | undefined {
   return value;
 }
 
+/** Looks up the Chinese already cached for a text, without requesting any. Used to match a search typed in
+ *  Chinese against names the lists show translated. */
+export function useZhLookup(): (text: string) => string | undefined {
+  const target = targetOf(useLang((s) => s.lang));
+  const map = useZhStore((s) => s.map);
+  return (text) => (target ? map[keyOf(target, text.trim())] : undefined);
+}
+
+/** Matches a typed filter against a show's name: the original, its curated Chinese name and any cached
+ *  translation, ignoring case. An empty filter matches everything. */
+export function useNameMatch(): (q: string, ...texts: (string | undefined)[]) => boolean {
+  const zh = useZhLookup();
+  return (q, ...texts) => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return true;
+    return texts.some((x) => {
+      if (!x) return false;
+      const short = shortName(x);
+      return [x, short, showName(x), zh(short)].some((v) => v?.toLowerCase().includes(needle));
+    });
+  };
+}
+
 /** Long text (show notes): split into paragraphs so each is translated and cached on its own. */
 export function useZhParagraphs(text: string | undefined, enabled: boolean): string[] | undefined {
   const target = targetOf(useLang((s) => s.lang));
@@ -79,7 +102,7 @@ export function useZhParagraphs(text: string | undefined, enabled: boolean): str
 
 export { CJK };
 
-import { PICKS, shortName } from "./picks";
+import { PICKS, shortName, showName } from "./picks";
 
 /** A pure transliteration of a person's name ("德瓦克什·帕特尔") tells a Chinese reader nothing; drop it. */
 const isTransliteration = (zh: string) => /^[\u4e00-\u9fff]{1,8}(·[\u4e00-\u9fff]{1,8})+$/.test(zh.trim());

@@ -1206,6 +1206,21 @@ const dict: Record<string, string> = {
   "键盘 1–4 选择，空格选「{label}」": "Keys 1–4 choose; space picks “{label}”",
   "查词时暂停播放，关掉词卡后继续": "Pause while looking up a word, resume when the card closes",
   "查看这档节目的全部单集": "See all episodes of this show",
+  "管理订阅": "Manage subscriptions",
+  "已选 {n} 个": "{n} selected",
+  "按名字筛选": "Filter by name",
+  "取消选择这些": "Deselect shown",
+  "选中这 {n} 个": "Select {n} shown",
+  "没有名字里带「{q}」的": "Nothing named “{q}”",
+  "勾选想订阅的频道": "Tick the channels you want",
+  "勾选想订阅的节目": "Tick the shows you want",
+  "取消订阅这 {n} 个？": "Unsubscribe from these {n}?",
+  "已取消订阅 {n} 个，{f} 个没有成功": "Unsubscribed from {n}; {f} failed",
+  "已取消订阅 {n} 个": "Unsubscribed from {n}",
+  "共 {n} 个订阅": "{n} subscriptions",
+  "类型": "Type",
+  "正在取消订阅 {done} / {total}": "Unsubscribing {done} / {total}",
+  "取消订阅 {n} 个": "Unsubscribe {n}",
 };
 
 export default dict;
