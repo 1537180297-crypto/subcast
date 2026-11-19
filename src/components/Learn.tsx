@@ -252,8 +252,15 @@ export function EpisodeWords({ ep, segments, zh, onClose }: { ep: Episode; segme
   const list = useMemo(() => (data ? episodeWords(segments, data, level, known) : []), [data, segments, level, known]);
   const fresh = list.filter((f) => !words[f.entry.lemma]);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const [saying, setSaying] = useState<string | null>(null);
   useEffect(() => { setPicked(new Set(fresh.slice(0, 15).map((f) => f.entry.lemma))); }, [list.length]);
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const sayWord = async (e: React.MouseEvent, word: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSaying(word);
+    try { await speak(word, 0.9); } finally { setSaying((cur) => (cur === word ? null : cur)); }
+  };
   const addPicked = () => {
     const add = useWords.getState().add;
     let n = 0;
@@ -285,7 +292,16 @@ export function EpisodeWords({ ep, segments, zh, onClose }: { ep: Episode; segme
                 <span className="ew-w">{f.entry.lemma}</span>
                 {tagLabel(f.entry.tags) && <span className="pill">{t(tagLabel(f.entry.tags))}</span>}
                 <span className="ew-d">{f.entry.meaning.split("\n")[0]}</span>
-                {f.count > 1 && <span className="muted small ew-n">×{f.count}</span>}
+                {f.count > 1 && <span className="muted small ew-n" title={t("在本期字幕里出现了 {n} 次", { n: f.count })}>{t("{n} 次", { n: f.count })}</span>}
+                <button
+                  type="button"
+                  className="icon-btn sm ew-say"
+                  title={t("读单词")}
+                  aria-label={t("读单词")}
+                  onClick={(e) => void sayWord(e, f.entry.lemma)}
+                >
+                  {saying === f.entry.lemma ? <Loader2 size={13} className="spin" /> : <Volume2 size={14} />}
+                </button>
               </label>
             );
           })}

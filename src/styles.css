@@ -1951,6 +1951,8 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .ew-w { font-weight: 600; flex: none; }
 .ew-d { flex: 1; min-width: 0; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ew-n { flex: none; font-variant-numeric: tabular-nums; }
+.ew-say { flex: none; color: var(--muted); }
+.ew-say:hover { color: var(--text); }
 
 /* 听写 */
 .dict { display: flex; flex-direction: column; gap: 12px; }

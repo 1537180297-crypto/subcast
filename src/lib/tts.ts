@@ -142,3 +142,78 @@ export async function previewVoice(engineId: string, voiceId: string, onError?: 
     if (id === session) useTtsPreview.setState({ active: null });
   }
 }
+
+/** Scores Web Speech voices so macOS Premium / Neural / Enhanced voices win over robotic compact ones. */
+function voiceScore(v: SpeechSynthesisVoice, langPrefix: "en" | "zh"): number {
+  const lang = v.lang.toLowerCase();
+  if (!lang.startsWith(langPrefix)) return -1;
+  const id = `${v.voiceURI} ${v.name}`.toLowerCase();
+  let s = 0;
+  if (langPrefix === "en" ? lang.startsWith("en-us") : lang.startsWith("zh-cn")) s += 20;
+  if (/premium|gryphon-neural|siri\.natural/.test(id)) s += 100;
+  else if (/enhanced/.test(id)) s += 80;
+  if (/super-compact/.test(id)) s -= 20;
+  if (langPrefix === "en" && /samantha|ava|zoe|allison|alex|daniel|karen|nora/.test(id)) s += 30;
+  if (langPrefix === "zh" && /tingting|meijia|sinji/.test(id)) s += 30;
+  if (v.localService) s += 5;
+  return s;
+}
+
+/** Speaks with the best installed system voice (preferring macOS Premium / Enhanced voices). */
+export function speakSystemEnhanced(text: string, lang: "en-US" | "zh-CN" = "en-US", rate = 0.9): void {
+  const synth = window.speechSynthesis;
+  if (!synth) return;
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang;
+  u.rate = rate;
+  const prefix = lang.startsWith("zh") ? "zh" : "en";
+  const voices = synth.getVoices();
+  let best: SpeechSynthesisVoice | null = null;
+  let bestScore = -1;
+  for (const v of voices) {
+    const sc = voiceScore(v, prefix);
+    if (sc > bestScore) { bestScore = sc; best = v; }
+  }
+  if (best) u.voice = best;
+  synth.speak(u);
+}
+
+function englishVoiceFor(svc: TtsService): string {
+  switch (svc.id) {
+    case "edge": return svc.voice.toLowerCase().startsWith("en-") ? svc.voice : "en-US-AndrewMultilingualNeural";
+    case "doubao": return svc.voice.toLowerCase().startsWith("en_") ? svc.voice : "en_male_tim_uranus_bigtts";
+    case "mimo": return "default_en";
+    default: return svc.voice;
+  }
+}
+
+let wordSession = 0;
+let wordAudio: HTMLAudioElement | null = null;
+
+/** Pronounces an English word/phrase using the configured default TTS (cached on disk), falling back to macOS Enhanced system voice. */
+export async function speakWord(text: string, rate = 0.9): Promise<void> {
+  const id = ++wordSession;
+  wordAudio?.pause();
+  wordAudio = null;
+  window.speechSynthesis?.cancel();
+
+  const svc = currentTtsService(useStore.getState().settings);
+  if (svc.id === "system") {
+    speakSystemEnhanced(text, "en-US", rate);
+    return;
+  }
+  try {
+    const res = await synthesizeText(text, { voice: englishVoiceFor(svc), rate });
+    if (id !== wordSession) return;
+    const el = new Audio(res.url);
+    wordAudio = el;
+    await new Promise<void>((resolve, reject) => {
+      el.onended = () => resolve();
+      el.onerror = () => reject(new Error("play failed"));
+      void el.play().catch(reject);
+    });
+  } catch {
+    if (id === wordSession) speakSystemEnhanced(text, "en-US", rate);
+  }
+}

@@ -1402,6 +1402,8 @@ const dict: Record<string, string> = {
   "全部标为已看": "Mark all as watched",
   "已将 {n} 期标为已看": "Marked {n} episodes as watched",
   "未看完": "Unfinished",
+  "在本期字幕里出现了 {n} 次": "Appears {n} times in this episode",
+  "{n} 次": "{n}×",
 };
 
 export default dict;
