@@ -584,15 +584,20 @@ async fn video_clip_prepare(
     video_id: String,
     start: f64,
     end: f64,
+    ranges: Option<Vec<(f64, f64)>>,
 ) -> Res<videoclip::PreparedClip> {
     let data = state.data.clone();
     let cancel = state.job(&job_id);
     let (app2, jid) = (app.clone(), job_id.clone());
-    let res = videoclip::prepare_segment(&data, &video_id, start, end, cancel.clone(), move |stage, progress, message| {
+    let report = move |stage: &str, progress: f64, message: &str| {
         let _ = app2.emit("video-clip-progress", json!({
             "jobId": jid, "stage": stage, "progress": progress, "message": message
         }));
-    }).await;
+    };
+    let res = match ranges.filter(|r| r.len() > 1) {
+        Some(r) => videoclip::prepare_montage(&data, &video_id, &r, cancel.clone(), report).await,
+        None => videoclip::prepare_segment(&data, &video_id, start, end, cancel.clone(), report).await,
+    };
     state.done_with(&job_id, &cancel);
     res.map_err(e)
 }

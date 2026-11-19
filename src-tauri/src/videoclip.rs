@@ -726,6 +726,54 @@ async fn download_youtube_section_once(
     Err(anyhow!("没有找到下载的视频片段"))
 }
 
+/// Several stretches of one video cut together in order (a montage): each is fetched (and cached) on its own,
+/// then joined with one encode. Burned-in subtitle detection and frames come from the joined file.
+pub async fn prepare_montage(
+    data: &Path,
+    video_id: &str,
+    ranges: &[(f64, f64)],
+    cancel: Arc<AtomicBool>,
+    mut on_progress: impl FnMut(&str, f64, &str),
+) -> Result<PreparedClip> {
+    if ranges.len() < 2 { bail!("片段时间范围无效"); }
+    let dir = clips_work_dir(data, video_id);
+    tokio::fs::create_dir_all(&dir).await?;
+    let key: String = ranges.iter().map(|(a, b)| format!("{}-{}", (a * 1000.0).round() as u64, (b * 1000.0).round() as u64)).collect::<Vec<_>>().join("_");
+    let dest = dir.join(format!("montage-{:x}.mp4", { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); key.hash(&mut h); h.finish() }));
+    let total: f64 = ranges.iter().map(|(a, b)| b - a).sum();
+    let ffmpeg = ensure_ffmpeg(data, &cancel, |_, _| {}).await?;
+    if dest.is_file() && std::fs::metadata(&dest).map(|m| m.len() > 10_000).unwrap_or(false) {
+        on_progress("done", 1.0, "已复用缓存片段");
+        return Ok(finish_prepared(&ffmpeg, &dest, total, true).await);
+    }
+    let n = ranges.len() as f64;
+    let mut paths = Vec::new();
+    for (k, &(a, b)) in ranges.iter().enumerate() {
+        let base = k as f64 / n;
+        let part = prepare_segment(data, video_id, a, b, cancel.clone(), |stage, p, m| {
+            if stage != "done" { on_progress("download", (base + p / n) * 0.85, m); }
+        }).await?;
+        paths.push(PathBuf::from(part.path));
+    }
+    on_progress("trim", 0.88, "正在拼接片段…");
+    let tmp = dest.with_extension("part.mp4");
+    let mut args: Vec<String> = vec!["-y".into()];
+    for p in &paths { args.extend(["-i".into(), p.to_string_lossy().into_owned()]); }
+    // Same size for every part (they come from one video), then one concat.
+    let mut graph = String::new();
+    for k in 0..paths.len() { graph.push_str(&format!("[{k}:v]setsar=1,format=yuv420p[v{k}];")); }
+    for k in 0..paths.len() { graph.push_str(&format!("[v{k}][{k}:a]")); }
+    graph.push_str(&format!("concat=n={}:v=1:a=1[v][a]", paths.len()));
+    args.extend(["-filter_complex".into(), graph, "-map".into(), "[v]".into(), "-map".into(), "[a]".into()]);
+    if has_videotoolbox(&ffmpeg) { args.extend(["-c:v".into(), "h264_videotoolbox".into(), "-b:v".into(), "12M".into()]); }
+    else { args.extend(["-c:v".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "18".into()]); }
+    args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(), "-movflags".into(), "+faststart".into(), tmp.to_string_lossy().into_owned()]);
+    run_ffmpeg_with_progress(&ffmpeg, None, &args, total, &cancel, |p| on_progress("trim", 0.88 + p * 0.1, "正在拼接片段…")).await?;
+    tokio::fs::rename(&tmp, &dest).await?;
+    on_progress("done", 1.0, "片段已就绪");
+    Ok(finish_prepared(&ffmpeg, &dest, total, false).await)
+}
+
 /// Fetches (or reuses cached) `[start, end]` raw H.264 clip for `video_id`.
 pub async fn prepare_segment(
     data: &Path,

@@ -86,6 +86,8 @@ const COVER_TEMPLATES: { id: CoverTemplateId; name: string }[] = [
 const DOWNLOADS_DIR = /^.*\/(Downloads|下载)\//; // i18n-ignore
 
 interface PreparedState {
+  /** Which stretches it holds (the dialog's `rangesKey`). */
+  key: string;
   path: string;
   start: number;
   end: number;
@@ -209,9 +211,29 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   activeJobId.current = busyJob?.id ?? null;
   useEffect(() => () => { if (activeJobId.current) void api.cancelJob(activeJobId.current); }, []);
 
-  const clipStart = Math.max(0, (segments[startIdx]?.start ?? 0) - padBefore);
-  const clipEnd = Math.max(clipStart + 1, (segments[endIdx]?.end ?? clipStart + 5) + padAfter);
-  const clipDur = clipEnd - clipStart;
+  // The stretches this clip is cut from: one, or a montage's several (in order, their gaps left out).
+  const montage = (clip.parts?.length ?? 0) > 1;
+  const parts = useMemo(() => {
+    const list = montage ? clip.parts! : [{ startIdx, endIdx }];
+    let offset = 0;
+    return list.map((p) => {
+      const a = Math.max(0, (segments[p.startIdx]?.start ?? 0) - padBefore);
+      const b = Math.max(a + 1, (segments[p.endIdx]?.end ?? a + 5) + padAfter);
+      const part = { startIdx: p.startIdx, endIdx: p.endIdx, a, b, offset };
+      offset += b - a;
+      return part;
+    });
+  }, [montage, clip.parts, startIdx, endIdx, segments, padBefore, padAfter]);
+  const clipStart = parts[0].a;
+  const clipEnd = parts[parts.length - 1].b;
+  const clipDur = parts.reduce((n, p) => n + (p.b - p.a), 0);
+  const rangesKey = parts.map((p) => `${p.a.toFixed(2)}-${p.b.toFixed(2)}`).join("_");
+  /** A moment of the source as time in the clip (a montage's later parts start after the earlier ones). */
+  const toClipTime = (segIdx: number, at: number) => {
+    const p = parts.find((x) => segIdx >= x.startIdx && segIdx <= x.endIdx) ?? parts[0];
+    return Math.max(0, p.offset + at - p.a);
+  };
+  const clipLineIdx = useMemo(() => parts.flatMap((p) => Array.from({ length: p.endIdx - p.startIdx + 1 }, (_, k) => p.startIdx + k)), [parts]);
 
   const effectiveSegments = useMemo(
     () => segments.map((s, i) => (origEdits[i] !== undefined ? { ...s, text: origEdits[i] } : s)),
@@ -239,17 +261,20 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   useEffect(() => { setLineBreaks({}); }, [maxCjk, subLang]);
   useEffect(() => {
     if (!addSubs) return;
-    const texts = textsToBreak(effectiveSegments, effectiveZh, startIdx, endIdx, subLang).filter((x) => !lineBreaks[x.i]);
+    const texts = parts.flatMap((p) => textsToBreak(effectiveSegments, effectiveZh, p.startIdx, p.endIdx, subLang)).filter((x) => !lineBreaks[x.i]);
     if (!texts.length) return;
     const ctl = new AbortController();
     const timer = window.setTimeout(() => {
       void aiLineBreaks(texts, maxCjk, ctl.signal).then((r) => { if (!ctl.signal.aborted && Object.keys(r).length) setLineBreaks((p) => ({ ...p, ...r })); }).catch(() => {});
     }, 400);
     return () => { window.clearTimeout(timer); ctl.abort(); };
-  }, [addSubs, startIdx, endIdx, subLang, maxCjk, effectiveSegments, effectiveZh]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [addSubs, rangesKey, subLang, maxCjk, effectiveSegments, effectiveZh]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Every part's cues, moved to where that part plays in the clip.
+  const buildAllCues = () => parts.flatMap((p) => buildClipCues(effectiveSegments, effectiveZh, p.startIdx, p.endIdx, p.a, p.b, subLang, lineBreaks, maxCjk)
+    .map((c) => ({ ...c, start: c.start + p.offset, end: c.end + p.offset })));
   const cues = useMemo(
-    () => (addSubs ? buildClipCues(effectiveSegments, effectiveZh, startIdx, endIdx, clipStart, clipEnd, subLang, lineBreaks, maxCjk) : []),
-    [addSubs, effectiveSegments, effectiveZh, startIdx, endIdx, clipStart, clipEnd, subLang, lineBreaks, maxCjk],
+    () => (addSubs ? buildAllCues() : []),
+    [addSubs, effectiveSegments, effectiveZh, rangesKey, subLang, lineBreaks, maxCjk], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const visualConfig: ClipVisualConfig = useMemo(() => ({
@@ -274,13 +299,13 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
 
   const currentCue = useMemo(() => {
     if (!cues.length) return null;
-    if (prepared && Math.abs(prepared.start - clipStart) < 0.1 && Math.abs(prepared.end - clipEnd) < 0.1) {
+    if (prepared?.key === rangesKey) {
       return cues.find((c) => pvTime >= c.start && pvTime <= c.end) ?? cues[0];
     }
     const seg = effectiveSegments[activePreviewIdx];
-    const relMid = seg ? Math.max(0, (seg.start + seg.end) / 2 - clipStart) : 0;
+    const relMid = seg ? toClipTime(activePreviewIdx, (seg.start + seg.end) / 2) : 0;
     return cues.find((c) => relMid >= c.start && relMid <= c.end) ?? cues[0];
-  }, [cues, prepared, clipStart, clipEnd, pvTime, effectiveSegments, activePreviewIdx]);
+  }, [cues, prepared, rangesKey, pvTime, effectiveSegments, activePreviewIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cueBandPreview = useMemo(() => {
     if (!currentCue) return null;
@@ -293,7 +318,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   }, [currentCue, visualConfig, geo.H]);
 
   const posterBackdrop = ep.cover || (ep.videoId ? `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg` : undefined);
-  const preparedValid = !!prepared && Math.abs(prepared.start - clipStart) < 0.08 && Math.abs(prepared.end - clipEnd) < 0.08;
+  const preparedValid = !!prepared && prepared.key === rangesKey;
   const activeFrameIdx = selectedFrame != null && prepared?.frames[selectedFrame] ? selectedFrame : (prepared?.bestFrame ?? 0);
   const activeCoverBackdrop = (prepared?.frames[activeFrameIdx]) || posterBackdrop || null;
   const videoCoverAspect: CoverAspect = geo.W > geo.H ? "16:9" : aspect === "9:16" || (aspect === "source" && geo.H / geo.W > 1.5) ? "9:16" : aspect === "1:1" ? "1:1" : "3:4";
@@ -369,8 +394,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     setNeedsSetup(false);
     setBusyJob({ id: jobId, stage: "download", progress: 0.06, message: t("正在获取这一段原视频…") });
     try {
-      const res = await api.videoClipPrepare(jobId, ep.videoId, clipStart, clipEnd);
+      const res = await api.videoClipPrepare(jobId, ep.videoId, clipStart, clipEnd, montage ? parts.map((p) => [p.a, p.b] as [number, number]) : undefined);
       const next: PreparedState = {
+        key: rangesKey,
         path: res.path,
         start: clipStart,
         end: clipEnd,
@@ -391,7 +417,15 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     } finally {
       setBusyJob(null);
     }
-  };
+  };  // The stretch starts downloading as soon as the dialog opens (and after the range changes): preview, cover
+  // frames and export are ready by the time they're asked for.
+  const autoPrepared = useRef("");
+  useEffect(() => {
+    if (!ep.videoId || preparedValid || busyJob || autoPrepared.current === rangesKey) return;
+    const timer = window.setTimeout(() => { autoPrepared.current = rangesKey; void ensurePrepared(); }, prepared ? 900 : 150);
+    return () => window.clearTimeout(timer);
+  }, [rangesKey, preparedValid, !!busyJob]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   /** `fill`: only the copy that's missing (opening a highlight that came without it), quietly. */
   const runAiPolish = async (fill = false) => {
@@ -400,7 +434,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     setError(null);
     setNeedsSetup(false);
     try {
-      const res = await polishClipCopy({ ep, segments: effectiveSegments, zh: effectiveZh, startIdx, endIdx });
+      const res = await polishClipCopy({ ep, segments: effectiveSegments, zh: effectiveZh, startIdx, endIdx, ranges: montage ? parts : undefined });
       if (!fill) {
         setTitle(res.title);
         setCoverHook(res.coverHook);
@@ -497,7 +531,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       const staticCanvas = renderStaticOverlay({ ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop) });
       const staticOverlayPng = staticCanvas ? canvasToPngBase64(staticCanvas) : null;
       // Decided again from what preparing found: an export started before any preview still skips doubled subtitles.
-      const exportCues = (addSubsPick ?? !(prep.hasBurnedSubtitles && fit === "card")) ? (cues.length ? cues : buildClipCues(effectiveSegments, effectiveZh, startIdx, endIdx, clipStart, clipEnd, subLang, lineBreaks, maxCjk)) : [];
+      const exportCues = (addSubsPick ?? !(prep.hasBurnedSubtitles && fit === "card")) ? (cues.length ? cues : buildAllCues()) : [];
       // The fetched picture's real size decides the layout (an export can start before any preview).
       const exportConfig: ClipVisualConfig = { ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop) };
       const eg = exportConfig.geo;
@@ -712,21 +746,22 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               <section className="vclip-sec">
                 <div className="vclip-sec-head">
                   <span className="vclip-label">{t("片段范围与文稿")}</span>
-                  <span className="num small muted">{clock(clipStart)} – {clock(clipEnd)} · {Math.round(clipDur)}s</span>
+                  <span className="num small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span>
                 </div>
-                <div className="vclip-bound-btns">
+                {!montage && <div className="vclip-bound-btns">
                   <button type="button" className="btn ghost sm" disabled={startIdx <= 0} onClick={() => setStartIdx((i) => Math.max(0, i - 1))}><Plus size={12} /> {t("前一句")}</button>
                   <button type="button" className="btn ghost sm" disabled={startIdx >= endIdx} onClick={() => setStartIdx((i) => Math.min(endIdx, i + 1))}><Minus size={12} /> {t("缩首句")}</button>
                   <button type="button" className="btn ghost sm" disabled={endIdx <= startIdx} onClick={() => setEndIdx((i) => Math.max(startIdx, i - 1))}><Minus size={12} /> {t("缩尾句")}</button>
                   <button type="button" className="btn ghost sm" disabled={endIdx >= segments.length - 1} onClick={() => setEndIdx((i) => Math.min(segments.length - 1, i + 1))}><Plus size={12} /> {t("后一句")}</button>
-                </div>
+                </div>}
                 <div className="vclip-pads">
                   <label className="small muted">{t("开头留白")} <input type="range" min={-0.3} max={1.0} step={0.05} value={padBefore} onChange={(e) => setPadBefore(Number(e.target.value))} /><span className="num">{padBefore.toFixed(2)}s</span></label>
                   <label className="small muted">{t("结尾留白")} <input type="range" min={-0.3} max={1.2} step={0.05} value={padAfter} onChange={(e) => setPadAfter(Number(e.target.value))} /><span className="num">{padAfter.toFixed(2)}s</span></label>
                 </div>
                 <div className="vclip-lines">
-                  {segments.slice(startIdx, endIdx + 1).map((seg, offset) => {
-                    const idx = startIdx + offset;
+                  {clipLineIdx.map((idx, k) => {
+                    const seg = segments[idx];
+                    const partBreak = montage && k > 0 && clipLineIdx[k - 1] !== idx - 1;
                     const zhText = effectiveZh[idx] ?? "";
                     const origText = effectiveSegments[idx]?.text ?? seg.text;
                     const isEditing = editingIdx === idx;
@@ -734,11 +769,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     return (
                       <div
                         key={idx}
-                        className={`vclip-line ${isActive ? "on" : ""}`}
+                        className={`vclip-line ${isActive ? "on" : ""}${partBreak ? " part-start" : ""}`}
                         onClick={() => {
                           setActivePreviewIdx(idx);
                           if (preparedValid && videoRef.current) {
-                            videoRef.current.currentTime = Math.max(0, seg.start - clipStart + 0.05);
+                            videoRef.current.currentTime = toClipTime(idx, seg.start) + 0.05;
                           }
                         }}
                       >
