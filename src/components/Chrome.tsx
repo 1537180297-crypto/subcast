@@ -5,7 +5,7 @@ import { api, errorText, type SearchResult } from "../lib/api";
 import { ImportPanel } from "./ImportPanel";
 import { useStore, type View } from "../store";
 import { installUpdate, useUpdate } from "../lib/updater";
-import { PICKS, deepPickFor, isSubscribed, pickName, showName } from "../lib/picks";
+import { PICKS, deepPickFor, isSubscribed, pickName, sameFeed, showName } from "../lib/picks";
 import { isChineseUi, kbd, t, tk, tr, tx, useLang } from "../lib/i18n";
 import { useShowName } from "../lib/zh";
 import { useJobs } from "../lib/jobs";
@@ -95,6 +95,20 @@ const PLACEHOLDERS = [tk("粘贴 YouTube / 小宇宙 / 播客链接，或搜索�
 const placeholder = PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)];
 const looksLikeLink = (t: string) => /^(https?:\/\/|@)|youtube\.com|youtu\.be|xiaoyuzhoufm\.com|feed\.xyzfm\.space|podcasts\.apple\.com|\.(xml|rss)\b/i.test(t.trim());
 
+/** One search hit: the row opens the show's page (latest episodes, subscribe there); the button subscribes at once. */
+function SearchRow({ r, done, adding, onOpen, onSubscribe }: { r: SearchResult; done: boolean; adding: string | null; onOpen: () => void; onSubscribe: () => void }) {
+  return (
+    <div className="drop-row clickable" role="button" tabIndex={0} onMouseDown={(e) => e.preventDefault()} onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}>
+      {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
+      <div className="drop-meta">
+        <BiTitle text={r.title} className="ep-name" subClassName="clamp1" />
+        <p className="meta-line clamp1">{r.source === "youtube" && <span className="src-badge">YouTube</span>}{r.source === "youtube" && r.author === "YouTube" ? null : r.author}</p>
+      </div>
+      {done ? <span className="sub-done">{t("已订阅")}</span> : <button type="button" className="btn sm" onClick={(e) => { e.stopPropagation(); onSubscribe(); }} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}</button>}
+    </div>
+  );
+}
+
 /** The bar above every page: back, one search box that subscribes to pasted links or searches by name, settings. */
 export function TopBar() {
   const { history, back, reloadShows, go, openEpisode, notify, shows } = useStore(useShallow((s) => ({ history: s.history, back: s.back, reloadShows: s.reloadShows, go: s.go, openEpisode: s.openEpisode, notify: s.notify, shows: s.shows })));
@@ -122,7 +136,8 @@ export function TopBar() {
       else if (r.episode) openEpisode(r.episode);
     } catch (e) { notify(errorText(e)); } finally { setAdding(null); }
   };
-  const submit = () => { if (link) void subscribe(q.trim()); else if (results?.[0]) void subscribe(results[0].feedUrl); };
+  const openShow = (input: string) => { setQ(""); setOpen(false); setResults(null); go({ kind: "channel", input }); };
+  const submit = () => { if (link) void subscribe(q.trim()); else if (results?.[0]) openShow(results[0].feedUrl); };
   return (
     <div className="topbar" data-tauri-drag-region>
       <button className="round-btn" onClick={back} disabled={!history.length} aria-label={t("返回")}><ChevronLeft size={18} /></button>
@@ -137,16 +152,9 @@ export function TopBar() {
         </div>
         {open && results && (
           <div className="search-drop">
-            {results.length === 0 ? <div className="drop-empty"><SearchArt /><p className="muted small">{t("没有找到，换个关键词试试")}</p></div> : results.map((r) => {
-              const done = shows.some((s) => s.feedUrl === r.feedUrl);
-              return (
-                <div key={r.feedUrl} className="drop-row" onMouseDown={(e) => e.preventDefault()}>
-                  {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
-                  <div className="drop-meta"><BiTitle text={r.title} className="ep-name" subClassName="clamp1" /><p className="meta-line clamp1">{r.author}</p></div>
-                  {done ? <span className="sub-done">{t("已订阅")}</span> : <button className="btn sm" onClick={() => subscribe(r.feedUrl)} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}</button>}
-                </div>
-              );
-            })}
+            {results.length === 0 ? <div className="drop-empty"><SearchArt /><p className="muted small">{t("没有找到，换个关键词试试")}</p></div> : results.map((r) => (
+              <SearchRow key={r.feedUrl} r={r} done={shows.some((s) => sameFeed(s.feedUrl, r.feedUrl))} adding={adding} onOpen={() => openShow(r.feedUrl)} onSubscribe={() => void subscribe(r.feedUrl)} />
+            ))}
           </div>
         )}
       </div>
@@ -279,19 +287,12 @@ export function AddDialog() {
             {pastedLink ? (
               <div className="add-empty"><p className="muted small">{t("这是一个链接，回车直接添加")}</p><button type="submit" className="btn primary sm" disabled={busy}>{t("添加")}</button></div>
             ) : !q.trim() ? (
-              <div className="add-empty"><p className="muted small">{t("搜索 Apple Podcasts 上的节目，中英文名都可以。YouTube 频道或小宇宙请用「链接或 RSS」。")}</p></div>
+              <div className="add-empty"><p className="muted small">{t("搜索 YouTube 频道和 Apple Podcasts 上的节目，中英文名都可以。小宇宙请用「链接或 RSS」。")}</p></div>
             ) : results && !results.length ? (
               <div className="add-empty"><SearchArt /><p className="muted small">{t("没有找到，换个关键词，或者用「链接或 RSS」添加")}</p></div>
-            ) : results?.map((r) => {
-              const done = shows.some((s) => s.feedUrl === r.feedUrl);
-              return (
-                <div key={r.feedUrl} className="drop-row">
-                  {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
-                  <div className="drop-meta"><BiTitle text={r.title} className="ep-name" subClassName="clamp1" /><p className="meta-line clamp1">{r.author}</p></div>
-                  {done ? <span className="sub-done">{t("已订阅")}</span> : <button type="button" className="btn sm" onClick={() => void add(r.feedUrl)} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}</button>}
-                </div>
-              );
-            })}
+            ) : results?.map((r) => (
+              <SearchRow key={r.feedUrl} r={r} done={shows.some((s) => sameFeed(s.feedUrl, r.feedUrl))} adding={adding} onOpen={() => { close(); go({ kind: "channel", input: r.feedUrl }); }} onSubscribe={() => void add(r.feedUrl)} />
+            ))}
           </div>
         </form>
       ) : (

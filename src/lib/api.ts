@@ -47,7 +47,7 @@ export interface Episode {
 
 export interface Segment { start: number; end: number; text: string }
 export interface Transcript { episodeId: string; source: string; language: string; segments: Segment[] }
-export interface SearchResult { title: string; author: string; cover?: string; feedUrl: string; genre?: string; episodes?: number }
+export interface SearchResult { title: string; author: string; cover?: string; feedUrl: string; genre?: string; episodes?: number; /** "youtube" for a YouTube channel; absent for an Apple Podcasts show. */ source?: "youtube" }
 export interface ModelInfo { id: string; name: string; sizeMb: number; note: string; installed: boolean; /** Another app's copy, used in place (no download). */ from?: string | null }
 export interface Provider { id: string; name: string; protocol: "openai" | "anthropic" | "cli"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[]; group?: "relay" | "provider" | "local" | "cli" }
 export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai" | "deepseek"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
