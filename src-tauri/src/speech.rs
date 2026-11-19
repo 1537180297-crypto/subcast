@@ -475,13 +475,36 @@ async fn system_tts(voice: &str, text: &str, rate: f64) -> Result<Vec<u8>> {
 }
 
 #[cfg(target_os = "macos")]
+const NOVELTY_VOICES: &[&str] = &[
+    "Albert", "Bad News", "Bahh", "Bells", "Boing", "Bubbles", "Cellos", "Good News",
+    "Jester", "Junior", "Kathy", "Organ", "Ralph", "Superstar", "Trinoids", "Whisper", "Wobble", "Zarvox",
+];
+
+#[cfg(target_os = "macos")]
+fn pick_macos_default_voice(text: &str) -> Option<String> {
+    let has_cjk = text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+    let voices = list_system_voices();
+    let matches_lang = |v: &SystemVoice| {
+        if has_cjk { v.lang.starts_with("zh") } else { v.lang.starts_with("en") }
+    };
+    // Prefer Enhanced/Premium voices first, then Tingting / Samantha.
+    for needle in ["Premium", "Enhanced", if has_cjk { "Tingting" } else { "Samantha" }] {
+        if let Some(v) = voices.iter().find(|v| matches_lang(v) && v.name.contains(needle)) {
+            return Some(v.id.clone());
+        }
+    }
+    voices.into_iter().find(matches_lang).map(|v| v.id)
+}
+
+#[cfg(target_os = "macos")]
 fn system_tts_sync(voice: &str, text: &str, rate: f64) -> Result<Vec<u8>> {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let tmp = std::env::temp_dir().join(format!("subcast-say-{}.wav", uuid::Uuid::new_v4().simple()));
     let wpm = (180.0 * rate.clamp(0.5, 2.0)).round() as u32;
+    let resolved = if !voice.is_empty() { Some(voice.to_string()) } else { pick_macos_default_voice(text) };
     let mut cmd = Command::new("/usr/bin/say");
-    if !voice.is_empty() { cmd.args(["-v", voice]); }
+    if let Some(ref v) = resolved { cmd.args(["-v", v]); }
     cmd.args(["-r", &wpm.to_string(), "-o"]).arg(&tmp)
         .args(["--data-format=LEI16@24000"])
         .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -570,12 +593,17 @@ pub fn list_system_voices() -> Vec<SystemVoice> {
             let Some(pos) = trimmed.rfind(|c: char| c.is_whitespace()) else { continue };
             let lang = trimmed[pos..].trim();
             let name = trimmed[..pos].trim();
-            if name.is_empty() || lang.is_empty() { continue; }
+            if name.is_empty() || lang.is_empty() || NOVELTY_VOICES.iter().any(|n| name == *n) { continue; }
             if lang.starts_with("zh") || lang.starts_with("en") || lang.starts_with("ja") {
                 voices.push(SystemVoice { id: name.to_string(), name: name.to_string(), lang: lang.to_string() });
             }
         }
-        voices.sort_by_key(|v| (if v.lang.starts_with("zh_CN") { 0 } else if v.lang.starts_with("zh") { 1 } else if v.lang.starts_with("en") { 2 } else { 3 }, v.name.clone()));
+        let rank = |v: &SystemVoice| {
+            let lang_rank = if v.lang.starts_with("zh_CN") { 0 } else if v.lang.starts_with("zh") { 1 } else if v.lang.starts_with("en") { 2 } else { 3 };
+            let quality_rank = if v.name.contains("Premium") { 0 } else if v.name.contains("Enhanced") { 1 } else if v.name.contains("Tingting") || v.name.contains("Samantha") || v.name.contains("Meijia") || v.name.contains("Sinji") || v.name.contains("Daniel") { 2 } else { 3 };
+            (lang_rank, quality_rank, v.name.clone())
+        };
+        voices.sort_by_key(rank);
         voices.dedup_by(|a, b| a.id == b.id);
         voices
     }

@@ -47,8 +47,8 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
     setCustom(svc.group === "cloud" && svc.voices.length > 0 && !svc.voices.some((v) => v.id === svc.voice));
   }, [svc.id]);
 
-  // Quick-switch row: free engines + Doubao + currently selected cloud engine (if another one).
-  const quickIds = ["edge", "system", "doubao"];
+  // Quick-switch row: System Enhanced voice + Doubao + Edge + currently selected cloud engine (if another one).
+  const quickIds = ["system", "doubao", "edge"];
   if (!quickIds.includes(svc.id)) quickIds.push(svc.id);
 
   const setVoice = (voice: string, extra?: Partial<typeof svc>, quiet = false) => {

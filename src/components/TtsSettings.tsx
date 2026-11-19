@@ -226,23 +226,13 @@ export function TtsSettings() {
         <p className="muted small">{t("用于精读和字幕中文翻译的朗读。")}</p>
         <div className="engine-switch tts-engine-switch">
           <button
-            className={`engine ${active.id === "edge" ? "on" : ""}`}
-            onClick={() => void saveSettings({ ttsEngine: "edge" })}
-          >
-            <Globe size={18} />
-            <div>
-              <p>{t("免费在线")}</p>
-              <p className="muted small">{t("Edge 语音，免 Key，中文自然")}</p>
-            </div>
-          </button>
-          <button
             className={`engine ${active.id === "system" ? "on" : ""}`}
             onClick={() => void saveSettings({ ttsEngine: "system" })}
           >
             <Laptop size={18} />
             <div>
               <p>{t("系统语音")}</p>
-              <p className="muted small">{t("本机离线合成，不联网")}</p>
+              <p className="muted small">{t("优先本机增强语音，离线免 Key")}</p>
             </div>
           </button>
           <button
@@ -253,6 +243,16 @@ export function TtsSettings() {
             <div>
               <p>{t("云端服务")}</p>
               <p className="muted small">{t("豆包、MiMo、通义等，需 Key")}</p>
+            </div>
+          </button>
+          <button
+            className={`engine ${active.id === "edge" ? "on" : ""}`}
+            onClick={() => void saveSettings({ ttsEngine: "edge" })}
+          >
+            <Globe size={18} />
+            <div>
+              <p>{t("Edge 在线")}</p>
+              <p className="muted small">{t("免 Key，高峰期可能限流")}</p>
             </div>
           </button>
         </div>

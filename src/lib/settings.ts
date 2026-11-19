@@ -215,7 +215,12 @@ const v = (list: [string, string][]): TtsVoice[] => list.map(([id, name]) => ({ 
 
 export const TTS_SERVICES: TtsService[] = [
   {
-    id: "edge", name: tk("Edge 在线语音"), note: tk("免费、无需 Key，中英文自然清晰"), group: "free",
+    id: "system", name: tk("系统语音"), note: tk("优先使用本机增强语音，完全离线、无需 Key"), group: "free",
+    protocol: "system", baseUrl: "", model: "", models: [], needsKey: false,
+    voice: "", voices: [],
+  },
+  {
+    id: "edge", name: tk("Edge 在线语音"), note: tk("免费、无需 Key，高峰期可能限流"), group: "free",
     protocol: "edge", baseUrl: "", model: "", models: [], needsKey: false,
     voice: "zh-CN-YunxiNeural",
     voices: v([
@@ -229,11 +234,6 @@ export const TTS_SERVICES: TtsService[] = [
       ["en-US-AndrewMultilingualNeural", "Andrew"],
       ["en-US-EmmaMultilingualNeural", "Emma"],
     ]),
-  },
-  {
-    id: "system", name: tk("系统语音"), note: tk("使用本机自带语音，完全离线、无需 Key"), group: "free",
-    protocol: "system", baseUrl: "", model: "", models: [], needsKey: false,
-    voice: "", voices: [],
   },
   {
     id: "doubao", name: tk("豆包语音"), note: tk("中文自然度高，支持复刻音色和原生变速"), group: "cloud",
@@ -364,7 +364,7 @@ export const DEFAULTS: Settings = {
   playbackRate: 1,
   asrEngine: "local",
   cloudAsr: Object.fromEntries(ASR_SERVICES.map((a) => [a.id, a])),
-  ttsEngine: "edge",
+  ttsEngine: "system",
   ttsServices: Object.fromEntries(TTS_SERVICES.map((s) => [s.id, s])),
   ttsRate: 1,
   ttsVoice: "zh_female_vv_uranus_bigtts",
@@ -420,9 +420,9 @@ export async function loadSettings(): Promise<Settings> {
       api.hasApiKey("tts.doubao").catch(() => false),
       api.hasApiKey("asr.doubao").catch(() => false),
     ]);
-    ttsEngine = hasTts || hasAsr ? "doubao" : "edge";
+    ttsEngine = hasTts || hasAsr ? "doubao" : "system";
   }
-  if (!ttsServices[ttsEngine]) ttsEngine = "edge";
+  if (!ttsServices[ttsEngine]) ttsEngine = "system";
   return migrate({ ...DEFAULTS, ...raw, providers, cloudAsr, ttsEngine, ttsServices });
 }
 

@@ -12,7 +12,7 @@ let audio: HTMLAudioElement | null = null;
 export const useTtsPreview = create<{ active: string | null }>(() => ({ active: null }));
 
 export function currentTtsService(s: Settings): TtsService {
-  return s.ttsServices[s.ttsEngine] ?? s.ttsServices.edge ?? TTS_SERVICES[0];
+  return s.ttsServices[s.ttsEngine] ?? s.ttsServices.system ?? TTS_SERVICES[0];
 }
 
 export function isKeyError(m: string): boolean {
@@ -191,7 +191,7 @@ function englishVoiceFor(svc: TtsService): string {
 let wordSession = 0;
 let wordAudio: HTMLAudioElement | null = null;
 
-/** Pronounces an English word/phrase using the configured default TTS (cached on disk), falling back to macOS Enhanced system voice. */
+/** Pronounces an English word/phrase using the configured cloud TTS (cached on disk), or macOS Enhanced system voice directly (never hits rate-limited Edge). */
 export async function speakWord(text: string, rate = 0.9): Promise<void> {
   const id = ++wordSession;
   wordAudio?.pause();
@@ -199,7 +199,7 @@ export async function speakWord(text: string, rate = 0.9): Promise<void> {
   window.speechSynthesis?.cancel();
 
   const svc = currentTtsService(useStore.getState().settings);
-  if (svc.id === "system") {
+  if (svc.group !== "cloud") {
     speakSystemEnhanced(text, "en-US", rate);
     return;
   }
