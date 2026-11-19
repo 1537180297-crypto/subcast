@@ -199,6 +199,18 @@ export function createApp(config) {
     return send(req, res, 200, out, { 'Cache-Control': 'no-store' });
   }
 
+  // GET /api/v1/transcripts/<id>/fingerprint -> { algo, secs, fp: base64 }. Fetched only when a listener's audio
+  // differs from the one the subtitles were made from, so lookups stay small.
+  async function fingerprint(req, res, id) {
+    limit(req, 'lookup');
+    validateVersionId(id);
+    const hit = store.fingerprint(id);
+    if (!hit) return send(req, res, 404, { error: 'not_found' }, { 'Cache-Control': 'no-store' });
+    const headers = { 'Cache-Control': 'public, max-age=3600', ETag: hit.etag };
+    if (req.headers['if-none-match'] === hit.etag) { res.writeHead(304, headers); return res.end(); }
+    return send(req, res, 200, { algo: hit.algo, secs: hit.secs, fp: hit.fp.toString('base64') }, headers);
+  }
+
   async function report(req, res, id) {
     limit(req, 'report');
     validateVersionId(id);
@@ -215,6 +227,7 @@ export function createApp(config) {
     { path: /^\/api\/v1\/guides$/, methods: { GET: guideLookup, POST: guideUpload } },
     { path: /^\/api\/v1\/transcripts\/exists$/, methods: { POST: exists } },
     { path: /^\/api\/v1\/transcripts\/([^/]+)\/report$/, methods: { POST: (req, res, m) => report(req, res, m[1]) } },
+    { path: /^\/api\/v1\/transcripts\/([^/]+)\/fingerprint$/, methods: { GET: (req, res, m) => fingerprint(req, res, m[1]) } },
     {
       path: /^\/api\/v1\/transcripts\/([^/]+)$/,
       methods: {
