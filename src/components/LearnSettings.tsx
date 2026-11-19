@@ -49,7 +49,7 @@ export function LearnSettings() {
           <p className="setup-title">{t("查词")}</p>
           <div className="ls-group">
             <div className="ls-row"><label className="check"><input type="checkbox" checked={s.learnCard} onChange={(e) => void save({ learnCard: e.target.checked })} /> {t("点单词弹出词卡")}</label></div>
-            <div className="ls-row"><label className="check"><input type="checkbox" checked={s.learnPause} disabled={!s.learnCard} onChange={(e) => void save({ learnPause: e.target.checked })} /> {t("查词时暂停播放，关掉词卡后继续")}</label></div>
+            <div className="ls-row"><label className="check"><input type="checkbox" checked={s.learnPauseCard} disabled={!s.learnCard} onChange={(e) => void save({ learnPauseCard: e.target.checked })} /> {t("查词时暂停播放，关掉词卡后继续")}</label></div>
             <div className="ls-row">
               <label className="check"><input type="checkbox" checked={s.learnAi} onChange={(e) => void save({ learnAi: e.target.checked })} /> {t("用 AI 解释「在这句里」的意思")}</label>
               <button className="link-btn small" onClick={() => useStore.getState().openSettings("ai")}>{t("用「AI」页的默认模型")}</button>

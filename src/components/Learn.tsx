@@ -159,7 +159,6 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
     // The sentence's own audio, cut now, so review plays it at once.
     prefetchClip(ep.id, target.seg.start, target.seg.end);
   };
-  const listen = async () => { if (!(await toggleClip(ep, target.seg.start, target.seg.end))) speak(target.seg.text); };
   const label = entry ? tagLabel(entry.tags) : "";
 
   return createPortal(
@@ -178,7 +177,6 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
         </div>
       )}
       <div className="wc-foot">
-        <button className="btn sm play" onClick={() => void listen()}><ClipLabel k={clipKey(ep.id, target.seg.start, target.seg.end)} label={t("原声")} /></button>
         {saved
           ? <button className="btn sm ghost wc-saved" onClick={() => { onClose(); openWord(id); }}><Check size={13} />{t("已在生词本")}</button>
           : <span className="wc-acts">
