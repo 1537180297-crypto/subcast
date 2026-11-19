@@ -1676,10 +1676,10 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 /* Settings › 阅读与字幕 */
 .subtitle-overlay p, .asub-line p, .lines .line-text p { font-family: var(--sub-font, inherit); }
 .subtitle-overlay .sub-zh { font-size: calc(clamp(15px, 1.7vw, 22px) * var(--sub-scale, 1)); }
-.subtitle-overlay .sub-orig { font-size: calc(clamp(12px, 1.25vw, 16px) * var(--sub-scale, 1)); }
+.subtitle-overlay .sub-orig { font-size: calc(clamp(12px, 1.25vw, 16px) * var(--sub-orig-scale, var(--sub-scale, 1))); }
 .video.theater .subtitle-overlay .sub-zh { font-size: calc(clamp(22px, 2.6vw, 40px) * var(--sub-scale, 1)); }
-.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(16px, 1.8vw, 28px) * var(--sub-scale, 1)); }
-.asub { --zh-now: calc(20px * var(--sub-scale, 1)); --or-now: calc(15px * var(--sub-scale, 1)); --zh-next: calc(15px * var(--sub-scale, 1)); --or-next: calc(13px * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(16px, 1.8vw, 28px) * var(--sub-orig-scale, var(--sub-scale, 1))); }
+.asub { --zh-now: calc(20px * var(--sub-scale, 1)); --or-now: calc(15px * var(--sub-orig-scale, var(--sub-scale, 1))); --zh-next: calc(15px * var(--sub-scale, 1)); --or-next: calc(13px * var(--sub-orig-scale, var(--sub-scale, 1))); }
 :root[data-next-line="off"] .asub-line.next { display: none; }
 :root[data-sub-look="outline"] .video .subtitle-overlay p { background: transparent !important; backdrop-filter: none !important;
   text-shadow: 0 0 2px #000, 0 0 2px #000, 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
@@ -1690,7 +1690,13 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .reading-preview .subtitle-overlay { position: absolute; left: 6%; right: 6%; bottom: 14px; }
 .reading-preview.look-outline .subtitle-overlay p { background: transparent !important; backdrop-filter: none !important; text-shadow: 0 0 2px #000, 0 0 2px #000, 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
 .reading-preview .subtitle-overlay .sub-zh { font-size: calc(18px * var(--sub-scale, 1)); }
-.reading-preview .subtitle-overlay .sub-orig { font-size: calc(13px * var(--sub-scale, 1)); }
+.reading-preview .subtitle-overlay .sub-orig { font-size: calc(13px * var(--sub-orig-scale, var(--sub-scale, 1))); }
+.reading-note { margin: -2px 0 4px; }
+.size-row { display: flex; align-items: center; gap: 10px; }
+.size-row > span:first-child { flex: none; min-width: 36px; color: var(--text-2); }
+.size-row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent, currentColor); }
+.size-row .size-val { width: 42px; text-align: right; color: var(--text-2); }
+.reading-sizes { display: flex; flex-direction: column; gap: 6px; flex: 0 1 320px; min-width: 220px; }
 .reading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 4px 0; font-size: 13.5px; }
 /* Bigger subtitle sizes wrap to a second line instead of being cut off with "…". */
 .subtitle-overlay p { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; text-overflow: clip; }
@@ -1705,10 +1711,10 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .video { container: vid / size; }
 .video .subtitle-overlay { bottom: calc(6cqh + var(--sub-lift, 0cqh)); gap: .6cqh; }
 .video .subtitle-overlay .sub-zh { font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); line-height: 1.38; }
-.video .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-scale, 1)); line-height: 1.38; }
+.video .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-orig-scale, var(--sub-scale, 1))); line-height: 1.38; }
 .video .subtitle-overlay p { padding: .25em .55em; border-radius: .3em; }
 .video.theater .subtitle-overlay .sub-zh { font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); }
-.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-orig-scale, var(--sub-scale, 1))); }
 .video.theater .subtitle-overlay { bottom: calc(9cqh + var(--sub-lift, 0cqh)); left: 10%; right: 10%; }
 .video.theater:not(.idle) .subtitle-overlay { bottom: calc(9cqh + var(--sub-lift, 0cqh) + 56px); }
 .settings-nav button { display: flex; align-items: center; gap: 9px; }

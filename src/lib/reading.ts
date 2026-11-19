@@ -18,16 +18,35 @@ export function subScale(s: Pick<Settings, "subtitleScale" | "subtitleSize">): n
   return s.subtitleScale ?? SUB_SCALE[s.subtitleSize ?? "m"];
 }
 
+/** The original-language line's multiplier: its own when set, else the same as the Chinese line. */
+export function origScale(s: Pick<Settings, "subtitleScale" | "subtitleSize" | "subtitleOrigScale">): number {
+  return s.subtitleOrigScale ?? subScale(s);
+}
+
+const clampScale = (v: number) => Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, v)) * 20) / 20;
+
+/** Chinese line size. Until the original line has its own size, it moves along. */
 export function setSubScale(v: number) {
-  const scale = Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, v)) * 20) / 20;
+  const scale = clampScale(v);
   void useStore.getState().saveSettings({ subtitleScale: scale }, true);
   return scale;
 }
 
-/** ⌘= / ⌘-: one step bigger or smaller, said in a toast. */
+/** Original-language line size, set on its own. */
+export function setOrigScale(v: number) {
+  const scale = clampScale(v);
+  void useStore.getState().saveSettings({ subtitleOrigScale: scale }, true);
+  return scale;
+}
+
+/** ⌘= / ⌘-: both lines one step bigger or smaller, said in a toast. */
 export function stepSubScale(dir: 1 | -1) {
-  const n = setSubScale(subScale(useStore.getState().settings) + dir * 0.1);
-  useStore.getState().notify(t("字幕大小 {n}%", { n: Math.round(n * 100) }));
+  const s = useStore.getState().settings;
+  const zh = clampScale(subScale(s) + dir * 0.1);
+  const patch: Partial<Settings> = { subtitleScale: zh };
+  if (s.subtitleOrigScale != null) patch.subtitleOrigScale = clampScale(s.subtitleOrigScale + dir * 0.1);
+  void useStore.getState().saveSettings(patch, true);
+  useStore.getState().notify(t("字幕大小 {n}%", { n: Math.round(zh * 100) }));
 }
 
 /** Where dragging left the video subtitles, kept within the picture. */
@@ -37,10 +56,11 @@ export function setSubLift(v: number) {
 
 export function useReadingSettings() {
   // Only these fields: subscribing to all settings re-rendered the whole app on any change.
-  const s = useStore(useShallow((x) => ({ subtitleSize: x.settings.subtitleSize, subtitleScale: x.settings.subtitleScale, subtitleLift: x.settings.subtitleLift, subtitleFont: x.settings.subtitleFont, subtitleLook: x.settings.subtitleLook, chatSize: x.settings.chatSize, audioNextLine: x.settings.audioNextLine })));
+  const s = useStore(useShallow((x) => ({ subtitleSize: x.settings.subtitleSize, subtitleScale: x.settings.subtitleScale, subtitleOrigScale: x.settings.subtitleOrigScale, subtitleLift: x.settings.subtitleLift, subtitleFont: x.settings.subtitleFont, subtitleLook: x.settings.subtitleLook, chatSize: x.settings.chatSize, audioNextLine: x.settings.audioNextLine })));
   useEffect(() => {
     const root = document.documentElement.style;
     root.setProperty("--sub-scale", String(subScale(s)));
+    root.setProperty("--sub-orig-scale", String(origScale(s)));
     root.setProperty("--sub-lift", `${s.subtitleLift ?? 0}cqh`);
     root.setProperty("--chat-scale", s.chatSize === "l" ? "1.12" : "1");
     const f = POSTER_FONTS.find((x) => x.id === SUB_FONTS[s.subtitleFont ?? "sans"]);
@@ -48,5 +68,5 @@ export function useReadingSettings() {
     root.setProperty("--sub-font", f ? `${f.family}, var(--font, system-ui)` : "inherit");
     document.documentElement.dataset.subLook = s.subtitleLook ?? "outline";
     document.documentElement.dataset.nextLine = s.audioNextLine ? "on" : "off";
-  }, [s.subtitleSize, s.subtitleScale, s.subtitleLift, s.subtitleFont, s.subtitleLook, s.chatSize, s.audioNextLine]);
+  }, [s.subtitleSize, s.subtitleScale, s.subtitleOrigScale, s.subtitleLift, s.subtitleFont, s.subtitleLook, s.chatSize, s.audioNextLine]);
 }

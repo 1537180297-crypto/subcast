@@ -861,10 +861,8 @@ const dict: Record<string, string> = {
   "最重要的是，学习的速度要比世界变化的速度更快。": "The most important thing is to keep learning faster than the world changes.",
   "系统字体": "System font",
   "字号": "Size",
-  "小": "Small",
   "标准": "Standard",
   "大": "Large",
-  "特大": "Extra large",
   "视频上的字幕": "Subtitles on video",
   "半透明底": "Shaded background",
   "描边，无底": "Outline, no background",
@@ -1253,8 +1251,6 @@ const dict: Record<string, string> = {
   "预览": "Preview",
   "导出…": "Export…",
   "调整字幕": "Adjust subtitles",
-  "大小": "Size",
-  "字幕大小": "Subtitle size",
   "显示": "Show",
   "样式": "Style",
   "拖动字幕可以上下移动，双击字幕回到原位。": "Drag the subtitles to move them up or down; double-click to put them back.",
@@ -1464,6 +1460,8 @@ const dict: Record<string, string> = {
   "先播放这一集": "Play this episode first",
   "退出跟读模式": "Stop shadowing",
   "跟读模式": "Shadowing",
+  "字体同时用于中文和原文两行。": "The font applies to both the Chinese and the original line.",
+  "{line}字幕大小": "{line} subtitle size",
 };
 
 export default dict;
