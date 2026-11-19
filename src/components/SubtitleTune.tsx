@@ -5,16 +5,15 @@ import { useShallow } from "zustand/react/shallow";
 import { ALargeSmall } from "lucide-react";
 import { useStore } from "../store";
 import { t, useLang } from "../lib/i18n";
-import { SCALE_MAX, SCALE_MIN, setSubScale, subScale } from "../lib/reading";
 import { ACTIONS, prettyCombo } from "../lib/shortcuts";
-import { Seg } from "./ReadingSettings";
+import { Seg, SubSizeSliders } from "./ReadingSettings";
 import { toggleTheater } from "./Players";
 
 export function SubtitleTune() {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useLang((s) => s.lang);
-  const s = useStore(useShallow((x) => ({ subtitleScale: x.settings.subtitleScale, subtitleSize: x.settings.subtitleSize, subtitleLift: x.settings.subtitleLift, subtitleMode: x.settings.subtitleMode, subtitleLook: x.settings.subtitleLook, shortcuts: x.settings.shortcuts })));
+  const s = useStore(useShallow((x) => ({ subtitleScale: x.settings.subtitleScale, subtitleOrigScale: x.settings.subtitleOrigScale, subtitleLift: x.settings.subtitleLift, subtitleMode: x.settings.subtitleMode, subtitleLook: x.settings.subtitleLook, shortcuts: x.settings.shortcuts })));
   const save = useStore((x) => x.saveSettings);
   useEffect(() => {
     if (!open) return;
@@ -24,8 +23,7 @@ export function SubtitleTune() {
     window.addEventListener("keydown", esc, true);
     return () => { document.removeEventListener("pointerdown", away); window.removeEventListener("keydown", esc, true); };
   }, [open]);
-  const scale = subScale(s);
-  const changed = !!s.subtitleLift || s.subtitleScale != null;
+  const changed = !!s.subtitleLift || s.subtitleScale != null || s.subtitleOrigScale != null;
   const keyOf = (id: "subBigger" | "subSmaller") => (s.shortcuts?.[id] ?? ACTIONS.find((a) => a.id === id)!.keys)[0];
   const keys = [keyOf("subBigger"), keyOf("subSmaller")].filter(Boolean).map(prettyCombo).join(" / ");
   return (
@@ -33,11 +31,7 @@ export function SubtitleTune() {
       <button className="sub-tune-btn" title={t("调整字幕")} aria-label={t("调整字幕")} aria-expanded={open} onClick={() => setOpen(!open)}><ALargeSmall size={17} /></button>
       {open && (
         <div className="sub-tune-pop" role="dialog" aria-label={t("调整字幕")}>
-          <div className="sub-tune-row">
-            <span>{t("大小")}</span>
-            <input type="range" min={SCALE_MIN * 100} max={SCALE_MAX * 100} step={5} value={Math.round(scale * 100)} aria-label={t("字幕大小")} onChange={(e) => setSubScale(Number(e.target.value) / 100)} />
-            <span className="num sub-tune-val">{Math.round(scale * 100)}%</span>
-          </div>
+          <SubSizeSliders />
           <div className="sub-tune-row">
             <span>{t("显示")}</span>
             <Seg value={s.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")]]} onChange={(v) => void save({ subtitleMode: v })} />
@@ -48,7 +42,7 @@ export function SubtitleTune() {
           </div>
           <p className="sub-tune-hint">{t("拖动字幕可以上下移动，双击字幕回到原位。")}{keys && ` ${t("快捷键 {keys} 调大小。", { keys })}`}</p>
           <div className="sub-tune-foot">
-            <button className="link-btn" disabled={!changed} onClick={() => void save({ subtitleScale: undefined, subtitleLift: undefined })}>{t("恢复默认")}</button>
+            <button className="link-btn" disabled={!changed} onClick={() => void save({ subtitleScale: undefined, subtitleOrigScale: undefined, subtitleLift: undefined })}>{t("恢复默认")}</button>
             <button className="link-btn" onClick={() => { setOpen(false); toggleTheater(false); useStore.getState().openSettings("reading"); }}>{t("更多字幕设置…")}</button>
           </div>
         </div>

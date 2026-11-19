@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { useJobs } from "../lib/jobs";
 import { t, useLang } from "../lib/i18n";
-import { SUB_FONTS, SUB_SCALE, subScale } from "../lib/reading";
+import { SCALE_MAX, SCALE_MIN, SUB_FONTS, origScale, setOrigScale, setSubScale, subScale } from "../lib/reading";
 import { POSTER_FONTS } from "../lib/poster";
 import type { Settings } from "../lib/settings";
 
@@ -12,6 +12,27 @@ export function Seg<T extends string | number>({ value, options, onChange }: { v
     <div className="seg-control" role="radiogroup">
       {options.map(([k, label]) => <button key={String(k)} role="radio" aria-checked={value === k} className={value === k ? "on" : ""} onClick={() => onChange(k)}>{label}</button>)}
     </div>
+  );
+}
+
+/** Two sliders, one per subtitle line; shared by Settings and the video's "Aa". */
+export function SubSizeSliders() {
+  useLang((s) => s.lang);
+  const s = useStore(useShallow((x) => ({ subtitleScale: x.settings.subtitleScale, subtitleSize: x.settings.subtitleSize, subtitleOrigScale: x.settings.subtitleOrigScale })));
+  const rows: [string, number, (v: number) => void][] = [
+    [t("中文"), subScale(s), setSubScale],
+    [t("原文"), origScale(s), setOrigScale],
+  ];
+  return (
+    <>
+      {rows.map(([label, v, set]) => (
+        <div className="size-row" key={label}>
+          <span>{label}</span>
+          <input type="range" min={SCALE_MIN * 100} max={SCALE_MAX * 100} step={5} value={Math.round(v * 100)} aria-label={t("{line}字幕大小", { line: label })} onChange={(e) => set(Number(e.target.value) / 100)} />
+          <span className="num size-val">{Math.round(v * 100)}%</span>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -45,13 +66,12 @@ export function ReadingSettings() {
           <Seg value={settings.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")]]} onChange={(v) => save({ subtitleMode: v })} />
         </div>
         <div className="reading-row"><span>{t("字号")}</span>
-          {/* The video's "Aa" can pick sizes in between: then none of these is lit. */}
-          <Seg value={(Object.keys(SUB_SCALE) as (keyof typeof SUB_SCALE)[]).find((k) => Math.abs(SUB_SCALE[k] - subScale(settings)) < 0.01) ?? ("" as "m")} options={[["s", t("小")], ["m", t("标准")], ["l", t("大")], ["xl", t("特大")]]} onChange={(v) => save({ subtitleSize: v, subtitleScale: undefined })} />
+          <div className="reading-sizes"><SubSizeSliders /></div>
         </div>
         <div className="reading-row"><span>{t("字体")}</span>
           <Seg value={settings.subtitleFont ?? "sans"} options={(Object.keys(SUB_FONTS) as (keyof typeof SUB_FONTS)[]).map((id) => [id, fontName(id)])} onChange={(v) => save({ subtitleFont: v })} />
         </div>
-        <p className="muted small reading-note">{t("中英文一起调：英文按比例略小，字体同时用于两行。")}</p>
+        <p className="muted small reading-note">{t("字体同时用于中文和原文两行。")}</p>
         <div className="reading-row"><span>{t("视频上的字幕")}</span>
           <Seg value={settings.subtitleLook ?? "outline"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => save({ subtitleLook: v })} />
         </div>

@@ -48,6 +48,8 @@ export interface Settings {
   subtitleLook?: "box" | "outline";
   /** Subtitle size as a multiplier, set from the video's "Aa" (0.7–2); wins over `subtitleSize` when set. */
   subtitleScale?: number;
+  /** The original-language line's size multiplier (0.7–2); unset = follows `subtitleScale`. */
+  subtitleOrigScale?: number;
   /** How far video subtitles are moved up from their usual place, in % of the picture's height (dragged). */
   subtitleLift?: number;
   chatSize?: "m" | "l";
