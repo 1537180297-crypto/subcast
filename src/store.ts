@@ -24,6 +24,8 @@ export interface PlayerHandle {
   toggle(): void;
   play(): void;
   setRate(rate: number): void;
+  /** Fastest speed this player can do, when below the list's top. */
+  maxRate?: number;
   /** The episode this player plays. A video's player can be ready before the episode becomes current. */
   episodeId?: string;
 }

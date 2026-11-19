@@ -368,12 +368,12 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
               <div className="audio-sub"><AudioSubtitles ep={ep} /></div>
             </div>
           )}
-          {isCurrent ? <div className="controls-slot" ref={controlsRef}><Controls /></div> : (
+          {isCurrent ? <div className="controls-slot" ref={controlsRef}><Controls video={showVideo} /></div> : (
             <button className="btn primary" onClick={() => { load(ep); playSoon(ep.id); }}><Play size={14} /> {t("播放这一集")}</button>
           )}
           {ytPromo && ytChannel && <YtVideoStrip channel={ytChannel} name={showName(epShow?.title ?? "")} cover={epShow?.cover} />}
           {notes && <Notes ep={ep} text={notes} defaultOpen />}
-          {isCurrent && docked && <div className="controls-dock"><Controls /></div>}
+          {isCurrent && docked && <div className="controls-dock"><Controls video={showVideo} /></div>}
         </section>
         </div>
         {panelOpen && <Splitter value={panel} min={PANEL.min} max={PANEL.max} def={PANEL.def} snap={PANEL.snap} edge="left" label={t("字幕栏宽度")} onChange={(w) => put({ panel: w })} onCollapse={() => put({ panelOpen: false })} />}
