@@ -31,6 +31,8 @@ export interface Settings {
   skipBack?: number;
   skipForward?: number;
   autoNext?: boolean;
+  /** Skip what only the playing audio has when the subtitles were made from another cut (ads, mostly). */
+  skipAds?: boolean;
   shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;
   /** The local agent SubCast switched in on its own (shown as such in settings). */
   autoPicked?: string;
