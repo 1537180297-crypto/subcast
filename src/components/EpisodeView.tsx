@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { TopBar } from "./Chrome";
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { t, tk } from "../lib/i18n";
+import { rememberEpisodes, updateCachedProgress } from "../lib/cache";
 
 class PanelBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -39,9 +40,19 @@ import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 type Tab = "transcript" | "deep" | "chat" | "summary";
 const TAB_NAMES: Record<Tab, string> = { transcript: tk("字幕"), deep: tk("乔木精读"), chat: tk("AI 问答"), summary: tk("AI 导读") };
 
+const PIECES_CACHE_MAX = 300;
+const piecesCache = new Map<string, string[]>();
+
 /** Splits a subtitle block into reading-sized pieces: at the end of each sentence, at a comma once a piece is
  *  long enough, and between words only when a sentence runs on too long. */
 export function pieces(text: string, cjk: boolean): string[] {
+  const key = `${cjk ? 1 : 0}|${text}`;
+  const cached = piecesCache.get(key);
+  if (cached) {
+    piecesCache.delete(key);
+    piecesCache.set(key, cached);
+    return cached;
+  }
   const soft = cjk ? 14 : 38, hard = cjk ? 30 : 80;
   // A "." inside a number ("1.5") doesn't end anything.
   const units = cjk ? text.split(/(?<=[，。！？；：、,!?;]|\.(?!\d))/) : text.split(/(?<=\s)/);
@@ -62,7 +73,13 @@ export function pieces(text: string, cjk: boolean): string[] {
     if ((!abbrev && !continues && /[。！？.!?]["”')）]*$/.test(t)) || (t.length >= soft && /[，；：,;:]$/.test(t))) { out.push(t); cur = ""; }
   }
   if (cur.trim()) out.push(cur.trim());
-  return out.length ? out : [text];
+  const res = out.length ? out : [text];
+  piecesCache.set(key, res);
+  if (piecesCache.size > PIECES_CACHE_MAX) {
+    const oldest = piecesCache.keys().next().value;
+    if (oldest !== undefined) piecesCache.delete(oldest);
+  }
+  return res;
 }
 
 /** The piece being spoken now, assuming speech is spread evenly over the block. */
@@ -87,19 +104,27 @@ function pieceIndex(ps: string[], progress: number): number {
 function AudioSubtitles({ ep }: { ep: Episode }) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const items = useJobs((s) => s.translations[ep.id]?.items);
-  const time = useStore((s) => s.time);
   const mode = useStore((s) => s.settings.subtitleMode);
-  if (!transcript) return null;
-  const segs = transcript.segments;
-  const i = Math.max(0, activeIndex(segs, time));
+  const segs = transcript?.segments;
+  const pos = useStore(useShallow((s) => {
+    if (!segs?.length) return { i: -1, k: 0 };
+    const t = s.current?.id === ep.id ? s.time : ep.progress;
+    const i = Math.max(0, activeIndex(segs, t));
+    const seg = segs[i];
+    if (!seg) return { i: -1, k: 0 };
+    const progress = Math.min(1, Math.max(0, (t - seg.start) / Math.max(0.5, seg.end - seg.start)));
+    const cjk = /[\u4e00-\u9fff]/.test(seg.text);
+    const origPs = pieces(seg.text, cjk);
+    return { i, k: pieceIndex(origPs, progress) };
+  }));
+  if (!segs?.length || pos.i < 0) return null;
+  const { i, k } = pos;
   const seg = segs[i];
   if (!seg) return null;
-  const progress = Math.min(1, Math.max(0, (time - seg.start) / Math.max(0.5, seg.end - seg.start)));
   const cjk = (x: string) => /[\u4e00-\u9fff]/.test(x);
   const origPs = pieces(seg.text, cjk(seg.text));
   const zh = items?.[i];
   const zhPs = zh ? pieces(zh, true) : [];
-  const k = pieceIndex(origPs, progress);
   // The translation has its own pieces; the matching one is at the same share of the block.
   const kz = zhPs.length ? Math.min(zhPs.length - 1, Math.floor((k / origPs.length) * zhPs.length + 1e-9)) : 0;
   const nextSeg = segs[i + 1];
@@ -120,22 +145,50 @@ function AudioSubtitles({ ep }: { ep: Episode }) {
 function SubtitleOverlay({ ep }: { ep: Episode }) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const items = useJobs((s) => s.translations[ep.id]?.items);
-  const time = useStore((s) => s.time);
   const mode = useStore((s) => s.settings.subtitleMode);
-  if (!transcript) return null;
-  const i = activeIndex(transcript.segments, time);
-  const seg = transcript.segments[i];
-  if (!seg || time > seg.end + 1.5) return null;
-  const zh = items?.[i];
-  const progress = Math.min(1, Math.max(0, (time - seg.start) / Math.max(0.5, seg.end - seg.start)));
-  const cjk = /[\u4e00-\u9fff]/.test(seg.text);
+  const segs = transcript?.segments;
+  const cue = useStore(useShallow((s) => {
+    if (!segs?.length) return { i: -1, orig: "", zh: "" };
+    const t = s.current?.id === ep.id ? s.time : ep.progress;
+    const i = activeIndex(segs, t);
+    const seg = segs[i];
+    if (!seg || t > seg.end + 1.5) return { i: -1, orig: "", zh: "" };
+    const progress = Math.min(1, Math.max(0, (t - seg.start) / Math.max(0.5, seg.end - seg.start)));
+    const cjk = /[\u4e00-\u9fff]/.test(seg.text);
+    const zhRaw = items?.[i];
+    return {
+      i,
+      orig: pieceAt(seg.text, cjk, progress),
+      zh: zhRaw ? pieceAt(zhRaw, true, progress) : "",
+    };
+  }));
+  if (cue.i < 0) return null;
   return (
     <div className="subtitle-overlay">
       <div className="sub-box">
-        {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
-        {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
+        {cue.zh && mode !== "original" && <p className="sub-zh">{cue.zh}</p>}
+        {(mode !== "translation" || !cue.zh) && <p className="sub-orig">{cue.orig}</p>}
       </div>
     </div>
+  );
+}
+
+/** Cover artwork play/pause trigger, isolated so `playing` changes do not re-render the episode body. */
+function CoverPlay({ ep, isCurrent, onToggle }: { ep: Episode; isCurrent: boolean; onToggle: () => void }) {
+  const playing = useStore((s) => isCurrent && s.playing);
+  return (
+    <button
+      type="button"
+      className={`cover-play ${playing ? "is-playing" : ""}`}
+      onClick={onToggle}
+      title={playing ? t("暂停（空格）") : t("播放（空格）")}
+      aria-label={playing ? t("暂停") : t("播放")}
+    >
+      {ep.cover ? <img src={ep.cover} alt="" /> : <span className="cover-fallback" />}
+      <span className={`cover-play-btn ${playing ? "playing" : ""}`}>
+        {playing ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}
+      </span>
+    </button>
   );
 }
 
@@ -146,12 +199,15 @@ export function EpisodeView({ id }: { id: string }) {
   const [startAudio, setStartAudio] = useState(false);
 
   useEffect(() => {
+    let live = true;
     api.getEpisode(id).then(async (e) => {
-      if (!e) return;
+      if (!e || !live) return;
       // 乔木精读 episodes learn their audio address from their page the first time they are opened.
       if (e.transcriptType === "qiaomu" && !e.audioUrl) {
         try { await api.qiaomuDetail(e.id); e = (await api.getEpisode(id)) ?? e; } catch { /* plays video, or shows the error later */ }
       }
+      if (!live) return;
+      rememberEpisodes([e]);
       // Offline with the audio saved: a YouTube episode starts in audio mode instead of a player that cannot load.
       const offline = !!e.videoId && !navigator.onLine && isSaved(e.id);
       setStartAudio(offline);
@@ -162,6 +218,11 @@ export function EpisodeView({ id }: { id: string }) {
       const s = useStore.getState();
       if (s.current?.id !== e.id && !s.playing) load(offline ? { ...e, videoId: undefined } : e);
     });
+    return () => {
+      live = false;
+      const s = useStore.getState();
+      if (s.current?.id === id) updateCachedProgress(id, s.time);
+    };
   }, [id]);
 
   if (!ep) return <SkeletonEpisode />;
@@ -266,7 +327,6 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   const hasShow = useStore((s) => s.shows.some((x) => x.id === ep.showId));
   const titleZh = useZh(ep.title);
   const isCurrent = current?.id === ep.id;
-  const playing = useStore((s) => s.playing);
   const fav = useLibrary((s) => s.favorites.some((f) => f.id === ep.id));
   // Translate foreign-language subtitles whichever tab is open: the video's subtitles need the Chinese too.
   const transcript = useJobs((s) => s.transcripts[ep.id]);
@@ -352,10 +412,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             <VideoSlot ep={ep} overlay={videoOverlay} onUnplayable={ep.audioUrl || saved ? onUnplayable : undefined} />
           ) : (
             <div className="audio-stage">
-              <button type="button" className="cover-play" onClick={coverToggle} title={isCurrent && playing ? t("暂停（空格）") : t("播放（空格）")} aria-label={isCurrent && playing ? t("暂停") : t("播放")}>
-                {ep.cover ? <img src={ep.cover} alt="" /> : <span className="cover-fallback" />}
-                <span className={`cover-play-btn ${isCurrent && playing ? "playing" : ""}`}>{isCurrent && playing ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}</span>
-              </button>
+              <CoverPlay ep={ep} isCurrent={isCurrent} onToggle={coverToggle} />
               <div className="audio-sub"><AudioSubtitles ep={ep} /></div>
             </div>
           )}

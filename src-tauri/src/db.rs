@@ -10,6 +10,9 @@ pub fn open(path: &Path) -> Result<Connection> {
         -- In WAL mode NORMAL is still crash-safe, and commits stop waiting on a disk flush each time.
         PRAGMA synchronous=NORMAL;
         PRAGMA busy_timeout=5000;
+        PRAGMA temp_store=MEMORY;
+        PRAGMA cache_size=-16000;
+        PRAGMA mmap_size=67108864;
         CREATE TABLE IF NOT EXISTS shows(
             id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, author TEXT, cover TEXT,
             feed_url TEXT NOT NULL, link TEXT, description TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
@@ -19,6 +22,8 @@ pub fn open(path: &Path) -> Result<Connection> {
             transcript_url TEXT, transcript_type TEXT, progress REAL NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS episodes_show ON episodes(show_id, published DESC);
         CREATE INDEX IF NOT EXISTS episodes_published ON episodes(published DESC);
+        CREATE INDEX IF NOT EXISTS episodes_show_progress ON episodes(show_id, progress);
+        CREATE INDEX IF NOT EXISTS episodes_progress ON episodes(progress) WHERE progress > 0;
         CREATE TABLE IF NOT EXISTS transcripts(
             episode_id TEXT PRIMARY KEY, source TEXT NOT NULL, language TEXT NOT NULL, segments TEXT NOT NULL, created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS blobs(
@@ -182,6 +187,24 @@ pub fn get_transcript(conn: &Connection, id: &str) -> Result<Option<Transcript>>
 
 pub fn get_blob(conn: &Connection, id: &str, kind: &str) -> Result<Option<String>> {
     Ok(conn.query_row("SELECT data FROM blobs WHERE episode_id=?1 AND kind=?2", [id, kind], |r| r.get(0)).optional()?)
+}
+
+/// Returns all episode ids stored for a show in a single query.
+pub fn list_show_episode_ids(conn: &Connection, show_id: &str) -> Result<std::collections::HashSet<String>> {
+    let mut st = conn.prepare("SELECT id FROM episodes WHERE show_id=?1")?;
+    let rows = st.query_map([show_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Returns raw transcript segments JSON and optional Chinese translation JSON for pre-filtered search.
+pub fn raw_transcript_and_zh(conn: &Connection, id: &str) -> Result<Option<(String, Option<String>)>> {
+    Ok(conn
+        .query_row(
+            "SELECT t.segments, b.data FROM transcripts t LEFT JOIN blobs b ON b.episode_id = t.episode_id AND b.kind = 'zh' WHERE t.episode_id = ?1",
+            [id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?)
 }
 
 pub fn set_blob(conn: &Connection, id: &str, kind: &str, data: &str) -> Result<()> {

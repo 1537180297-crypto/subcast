@@ -3,9 +3,11 @@
 // the listener goes elsewhere. Moving a node holding an iframe would reload it; this never moves it.
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { ExternalLink, X } from "lucide-react";
 import type { Episode } from "../lib/api";
 import { YouTubePlayer } from "./Players";
+import { useLayout } from "../lib/layout";
 import { useStore } from "../store";
 import { t } from "../lib/i18n";
 
@@ -30,30 +32,63 @@ export function VideoSlot({ ep, overlay, onUnplayable }: Omit<Slot, "el">) {
 }
 
 export function VideoDock() {
-  const { slot, floating } = useVideoDock();
+  const { slot, floating } = useVideoDock(useShallow((d) => ({ slot: d.slot, floating: d.floating })));
   const box = useRef<HTMLDivElement>(null);
   const ep = slot?.ep ?? floating?.ep;
   const theater = useStore((s) => s.theater);
 
-  // Follow the slot every frame while it is on screen (scrolling, resizing panes), clipped to its column.
+  // Sync dock geometry only when slot layout, scroll position, or pane widths change (no idle 60fps loop).
+  // Keep left/top/width/height rather than transform: a parent transform would break fixed `.video.theater`.
   useEffect(() => {
     const b = box.current;
     if (!b) return;
     if (!slot) { b.removeAttribute("style"); return; }
+    const scroller = slot.el.closest(".ep-left") as HTMLElement | null;
     let raf = 0, last = "";
-    const tick = () => {
+    const sync = () => {
+      raf = 0;
       const r = slot.el.getBoundingClientRect();
-      const c = (slot.el.closest(".ep-left") ?? document.body).getBoundingClientRect();
+      const c = (scroller ?? document.body).getBoundingClientRect();
       const top = Math.max(0, c.top - r.top), bottom = Math.max(0, r.bottom - c.bottom);
       const key = `${r.left},${r.top},${r.width},${r.height},${top},${bottom}`;
-      if (key !== last) {
-        last = key;
-        Object.assign(b.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, clipPath: top || bottom ? `inset(${top}px 0 ${bottom}px 0 round 12px)` : "" });
-      }
-      raf = requestAnimationFrame(tick);
+      if (key === last) return;
+      last = key;
+      Object.assign(b.style, {
+        left: `${r.left}px`,
+        top: `${r.top}px`,
+        width: `${r.width}px`,
+        height: `${r.height}px`,
+        clipPath: top || bottom ? `inset(${top}px 0 ${bottom}px 0 round 12px)` : "",
+      });
     };
-    tick();
-    return () => cancelAnimationFrame(raf);
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(sync); };
+    sync();
+    const ro = new ResizeObserver(schedule);
+    ro.observe(slot.el);
+    ro.observe(document.documentElement);
+    if (scroller) {
+      ro.observe(scroller);
+      for (const child of scroller.children) ro.observe(child);
+    }
+    const mo = scroller ? new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const n of m.addedNodes) if (n instanceof Element) ro.observe(n);
+        for (const n of m.removedNodes) if (n instanceof Element) ro.unobserve(n);
+      }
+      schedule();
+    }) : null;
+    mo?.observe(scroller!, { childList: true });
+    scroller?.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule, { passive: true });
+    const unsubLayout = useLayout.subscribe(schedule);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      ro.disconnect();
+      mo?.disconnect();
+      scroller?.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      unsubLayout();
+    };
   }, [slot]);
 
   // A floating video that is paused for good (ended, or another episode took over) goes away.

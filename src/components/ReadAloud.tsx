@@ -8,7 +8,7 @@ import { speak, stopSpeaking } from "../lib/tts";
 import { VOICES } from "../lib/settings";
 import { useStore } from "../store";
 import { t, tr } from "../lib/i18n";
-import { KeyField, NO_AUTO } from "./SettingsDialog";
+import { KeyField, NO_AUTO } from "./KeyField";
 
 export function ReadAloud({ text, title }: { text: () => string; title?: string }) {
   const speaking = useStore((s) => s.speaking);

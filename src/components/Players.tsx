@@ -454,35 +454,72 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
 
 export function Controls({ compact = false }: { compact?: boolean }) {
   // Whole seconds: the clock and bar move once a second instead of re-rendering on every time update.
-  const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: Math.floor(s.time), length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
+  const { time, length, playing, player, playbackRate, skipBack, skipForward, loadingSince } = useStore(useShallow((s) => ({
+    time: Math.floor(s.time),
+    length: s.length,
+    playing: s.playing,
+    player: s.player,
+    playbackRate: s.settings.playbackRate,
+    skipBack: s.settings.skipBack ?? 15,
+    skipForward: s.settings.skipForward ?? 30,
+    loadingSince: s.loadingSince,
+  })));
   const [drag, setDrag] = useState<number | null>(null);
+  const [hover, setHover] = useState<{ time: number; pct: number } | null>(null);
+  const seekWrap = useRef<HTMLDivElement>(null);
 
   const shown = drag ?? time;
+  const tip = drag != null ? { time: drag, pct: length ? (drag / length) * 100 : 0 } : hover;
+  const updateHover = (clientX: number) => {
+    const el = seekWrap.current;
+    if (!el || !length) return;
+    const rect = el.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+    setHover({ time: ratio * length, pct: ratio * 100 });
+  };
   const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
-      <button className="icon-btn" title={t("后退 {n} 秒（←）", { n: settings.skipBack ?? 15 })} onClick={() => player?.seek(Math.max(0, time - (settings.skipBack ?? 15)))} disabled={!player}><RotateCcw size={18} /></button>
+      <button className="icon-btn skip-btn" title={t("后退 {n} 秒（←）", { n: skipBack })} aria-label={t("后退 {n} 秒", { n: skipBack })} onClick={() => player?.seek(Math.max(0, time - skipBack))} disabled={!player}>
+        <RotateCcw size={18} />
+        <span className="skip-num">{skipBack}</span>
+      </button>
       <button className={`play-btn ${loadingSince ? "loading" : ""}`} title={loadingSince ? t("正在加载…") : playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loadingSince}>
         {loadingSince ? <Loader2 size={20} className="spin" /> : playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
-      <button className="icon-btn" title={t("前进 {n} 秒（→）", { n: settings.skipForward ?? 30 })} onClick={() => player?.seek(time + (settings.skipForward ?? 30))} disabled={!player}><RotateCw size={18} /></button>
+      <button className="icon-btn skip-btn" title={t("前进 {n} 秒（→）", { n: skipForward })} aria-label={t("前进 {n} 秒", { n: skipForward })} onClick={() => player?.seek(time + skipForward)} disabled={!player}>
+        <RotateCw size={18} />
+        <span className="skip-num">{skipForward}</span>
+      </button>
       <span className="time">{clock(shown)}</span>
-      <input
-        className="seek"
-        type="range"
-        min={0}
-        max={Math.max(length, 1)}
-        step={1}
-        value={Math.min(shown, length || shown)}
-        onChange={(e) => setDrag(Number(e.target.value))}
-        onPointerUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
-        onKeyUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
-        style={{ "--fill": `${length ? (shown / length) * 100 : 0}%` } as React.CSSProperties}
-        aria-label={t("播放进度")}
-      />
+      <div
+        className="seek-wrap"
+        ref={seekWrap}
+        onMouseMove={(e) => updateHover(e.clientX)}
+        onMouseLeave={() => setHover(null)}
+      >
+        {tip && length > 0 && (
+          <span className="seek-tip" style={{ left: `clamp(24px, ${tip.pct}%, calc(100% - 24px))` }} aria-hidden>
+            {clock(tip.time)}
+          </span>
+        )}
+        <input
+          className="seek"
+          type="range"
+          min={0}
+          max={Math.max(length, 1)}
+          step={1}
+          value={Math.min(shown, length || shown)}
+          onChange={(e) => setDrag(Number(e.target.value))}
+          onPointerUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
+          onKeyUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
+          style={{ "--fill": `${length ? (shown / length) * 100 : 0}%` } as React.CSSProperties}
+          aria-label={t("播放进度")}
+        />
+      </div>
       <span className="time">{length ? clock(length) : "--:--"}</span>
       <VolumeControl />
-      <button className={`rate-btn${settings.playbackRate >= 2 ? " fast" : ""}`} onClick={nextRate} title={t("播放速度（S）")}>{settings.playbackRate >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{settings.playbackRate}×</button>
+      <button className={`rate-btn${playbackRate >= 2 ? " fast" : ""}`} onClick={nextRate} title={t("播放速度（S）")}>{playbackRate >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{playbackRate}×</button>
     </div>
   );
 }

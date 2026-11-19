@@ -1206,6 +1206,15 @@ const dict: Record<string, string> = {
   "键盘 1–4 选择，空格选「{label}」": "Keys 1–4 choose; space picks “{label}”",
   "查词时暂停播放，关掉词卡后继续": "Pause while looking up a word, resume when the card closes",
   "查看这档节目的全部单集": "See all episodes of this show",
+  "返回（⌘[）": "Back (⌘[)",
+  "前进（⌘]）": "Forward (⌘])",
+  "清除": "Clear",
+  "点击跳转进度": "Click to seek",
+  "上一处（⇧↵）": "Previous match (⇧↵)",
+  "上一处": "Previous match",
+  "下一处（↵）": "Next match (↵)",
+  "下一处": "Next match",
+  "回到当前位置": "Back to current line",
 };
 
 export default dict;

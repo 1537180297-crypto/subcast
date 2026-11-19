@@ -176,7 +176,7 @@ fn known_show_id(input: &str) -> Option<String> {
 }
 
 /// A channel page from what was saved last time, so it opens instantly; the page then refreshes it in the background.
-#[tauri::command]
+#[tauri::command(async)]
 fn cached_show(state: State<'_, AppState>, input: String) -> Res<Option<Preview>> {
     let Some(id) = known_show_id(&input) else { return Ok(None) };
     let conn = state.db.lock().unwrap();
@@ -243,7 +243,8 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
                 let Ok(Ok((fresh, eps))) = r else { continue };
                 let known = {
                     let conn = state.db.lock().unwrap();
-                    eps.iter().filter(|x| conn.query_row("SELECT 1 FROM episodes WHERE id=?1", [&x.id], |_| Ok(())).is_ok()).count()
+                    let ids = db::list_show_episode_ids(&conn, &s.id).unwrap_or_default();
+                    eps.iter().filter(|x| ids.contains(&x.id)).count()
                 };
                 let fresh = Show { id: s.id.clone(), kind: s.kind.clone(), ..fresh };
                 if store(&state, &fresh, &eps).is_ok() { ok += 1; fresh_eps += eps.len() - known; }
@@ -306,10 +307,19 @@ fn search_episodes(conn: &Connection, show_id: &str, query: &str) -> anyhow::Res
         let notes = all_notes.get(&ep.id).map(|n| tags.replace_all(n, " ").to_string()).unwrap_or_default();
         if has(&notes) { hits.push(ShowHit { snippet: snippet(&notes, &words[0]), field: "notes", time: None, episode: ep }); continue; }
         if !ep.has_transcript { continue; }
-        let Some(t) = db::get_transcript(conn, &ep.id).ok().flatten() else { continue };
-        let zh: Vec<Option<String>> = db::get_blob(conn, &ep.id, "zh").ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let Some((raw_segs, raw_zh)) = db::raw_transcript_and_zh(conn, &ep.id).ok().flatten() else { continue };
+        // Pre-filter on raw JSON strings before expensive serde deserialization when words contain no JSON-escaped chars.
+        if words.iter().all(|w| !w.contains('"') && !w.contains('\\')) {
+            let segs_lower = raw_segs.to_lowercase();
+            let zh_lower = raw_zh.as_deref().map(str::to_lowercase);
+            if !words.iter().all(|w| segs_lower.contains(w) || zh_lower.as_deref().is_some_and(|z| z.contains(w))) {
+                continue;
+            }
+        }
+        let Ok(segs) = serde_json::from_str::<Vec<Segment>>(&raw_segs) else { continue };
+        let zh: Vec<Option<String>> = raw_zh.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         // A line matches with its translation; the first one that contains every word is shown.
-        let found = t.segments.iter().enumerate().find_map(|(i, s)| {
+        let found = segs.iter().enumerate().find_map(|(i, s)| {
             let line = match zh.get(i).cloned().flatten() { Some(z) => format!("{} {z}", s.text), None => s.text.clone() };
             has(&line).then(|| (s.start, line))
         });
@@ -338,10 +348,10 @@ fn recent_episodes(state: State<'_, AppState>) -> Res<Vec<Episode>> { db::recent
 #[tauri::command(async)]
 fn get_episode(state: State<'_, AppState>, id: String) -> Res<Option<Episode>> { db::get_episode(&state.db.lock().unwrap(), &id).map_err(e) }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_show(state: State<'_, AppState>, id: String) -> Res<()> { db::delete_show(&state.db.lock().unwrap(), &id).map_err(e) }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_progress(state: State<'_, AppState>, id: String, seconds: f64) -> Res<()> { db::set_progress(&state.db.lock().unwrap(), &id, seconds).map_err(e) }
 
 #[tauri::command]
@@ -351,7 +361,7 @@ async fn search_podcasts(term: String, country: Option<String>) -> Res<Vec<feeds
 
 // ---- transcripts -----------------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_transcript(state: State<'_, AppState>, episode_id: String) -> Res<Option<Transcript>> {
     db::get_transcript(&state.db.lock().unwrap(), &episode_id).map_err(e)
 }
@@ -693,10 +703,10 @@ async fn download_episode(app: AppHandle, state: State<'_, AppState>, episode_id
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_downloads(state: State<'_, AppState>) -> Vec<offline::Saved> { offline::list(&state.data) }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_download(state: State<'_, AppState>, episode_id: String) -> Res<()> { offline::remove(&state.data, &episode_id).map_err(e) }
 
 // Off the main thread: the window keeps drawing while it runs.
@@ -1061,12 +1071,12 @@ async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String, 
 }
 
 /// Listening time from the player (only while playing; seeks don't count).
-#[tauri::command]
+#[tauri::command(async)]
 fn log_listen(state: State<'_, AppState>, episode_id: String, show_id: String, seconds: f64, translated: bool) -> Res<()> {
     db::log_listen(&state.db.lock().unwrap(), &episode_id, &show_id, seconds, translated).map_err(e)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn listening_stats(state: State<'_, AppState>, since: String) -> Res<Vec<Value>> {
     db::listens_since(&state.db.lock().unwrap(), &since).map_err(e)
 }
@@ -1087,23 +1097,23 @@ fn delete_model(state: State<'_, AppState>, id: String) -> Res<()> {
 
 // ---- stored data and settings ------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_blob(state: State<'_, AppState>, episode_id: String, kind: String) -> Res<Option<String>> {
     db::get_blob(&state.db.lock().unwrap(), &episode_id, &kind).map_err(e)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_blob(state: State<'_, AppState>, episode_id: String, kind: String, data: String) -> Res<()> {
     db::set_blob(&state.db.lock().unwrap(), &episode_id, &kind, &data).map_err(e)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_settings(state: State<'_, AppState>) -> Res<Value> {
     let raw = db::get_setting(&state.db.lock().unwrap(), "app").map_err(e)?;
     Ok(raw.and_then(|r| serde_json::from_str(&r).ok()).unwrap_or(Value::Null))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_settings(state: State<'_, AppState>, settings: Value) -> Res<()> {
     net::set_proxy(settings["proxy"].as_str().unwrap_or("")).map_err(e)?;
     *asr::YT_BROWSER.write().unwrap() = settings["ytCookiesBrowser"].as_str().unwrap_or("").to_string();

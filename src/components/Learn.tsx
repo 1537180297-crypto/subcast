@@ -10,7 +10,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { WORD_RE, isNew, loadDict, lookup, tagLabel, useDict, type Entry } from "../lib/dict";
 import { clipKey, playClip, prefetchClip, prepareClip, speak, stopClip, toggleClip, useClipState } from "../lib/clip";
-import { Rating, intervals, isMastered, reviewQueue, toCsv, useWords, type Grade, type Word } from "../lib/words";
+import { Rating, intervals, isMastered, remindReview, reviewQueue, toCsv, useDueCount, useWords, type Grade, type Word } from "../lib/words";
 import { llmReady } from "../lib/jobs";
 import { providerFor, seekSoon, useStore } from "../store";
 import { clock } from "../lib/format";
@@ -19,7 +19,7 @@ import { Modal } from "./Chrome";
 import { playSoon } from "./Players";
 import { LearnStats } from "./LearnStats";
 import { ask } from "../lib/confirm";
-import confetti from "canvas-confetti";
+import type confetti from "canvas-confetti";
 import { doneSound, keySound, rightSound, wrongSound } from "../lib/sfx";
 import { EmptyState } from "./Illustrations";
 import type { LearnLevel } from "../lib/settings";
@@ -62,24 +62,57 @@ export function useLearnMarks(english: boolean): LearnMarks | null {
   return useMemo(() => (on && english && data && (mark || card) ? { data, level, mark, saved, known } : null), [on, english, data, level, mark, card, saved, known]);
 }
 
-/** One English line with its words wrapped, so they can be marked and clicked. */
-export const LearnText = memo(function LearnText({ text, marks }: { text: string; marks: LearnMarks }) {
-  const out: React.ReactNode[] = [];
+type ParsedPart = string | { raw: string; lemma: string | null; isNewBase: boolean };
+const LEARN_CACHE_MAX = 6000;
+let learnCacheData: LearnMarks["data"] | null = null;
+const learnCache = new Map<string, ParsedPart[]>();
+
+function tokenizeLine(text: string, data: LearnMarks["data"], level: LearnLevel): ParsedPart[] {
+  if (learnCacheData !== data) {
+    learnCache.clear();
+    learnCacheData = data;
+  }
+  const key = `${level}|${text}`;
+  const hit = learnCache.get(key);
+  if (hit) return hit;
+  const parts: ParsedPart[] = [];
   let last = 0;
   for (const m of text.matchAll(WORD_RE)) {
     const i = m.index ?? 0;
-    if (i > last) out.push(text.slice(last, i));
-    const e = lookup(marks.data, m[0]);
+    if (i > last) parts.push(text.slice(last, i));
+    const e = lookup(data, m[0]);
     // Capitalised mid-sentence, or at the start but on no exam list: most likely a name (Chang, Jensen).
     const proper = /^[A-Z]/.test(m[0]) && ((i > 0 && !/[.?!]["”]?\s*$/.test(text.slice(0, i))) || !e?.tags);
-    // In the word book: learning (tinted) or mastered (just coloured); otherwise new for this level, unless known.
-    const w = e && marks.saved[e.lemma];
-    const cls = w ? (isMastered(w) ? " got" : " saved") : e && marks.mark && !proper && !marks.known[e.lemma] && isNew(e, marks.level) ? " new" : "";
-    out.push(<span key={i} className={`lw${cls}`}>{m[0]}</span>);
+    parts.push({ raw: m[0], lemma: e?.lemma ?? null, isNewBase: !!(e && !proper && isNew(e, level)) });
     last = i + m[0].length;
   }
-  if (last < text.length) out.push(text.slice(last));
-  return <>{out}</>;
+  if (last < text.length) parts.push(text.slice(last));
+  if (learnCache.size >= LEARN_CACHE_MAX) {
+    const oldest = learnCache.keys().next().value;
+    if (oldest !== undefined) learnCache.delete(oldest);
+  }
+  learnCache.set(key, parts);
+  return parts;
+}
+
+/** One English line with its words wrapped, so they can be marked and clicked. */
+export const LearnText = memo(function LearnText({ text, marks }: { text: string; marks: LearnMarks }) {
+  const parts = tokenizeLine(text, marks.data, marks.level);
+  return (
+    <>
+      {parts.map((part, idx) => {
+        if (typeof part === "string") return part;
+        // In the word book: learning (tinted) or mastered (just coloured); otherwise new for this level, unless known.
+        const w = part.lemma ? marks.saved[part.lemma] : undefined;
+        const cls = w
+          ? (isMastered(w) ? " got" : " saved")
+          : part.lemma && marks.mark && part.isNewBase && !marks.known[part.lemma]
+            ? " new"
+            : "";
+        return <span key={idx} className={`lw${cls}`}>{part.raw}</span>;
+      })}
+    </>
+  );
 });
 
 export interface CardTarget { el: HTMLElement; token: string; seg: Segment; zh?: string | null }
@@ -695,16 +728,24 @@ function Letters({ typed, answer }: { typed: string; answer: string }) {
 /** The spelling front: type the blanked word, each letter checked as you go (after qwerty-learner). */
 // Confetti on our own canvas (no worker: blob workers aren't something to rely on in every web view).
 let fire: confetti.CreateTypes | null = null;
+let fireLoading: Promise<confetti.CreateTypes> | null = null;
 const CONFETTI = ["#e8582a", "#f2a679", "#f2d091", "#5d8c7b", "#3a6df0"];
+function getFire(): Promise<confetti.CreateTypes> {
+  if (fire) return Promise.resolve(fire);
+  if (!fireLoading) {
+    fireLoading = import("canvas-confetti").then((mod) => {
+      const c = document.createElement("canvas");
+      c.className = "confetti";
+      document.body.appendChild(c);
+      fire = mod.default.create(c, { resize: true, useWorker: false });
+      return fire;
+    });
+  }
+  return fireLoading;
+}
 function confettiAt(opts: confetti.Options) {
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  if (!fire) {
-    const c = document.createElement("canvas");
-    c.className = "confetti";
-    document.body.appendChild(c);
-    fire = confetti.create(c, { resize: true, useWorker: false });
-  }
-  void fire({ colors: CONFETTI, shapes: ["square", "circle"], scalar: 0.9, ...opts });
+  void getFire().then((f) => f({ colors: CONFETTI, shapes: ["square", "circle"], scalar: 0.9, ...opts }));
 }
 /** A burst from an element (a word spelled right). */
 function burst(el: Element | null) {
@@ -874,27 +915,5 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
   );
 }
 
-/** Words due today, for the sidebar badge. */
-export function useDueCount(): number {
-  const on = useStore((s) => s.settings.learnOn);
-  const dailyNew = useStore((s) => s.settings.learnDaily);
-  const { words, day, newToday } = useWords(useShallow((s) => ({ words: s.words, day: s.day, newToday: s.newToday })));
-  useEffect(() => { if (on) void useWords.getState().load(); }, [on]);
-  return useMemo(() => (on ? reviewQueue({ words, day, newToday }, dailyNew).length : 0), [on, words, day, newToday, dailyNew]);
-}
-
-/** Once a day after launch: a reminder when words are waiting, if asked for. */
-export async function remindReview() {
-  const s = useStore.getState().settings;
-  if (!s.learnOn || !s.learnRemind) return;
-  const key = "subcast-learn-reminded";
-  const d = new Date().toLocaleDateString("sv");
-  try { if (localStorage.getItem(key) === d) return; } catch { /* private mode: remind anyway */ }
-  await useWords.getState().load();
-  const w = useWords.getState();
-  const n = reviewQueue(w, s.learnDaily).length;
-  if (!n) return;
-  try { localStorage.setItem(key, d); } catch { /* ignore */ }
-  useStore.getState().notify(t("生词本里有 {n} 个词等你复习", { n }));
-}
+export { useDueCount, remindReview };
 
