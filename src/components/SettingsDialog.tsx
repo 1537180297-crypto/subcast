@@ -12,7 +12,7 @@ import rewardQr from "../assets/about-reward-qr.png";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type CloudAsr, type ModelInfo, type Provider } from "../lib/api";
 import { useStore } from "../store";
-import { bytes, clearDownloads, useOffline } from "../lib/offline";
+import { bytes, clearAudioCache, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
 import { YouTubeAccount } from "./YouTubeAccount";
 import { useModelDownload } from "./TranscriptPanel";
@@ -332,14 +332,14 @@ const REPO = "https://github.com/joeseesun/subcast";
 /** "占用 1.9 GB" for the 通用 page's storage row. */
 function StorageTotal() {
   const [total, setTotal] = useState<number | null>(null);
-  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp)).catch(() => {}); }, []);
+  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp + (i.audioCache ?? 0))).catch(() => {}); }, []);
   return <span className="muted small">{total == null ? "" : t("占用 {size}", { size: bytes(total) })}</span>;
 }
 
 function Storage({ onAsr }: { onAsr: () => void }) {
   const go = useStore((s) => s.go);
   const saved = useOffline((s) => s.saved);
-  const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number } | null>(null);
+  const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number; audioCache: number } | null>(null);
   const load = () => void api.storageInfo().then(setInfo).catch(() => {});
   useEffect(load, [saved]);
   const n = Object.keys(saved).length;
@@ -378,6 +378,16 @@ function Storage({ onAsr }: { onAsr: () => void }) {
           <span className="storage-size">{size(info?.library)}</span>
           <button className="btn ghost sm" onClick={() => void api.openDataFolder("data")}><FolderOpen size={13} /> {t("打开文件夹")}</button>
         </div>
+        {!!info?.audioCache && (
+          <div className="storage-row">
+            <div className="storage-row-text">
+              <p className="storage-row-name">{t("字幕对应的音频")}</p>
+              <p className="muted small">{t("识别字幕或对齐字幕时留下的音频，播放时优先用它，字幕和声音更准；最多占 2 GB，久不听的先删")}</p>
+            </div>
+            <span className="storage-size">{size(info.audioCache)}</span>
+            <button className="btn sm" onClick={() => void clearAudioCache().then(load)}>{t("清理")}</button>
+          </div>
+        )}
         {!!info?.temp && (
           <div className="storage-row">
             <div className="storage-row-text">

@@ -70,7 +70,7 @@ fn ext_of(url: &str) -> Option<String> {
 }
 
 /// Decodes `[start - BEFORE, end + AFTER]` of the first audio track, mixed to mono at 16 kHz.
-fn cut(src: Box<dyn MediaSource>, ext: Option<&str>, start: f64, end: f64) -> Result<Vec<f32>> {
+pub fn cut(src: Box<dyn MediaSource>, ext: Option<&str>, start: f64, end: f64) -> Result<Vec<f32>> {
     let mss = MediaSourceStream::new(src, Default::default());
     let mut hint = Hint::new();
     if let Some(e) = ext { hint.with_extension(e); }

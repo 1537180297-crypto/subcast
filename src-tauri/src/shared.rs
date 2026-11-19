@@ -33,8 +33,23 @@ pub struct SharedTranslation {
     pub items: Vec<Option<String>>,
 }
 
+/// The audio file a shared version was made from (servers from 0.3.0 on).
+#[derive(Deserialize, Default)]
+pub struct SharedAudio {
+    pub bytes: u64,
+    #[serde(default)]
+    pub etag: String,
+    pub secs: f64,
+    #[serde(default)]
+    pub fp: bool,
+}
+
 #[derive(Deserialize)]
 pub struct Shared {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub audio: Option<SharedAudio>,
     pub source: String,
     pub language: String,
     pub segments: Vec<Segment>,
@@ -111,6 +126,16 @@ struct ClientInfo {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadAudio<'a> {
+    bytes: u64,
+    etag: &'a str,
+    secs: f64,
+    fp_algo: &'static str,
+    fp: &'a str,
+}
+
+#[derive(Serialize)]
 struct Upload<'a> {
     keys: &'a [String],
     title: &'a str,
@@ -122,6 +147,8 @@ struct Upload<'a> {
     segments: &'a [Segment],
     translation: Option<UploadTranslation>,
     client: ClientInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio: Option<UploadAudio<'a>>,
 }
 
 #[derive(Deserialize)]
@@ -140,6 +167,8 @@ pub struct UploadMeta {
     pub install: String,
     /// Cached Chinese translations, one per segment, when at least 60% of the lines have one.
     pub translation: Option<(String, Vec<Option<String>>)>,
+    /// The audio the segments were timed against, with its fingerprint.
+    pub audio: Option<crate::align::AudioRef>,
 }
 
 /// Upload the transcript we just made. Returns the server's action ("created", "confirmed", …).
@@ -160,11 +189,23 @@ pub async fn upload_with(keys: &[String], meta: UploadMeta, segments: &[Segment]
         segments,
         translation: meta.translation.map(|(lang, items)| UploadTranslation { lang, engine: engine.into(), model: tr_model.into(), items }),
         client: ClientInfo { app: "subcast", version: env!("CARGO_PKG_VERSION"), install: meta.install },
+        audio: meta.audio.as_ref().and_then(|a| Some(UploadAudio { bytes: a.bytes, etag: &a.etag, secs: a.secs, fp_algo: crate::align::FP_ALGO, fp: a.fp.as_deref()? })),
     };
     let resp = net::client().post(API).json(&body).timeout(Duration::from_secs(30)).send().await?;
     if !resp.status().is_success() { anyhow::bail!("shared transcripts: HTTP {}", resp.status()); }
     let reply: UploadReply = resp.json().await?;
     Ok(reply.action.unwrap_or_default())
+}
+
+/// The fingerprint of the audio a shared version was made from.
+pub async fn fingerprint(id: &str) -> Option<Vec<u32>> {
+    if id.is_empty() { return None; }
+    let resp = net::client().get(format!("{API}/{}/fingerprint", urlencoding::encode(id))).timeout(Duration::from_secs(20)).send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    #[derive(Deserialize)]
+    struct Fp { algo: String, fp: String }
+    let f: Fp = resp.json().await.ok()?;
+    (f.algo == crate::align::FP_ALGO).then(|| crate::align::decode_fp(&f.fp)).flatten()
 }
 
 /// The transcript we hand back when the shared library has this episode. Translation items, when

@@ -1888,6 +1888,13 @@ button.track-pick:focus-visible { background: var(--line); color: var(--text); }
 .learn-tip-acts { margin-left: auto; display: flex; gap: 6px; flex: none; }
 .shadow-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 14px; font-size: 12.5px; color: var(--accent-text); background: var(--accent-soft); }
 .shadow-bar .btn { margin-left: auto; color: var(--accent-text); }
+.align-bar { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 10px 14px; font-size: 12.5px; background: var(--accent-soft); color: var(--accent-text); }
+.align-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.align-row .btn { color: var(--accent-text); white-space: nowrap; }
+.align-status { flex: 1; min-width: 0; font-weight: 500; }
+.align-hint { margin: 0; color: var(--text-2); }
+.align-check { display: flex; align-items: center; gap: 6px; color: var(--text-2); cursor: pointer; }
+.asub-gap { display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; text-align: center; }
 .menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 .panel-menu-pop button:disabled { opacity: .5; cursor: default; }
 .panel-menu-pop button:disabled:hover { background: transparent; }
