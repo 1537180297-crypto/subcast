@@ -32,7 +32,7 @@ export function ReadAloud({ text, title }: { text: () => string; title?: string 
   );
 }
 
-function ReadAloudSettings() {
+export function ReadAloudSettings() {
   const { settings, saveSettings } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })));
   const [custom, setCustom] = useState(!VOICES.some(([id]) => id === settings.ttsVoice));
   return (

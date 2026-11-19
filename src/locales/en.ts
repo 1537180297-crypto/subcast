@@ -1280,6 +1280,8 @@ const dict: Record<string, string> = {
   "播放速度": "Playback speed",
   "YouTube 视频最快 2 倍速，切到「仅音频」可以更快": "YouTube videos play at most 2×; switch to Audio only to go faster",
   "正常": "Normal",
+  "朗读中文": "Read the Chinese aloud",
+  "这里往后还没有中文翻译": "No Chinese translation from here on yet",
 };
 
 export default dict;
