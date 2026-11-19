@@ -7,7 +7,7 @@ import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
-import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, type Pick, type Topic } from "../lib/picks";
+import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, subscribedShow, type Pick, type Topic } from "../lib/picks";
 import { isChineseUi, t, useLang } from "../lib/i18n";
 import { HOME_SHOW_FEED, showLinks } from "../lib/showLinks";
 import { AlsoOn, HomeShowBanner, YtButton, usePromo } from "./YtPromo";
@@ -579,9 +579,9 @@ export function DiscoverView() {
   const add = async (input: string, title: string) => {
     setAdding(input);
     try {
-      const r = await api.addSubscription(input);
+      await api.addSubscription(input);
       await reloadShows();
-      if (r.show) { notify(t("已订阅「{name}」", { name: title })); go({ kind: "show", id: r.show.id }); }
+      notify(t("已订阅「{name}」", { name: title }));
     } catch (err) { notify(errorText(err)); } finally { setAdding(null); }
   };
   const subBtn = (input: string, title: string, done: boolean) => done
@@ -604,7 +604,7 @@ export function DiscoverView() {
 export function ChannelView({ input }: { input: string }) {
   const { shows, reloadShows, notify, go } = useStore(useShallow((s) => ({ shows: s.shows, reloadShows: s.reloadShows, notify: s.notify, go: s.go })));
   const pick = PICKS.find((p) => sameFeed(p.input, input));
-  const sub = shows.find((s) => sameFeed(s.feedUrl, input) || (pick?.deep && sameFeed(s.feedUrl, pick.input)));
+  const sub = (pick ? subscribedShow(pick, shows) : undefined) ?? shows.find((s) => sameFeed(s.feedUrl, input));
   const [data, setData] = useState<{ show: Show; episodes: Episode[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
