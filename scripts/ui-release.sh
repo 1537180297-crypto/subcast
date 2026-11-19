@@ -41,10 +41,11 @@ if [ "$ROLLBACK" = 0 ]; then
 fi
 
 # The next build number: one above what the server has for this app version (builds start at 1).
-CURRENT=$(curl -fsS "$BASE_URL/manifest.json" 2>/dev/null | VERSION="$VERSION" node -e '
+# No manifest yet (the first hot update) counts as 0; `|| true` keeps pipefail from printing a second 0.
+CURRENT=$({ curl -fsS "$BASE_URL/manifest.json" 2>/dev/null || true; } | VERSION="$VERSION" node -e '
   let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
     try { const m = JSON.parse(s); console.log(m.shell === process.env.VERSION ? m.build : 0); } catch { console.log(0); }
-  });' || echo 0)
+  });')
 BUILD=$((CURRENT + 1))
 echo "==> app $VERSION, interface build $BUILD (server has ${CURRENT})"
 
