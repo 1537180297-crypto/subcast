@@ -59,6 +59,8 @@ pub struct Frame {
     #[serde(default)] pub vy: u32,
     #[serde(default)] pub vw: u32,
     #[serde(default)] pub vh: u32,
+    /// Card only: crop the picture to the box's shape (panned by `crop_x`) instead of fitting it whole.
+    #[serde(default)] pub crop_box: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -823,9 +825,15 @@ pub fn build_filter_script(
                     format!("[bg]scale={w}:{h},drawbox=x=0:y=0:w=iw:h=ih:color={hex}:t=fill,setsar=1[bg2]")
                 }
             };
+            let (vw, vh) = (even(f.vw.max(2)), even(f.vh.max(2)));
+            let fg = if f.crop_box {
+                format!("[fg]scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh}:(iw-{vw})*{cx:.4}:(ih-{vh})/2,setsar=1[fg2]")
+            } else {
+                format!("[fg]scale={vw}:{vh}:force_original_aspect_ratio=decrease,setsar=1[fg2]")
+            };
             parts.push(format!(
-                "[0:v]split[fg][bg];{bg};[fg]scale={vw}:{vh}:force_original_aspect_ratio=decrease,setsar=1[fg2];[bg2][fg2]overlay={vx}+({vw}-w)/2:{vy}+({vh}-h)/2[base]",
-                vw = even(f.vw.max(2)), vh = even(f.vh.max(2)), vx = f.vx, vy = f.vy
+                "[0:v]split[fg][bg];{bg};{fg};[bg2][fg2]overlay={vx}+({vw}-w)/2:{vy}+({vh}-h)/2[base]",
+                vx = f.vx, vy = f.vy
             ));
         } else {
             parts.push(format!(
@@ -1129,10 +1137,12 @@ mod tests {
         assert!(c_paper.contains("color=#f5f2eb:t=fill"));
 
         let fill = build_filter_script("portrait_fill", "blur", 0.25, None, false, &[], "none", None, true);
-        let card = Frame { w: 1080, h: 1440, fit: "card".into(), vx: 0, vy: 380, vw: 1080, vh: 608 };
+        let card = Frame { w: 1080, h: 1440, fit: "card".into(), vx: 0, vy: 380, vw: 1080, vh: 608, crop_box: false };
         let g = build_filter_script("x", "blur", 0.5, Some(&card), false, &[], "none", None, true);
         assert!(g.contains("scale=270:360") && g.contains("scale=1080:1440") && g.contains("overlay=0+(1080-w)/2:380+(608-h)/2[base]"), "{g}");
-        let sq = Frame { w: 1080, h: 1080, fit: "fill".into(), vx: 0, vy: 0, vw: 0, vh: 0 };
+        let sq = Frame { w: 1080, h: 1080, fit: "fill".into(), vx: 0, vy: 0, vw: 0, vh: 0, crop_box: false };
+        let zoomed = Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 560, vw: 1080, vh: 810, crop_box: true };
+        assert!(build_filter_script("x", "night", 0.7, Some(&zoomed), false, &[], "none", None, true).contains("crop=1080:810:(iw-1080)*0.7000"));
         assert!(build_filter_script("x", "blur", 0.3, Some(&sq), false, &[], "none", None, true).contains("crop=1080:1080:(iw-1080)*0.3000"));
         assert!(fill.contains("crop=1080:1920:(iw-1080)*0.2500:(ih-1920)/2"));
     }

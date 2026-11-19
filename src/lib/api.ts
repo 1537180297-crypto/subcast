@@ -78,7 +78,9 @@ export interface RenderVideoClipRequest {
   rawPath: string;
   outputPath?: string | null;
   defaultName: string;
-  layout: "landscape" | "portrait_card" | "portrait_fill";
+  /** "frame" (with `frame`), or an older fixed layout. */
+  layout: "frame" | "landscape" | "portrait_card" | "portrait_fill";
+  frame?: { w: number; h: number; fit: "card" | "fill"; vx: number; vy: number; vw: number; vh: number; cropBox: boolean };
   cardBg: "blur" | "night" | "paper";
   cropX: number;
   duration: number;

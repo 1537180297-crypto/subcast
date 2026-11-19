@@ -10,8 +10,8 @@ import { buildPlatformPost, polishClipCopy, previewEpisodeRange, saveClipCopy, t
 import { t, tk, tr, tx, useLang } from "../lib/i18n";
 import { showName } from "../lib/picks";
 import { aiLineBreaks, textsToBreak } from "../lib/clipLines";
-import { buildClipCues, canvasDimensions, canvasToPngBase64, renderCueBand, renderStaticOverlay, type CardBg, type ClipLayout, type ClipVisualConfig, type SubStyleId } from "../lib/videoClipCanvas";
-import { renderCoverCanvas, type CoverAspect, type CoverTemplateId } from "../lib/videoCoverCanvas";
+import { buildClipCues, canvasToPngBase64, clipGeometry, fromOldLayout, renderCueBand, renderStaticOverlay, type CardBg, type CardCrop, type ClipAspect, type ClipFit, type ClipLayout, type ClipVisualConfig, type SubStyleId } from "../lib/videoClipCanvas";
+import { renderCoverCanvas, subjectCenterX, type CoverAspect, type CoverTemplateId } from "../lib/videoCoverCanvas";
 import { type SubContent } from "../lib/subexport";
 import { useStore } from "../store";
 import { Modal } from "./Chrome";
@@ -39,7 +39,13 @@ type CoverMode = "flash" | "hold" | "none";
 type SideTab = "clip" | "cover" | "copy";
 
 interface ClipPrefs {
+  /** Before aspect/fit (read once). */
   layout?: ClipLayout;
+  aspect?: ClipAspect;
+  fit?: ClipFit;
+  cardCrop?: CardCrop;
+  brandText?: string;
+  watermark?: boolean;
   cardBg?: CardBg;
   subStyle?: SubStyleId;
   subLang?: SubContent;
@@ -66,11 +72,15 @@ const SUB_STYLES: { id: SubStyleId; name: string; swatchBg: string; swatchFg: st
   { id: "pill", name: tk("暗底胶囊"), swatchBg: "#2c2e35", swatchFg: "#f5f5f5" },
 ];
 
-const COVER_TEMPLATES: { id: CoverTemplateId; name: string; bg: string; fg: string; accent: string }[] = [
-  { id: "impact", name: tk("暗幕金句"), bg: "#17171b", fg: "#ffffff", accent: "#ffd866" },
-  { id: "magazine", name: tk("杂志大字"), bg: "#faf7f2", fg: "#18181b", accent: "#d9481a" },
-  { id: "marker", name: tk("荧光重点"), bg: "#1a1a1f", fg: "#141416", accent: "#facc15" },
-  { id: "cinema", name: tk("电影画报"), bg: "#141315", fg: "#f5f2eb", accent: "#f59e0b" },
+const COVER_TEMPLATES: { id: CoverTemplateId; name: string }[] = [
+  { id: "impact", name: tk("暗幕金句") },
+  { id: "marker", name: tk("荧光重点") },
+  { id: "split", name: tk("上图下字") },
+  { id: "bold", name: tk("大字报") },
+  { id: "quote", name: tk("金句卡") },
+  { id: "magazine", name: tk("杂志大字") },
+  { id: "cinema", name: tk("电影画报") },
+  { id: "minimal", name: tk("极简") },
 ];
 
 const DOWNLOADS_DIR = /^.*\/(Downloads|下载)\//; // i18n-ignore
@@ -81,6 +91,8 @@ interface PreparedState {
   end: number;
   duration: number;
   hasBurnedSubtitles: boolean;
+  width: number;
+  height: number;
   frames: string[];
   bestFrame: number;
 }
@@ -109,9 +121,16 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const [padBefore, setPadBefore] = useState(0.25);
   const [padAfter, setPadAfter] = useState(0.4);
 
-  const [layout, setLayout] = useState<ClipLayout>(() => prefs.layout ?? "portrait_card");
+  const [aspect, setAspect] = useState<ClipAspect>(() => prefs.aspect ?? fromOldLayout(prefs.layout).aspect);
+  const [fit, setFit] = useState<ClipFit>(() => prefs.fit ?? fromOldLayout(prefs.layout).fit);
+  const [brandText, setBrandText] = useState(() => prefs.brandText ?? "");
+  const [watermark, setWatermark] = useState(() => prefs.watermark ?? true);
   const [cardBg, setCardBg] = useState<CardBg>(() => prefs.cardBg ?? "blur");
-  const [cropX, setCropX] = useState(0.5);
+  const [cardCrop, setCardCrop] = useState<CardCrop>(() => prefs.cardCrop ?? "4:3");
+  const [cropX, setCropXRaw] = useState(0.5);
+  // Framing follows the speaker (found in the clip's best frame) until the user moves it.
+  const cropTouched = useRef(false);
+  const setCropX = (v: number) => { cropTouched.current = true; setCropXRaw(v); };
   const [subStyle, setSubStyle] = useState<SubStyleId>(() => prefs.subStyle ?? "cinema");
   const [subLang, setSubLang] = useState<SubContent>(() => (hasZh ? (prefs.subLang ?? "bilingual") : "original"));
   const [showTitle, setShowTitle] = useState(() => prefs.showTitle ?? true);
@@ -159,7 +178,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
 
   useEffect(() => {
     savePrefs({
-      layout,
+      aspect,
+      fit,
+      cardCrop,
+      brandText,
+      watermark,
       cardBg,
       subStyle,
       subLang,
@@ -171,7 +194,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       saveCoverSidecar,
       extraLandscapeCover,
     });
-  }, [layout, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover]);
+  }, [aspect, fit, cardCrop, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover]);
 
   useEffect(() => {
     if (!busyJob) return;
@@ -199,9 +222,19 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     [segments, zh, zhEdits],
   );
 
-  const addSubs = addSubsPick ?? !prepared?.hasBurnedSubtitles;
+  // A filled frame crops the source's own subtitles off the sides, so ours go on there.
+  const addSubs = addSubsPick ?? !(prepared?.hasBurnedSubtitles && fit === "card");
   // Short subtitle lines: split here at once, then the model's punctuated breaks replace them when they arrive.
-  const maxCjk = layout === "landscape" ? 18 : 14;
+  // The picture's size is known once the stretch is fetched; YouTube is 16:9 until then.
+  const geo = useMemo(() => clipGeometry(aspect, fit, prepared?.width || 1920, prepared?.height || 1080, cardCrop), [aspect, fit, cardCrop, prepared?.width, prepared?.height]);
+  useEffect(() => {
+    const src = prepared?.frames[prepared.bestFrame];
+    if (!src || cropTouched.current) return;
+    const img = new Image();
+    img.onload = () => { if (!cropTouched.current) setCropXRaw(subjectCenterX(img, prepared?.hasBurnedSubtitles ? 0.2 : 0)); };
+    img.src = src;
+  }, [prepared?.frames, prepared?.bestFrame]); // eslint-disable-line react-hooks/exhaustive-deps
+  const maxCjk = geo.W > geo.H ? 18 : 14;
   const [lineBreaks, setLineBreaks] = useState<Record<number, string[]>>({});
   useEffect(() => { setLineBreaks({}); }, [maxCjk, subLang]);
   useEffect(() => {
@@ -220,7 +253,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   );
 
   const visualConfig: ClipVisualConfig = useMemo(() => ({
-    layout,
+    geo,
     cardBg,
     subStyle,
     subLang,
@@ -229,8 +262,10 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     showSource,
     showName: showDisplay,
     episodeTitle: ep.title,
+    brandText,
+    watermark,
     liftForBurnedSub: liftBurned,
-  }), [layout, cardBg, subStyle, subLang, showTitle, title, showSource, showDisplay, ep.title, liftBurned]);
+  }), [geo, cardBg, subStyle, subLang, showTitle, title, showSource, showDisplay, ep.title, brandText, watermark, liftBurned]);
 
   const staticOverlayUrl = useMemo(() => {
     const c = renderStaticOverlay(visualConfig);
@@ -250,18 +285,19 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const cueBandPreview = useMemo(() => {
     if (!currentCue) return null;
     const band = renderCueBand(currentCue, visualConfig);
-    const { height } = canvasDimensions(layout);
+    const height = geo.H;
     return {
       url: band.canvas.toDataURL("image/png"),
       topPct: (band.y / height) * 100,
     };
-  }, [currentCue, visualConfig, layout]);
+  }, [currentCue, visualConfig, geo.H]);
 
   const posterBackdrop = ep.cover || (ep.videoId ? `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg` : undefined);
   const preparedValid = !!prepared && Math.abs(prepared.start - clipStart) < 0.08 && Math.abs(prepared.end - clipEnd) < 0.08;
   const activeFrameIdx = selectedFrame != null && prepared?.frames[selectedFrame] ? selectedFrame : (prepared?.bestFrame ?? 0);
   const activeCoverBackdrop = (prepared?.frames[activeFrameIdx]) || posterBackdrop || null;
-  const effectiveCoverAspect: CoverAspect = coverAspectPv === "auto" ? (layout === "landscape" ? "16:9" : "9:16") : coverAspectPv;
+  const videoCoverAspect: CoverAspect = geo.W > geo.H ? "16:9" : aspect === "9:16" || (aspect === "source" && geo.H / geo.W > 1.5) ? "9:16" : aspect === "1:1" ? "1:1" : "3:4";
+  const effectiveCoverAspect: CoverAspect = coverAspectPv === "auto" ? videoCoverAspect : coverAspectPv;
 
   useEffect(() => {
     let live = true;
@@ -274,11 +310,31 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       showName: showDisplay,
       durationSec: clipDur,
       backdropUrl: activeCoverBackdrop,
+      brand: brandText, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
     }).then((c) => {
       if (live) setCoverPreviewUrl(c.toDataURL("image/png"));
     }).catch(() => {});
     return () => { live = false; };
-  }, [coverTpl, effectiveCoverAspect, coverHook, coverSub, coverKicker, showDisplay, clipDur, activeCoverBackdrop]);
+  }, [coverTpl, effectiveCoverAspect, coverHook, coverSub, coverKicker, showDisplay, clipDur, activeCoverBackdrop, brandText]);
+
+  // Real previews of every style with this clip's words and picture (only while the cover tab is open).
+  const [tplThumbs, setTplThumbs] = useState<Partial<Record<CoverTemplateId, string>>>({});
+  useEffect(() => {
+    if (sideTab !== "cover") return;
+    let live = true;
+    const timer = window.setTimeout(async () => {
+      for (const tpl of COVER_TEMPLATES) {
+        const c = await renderCoverCanvas({ template: tpl.id, aspect: "3:4", hookTitle: coverHook, subTitle: "", kicker: coverKicker, showName: showDisplay, durationSec: 0, backdropUrl: activeCoverBackdrop, brand: brandText, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0 });
+        if (!live) return;
+        const small = document.createElement("canvas");
+        small.width = 180; small.height = 240;
+        small.getContext("2d")!.drawImage(c, 0, 0, 180, 240);
+        const url = small.toDataURL("image/jpeg", 0.82);
+        setTplThumbs((p) => ({ ...p, [tpl.id]: url }));
+      }
+    }, 350);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [sideTab, coverHook, coverKicker, showDisplay, activeCoverBackdrop, brandText]);
 
   const generatedPost = useMemo(
     () => buildPlatformPost(postPlatform, {
@@ -320,6 +376,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         end: clipEnd,
         duration: res.duration || clipDur,
         hasBurnedSubtitles: res.hasBurnedSubtitles,
+        width: res.width,
+        height: res.height,
         frames: res.frames ?? [],
         bestFrame: res.bestFrame ?? 0,
       };
@@ -379,6 +437,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         showName: showDisplay,
         durationSec: clipDur,
         backdropUrl: activeCoverBackdrop,
+      brand: brandText, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
       });
       const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
       if (!blob) throw new Error("blob");
@@ -401,6 +460,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         showName: showDisplay,
         durationSec: clipDur,
         backdropUrl: activeCoverBackdrop,
+      brand: brandText, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
       });
       const safeTitle = (title.trim() || ep.title).replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").trim().slice(0, 50);
       const name = `${safeTitle || t("SubCast 切片")}-${t("封面")}-${targetAspect.replace(":", "x")}`;
@@ -434,18 +494,21 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     const jobId = `vclip-render-${Date.now()}`;
     setBusyJob({ id: jobId, stage: "render", progress: 0.05, message: t("正在生成封面与双语字幕图层…") });
     try {
-      const staticCanvas = renderStaticOverlay(visualConfig);
+      const staticCanvas = renderStaticOverlay({ ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop) });
       const staticOverlayPng = staticCanvas ? canvasToPngBase64(staticCanvas) : null;
       // Decided again from what preparing found: an export started before any preview still skips doubled subtitles.
-      const exportCues = (addSubsPick ?? !prep.hasBurnedSubtitles) ? (cues.length ? cues : buildClipCues(effectiveSegments, effectiveZh, startIdx, endIdx, clipStart, clipEnd, subLang, lineBreaks, maxCjk)) : [];
+      const exportCues = (addSubsPick ?? !(prep.hasBurnedSubtitles && fit === "card")) ? (cues.length ? cues : buildClipCues(effectiveSegments, effectiveZh, startIdx, endIdx, clipStart, clipEnd, subLang, lineBreaks, maxCjk)) : [];
+      // The fetched picture's real size decides the layout (an export can start before any preview).
+      const exportConfig: ClipVisualConfig = { ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop) };
+      const eg = exportConfig.geo;
       const renderedCues = exportCues.map((cue) => {
-        const band = renderCueBand(cue, visualConfig);
+        const band = renderCueBand(cue, exportConfig);
         return { start: cue.start, end: cue.end, y: band.y, pngBase64: canvasToPngBase64(band.canvas) };
       });
 
       const bestIdx = selectedFrame != null && prep.frames[selectedFrame] ? selectedFrame : prep.bestFrame;
       const backdropForExport = prep.frames[bestIdx] || posterBackdrop || null;
-      const mainAspect: CoverAspect = layout === "landscape" ? "16:9" : "9:16";
+      const mainAspect: CoverAspect = videoCoverAspect;
       const needMainCover = coverMode !== "none" || embedThumbnail || saveCoverSidecar;
 
       let coverPng: string | null = null;
@@ -459,12 +522,13 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           showName: showDisplay,
           durationSec: prep.duration,
           backdropUrl: backdropForExport,
+          brand: brandText, cropBottom: prep.hasBurnedSubtitles ? 0.2 : 0,
         });
         coverPng = canvasToPngBase64(coverCanvas);
       }
 
       let landscapeCoverPng: string | null = null;
-      if (layout !== "landscape" && saveCoverSidecar && extraLandscapeCover) {
+      if (mainAspect !== "16:9" && saveCoverSidecar && extraLandscapeCover) {
         const landCanvas = await renderCoverCanvas({
           template: coverTpl,
           aspect: "16:9",
@@ -474,6 +538,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           showName: showDisplay,
           durationSec: prep.duration,
           backdropUrl: backdropForExport,
+          brand: brandText, cropBottom: prep.hasBurnedSubtitles ? 0.2 : 0,
         });
         landscapeCoverPng = canvasToPngBase64(landCanvas);
       }
@@ -482,7 +547,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         rawPath: prep.path,
         outputPath: customPath,
         defaultName,
-        layout,
+        layout: "frame",
+        frame: { w: eg.W, h: eg.H, fit: eg.fit, vx: eg.video.x, vy: eg.video.y, vw: eg.video.w, vh: eg.video.h, cropBox: eg.cropBox },
         cardBg,
         cropX,
         duration: prep.duration,
@@ -519,14 +585,15 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     else v.pause();
   };
 
-  const stageBgClass =
-    layout === "portrait_card"
-      ? cardBg === "paper"
-        ? "bg-paper"
-        : cardBg === "night"
-          ? "bg-night"
-          : "bg-blur"
-      : "bg-dark";
+  const card = geo.fit === "card";
+  const stageBgClass = card ? (cardBg === "paper" ? "bg-paper" : cardBg === "night" ? "bg-night" : "bg-blur") : "bg-dark";
+  // The preview places the picture with the same geometry the export uses.
+  const stageStyle = { aspectRatio: `${geo.W} / ${geo.H}` } as React.CSSProperties;
+  const boxStyle: React.CSSProperties = {
+    left: `${(geo.video.x / geo.W) * 100}%`, top: `${(geo.video.y / geo.H) * 100}%`,
+    width: `${(geo.video.w / geo.W) * 100}%`, height: `${(geo.video.h / geo.H) * 100}%`,
+  };
+  const mediaStyle: React.CSSProperties | undefined = card && !geo.cropBox ? { objectFit: "contain" } : { objectFit: "cover", objectPosition: `${cropX * 100}% center` };
 
   return (
     <Modal title={t("双语视频切片")} onClose={closeVideoClipDialog} wide>
@@ -542,7 +609,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
             {pvView === "cover" && (
               <Seg
                 value={coverAspectPv}
-                options={[["auto", t("随视频")], ["3:4", "3:4"], ["16:9", "16:9"]]}
+                options={[["auto", t("随视频")], ["9:16", "9:16"], ["3:4", "3:4"], ["1:1", "1:1"], ["16:9", "16:9"]]}
                 onChange={setCoverAspectPv}
               />
             )}
@@ -555,11 +622,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 : <div className="poster-wait"><Loader2 size={16} className="spin" /> {t("正在生成封面…")}</div>}
             </div>
           ) : (
-            <div className={`vclip-stage ${layout === "landscape" ? "is-land" : "is-port"} ${stageBgClass}`}>
-              {layout === "portrait_card" && cardBg === "blur" && posterBackdrop && (
+            <div className={`vclip-stage ${geo.W > geo.H ? "is-land" : "is-port"} ${stageBgClass}`} style={stageStyle}>
+              {card && cardBg === "blur" && posterBackdrop && (
                 <img src={posterBackdrop} alt="" className="vclip-blur-bg" />
               )}
-              <div className={`vclip-video-box ${layout === "portrait_card" ? (cardBg === "blur" ? "card-blur" : "card-solid") : ""}`}>
+              <div className="vclip-video-box" style={boxStyle}>
                 {preparedValid && prepared ? (
                   <video
                     ref={videoRef}
@@ -567,7 +634,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     loop
                     playsInline
                     muted={pvMuted}
-                    style={layout === "portrait_fill" ? { objectPosition: `${cropX * 100}% center` } : undefined}
+                    style={mediaStyle}
                     onTimeUpdate={(e) => setPvTime(e.currentTarget.currentTime)}
                     onPlay={() => {
                       setPvPlaying(true);
@@ -583,7 +650,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                       <img
                         src={posterBackdrop}
                         alt=""
-                        style={layout === "portrait_fill" ? { objectPosition: `${cropX * 100}% center` } : undefined}
+                        style={mediaStyle}
                       />
                     )}
                     <button type="button" className="vclip-load-btn" disabled={!!busyJob}>
@@ -711,12 +778,32 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <div className="reading-row">
                   <span>{t("画面比例")}</span>
                   <Seg
-                    value={layout}
-                    options={[["portrait_card", t("9:16 卡片")], ["landscape", t("16:9 原画")], ["portrait_fill", t("9:16 满屏")]]}
-                    onChange={setLayout}
+                    value={aspect}
+                    options={[["source", t("原视频")], ["9:16", "9:16"], ["3:4", "3:4"], ["1:1", "1:1"], ["16:9", "16:9"]]}
+                    onChange={setAspect}
                   />
                 </div>
-                {layout === "portrait_card" && (
+                {(aspect !== "source" && Math.abs(geo.W / geo.H - (prepared?.width || 1920) / (prepared?.height || 1080)) > 0.03) && (
+                  <div className="reading-row">
+                    <span>{t("画面放法")}</span>
+                    <Seg
+                      value={fit}
+                      options={[["card", t("完整画面")], ["fill", t("铺满裁切")]]}
+                      onChange={setFit}
+                    />
+                  </div>
+                )}
+                {card && (
+                  <div className="reading-row">
+                    <span>{t("画面裁成")}</span>
+                    <Seg
+                      value={cardCrop}
+                      options={[["none", t("完整")], ["4:3", "4:3"], ["1:1", "1:1"]]}
+                      onChange={setCardCrop}
+                    />
+                  </div>
+                )}
+                {card && (
                   <div className="reading-row">
                     <span>{t("卡片底色")}</span>
                     <Seg
@@ -726,7 +813,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     />
                   </div>
                 )}
-                {layout === "portrait_fill" && (
+                {((!card && aspect !== "source") || geo.cropBox) && (
                   <div className="reading-row">
                     <span>{t("水平取景")}</span>
                     <div className="vclip-crop-row">
@@ -759,13 +846,15 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <div className="vclip-toggles">
                   <label><input type="checkbox" checked={showTitle} onChange={(e) => setShowTitle(e.target.checked)} /> {t("顶部金句标题")}</label>
                   <label><input type="checkbox" checked={showSource} onChange={(e) => setShowSource(e.target.checked)} /> {t("节目出处")}</label>
-                  {layout === "landscape" && addSubs && prepared?.hasBurnedSubtitles && (
+                  <label><input type="checkbox" checked={watermark} onChange={(e) => setWatermark(e.target.checked)} /> {t("SubCast 水印")}</label>
+                  {!card && addSubs && prepared?.hasBurnedSubtitles && (
                     <label><input type="checkbox" checked={liftBurned} onChange={(e) => setLiftBurned(e.target.checked)} /> {t("避让原字幕")}</label>
                   )}
                 </div>
                 {showTitle && (
                   <input className="vclip-title-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("输入切片顶部金句标题")} />
                 )}
+                <input className="vclip-title-input" value={brandText} onChange={(e) => setBrandText(e.target.value)} placeholder={t("底部署名（可选），如你的账号名或品牌")} />
               </section>
             </>
           )}
@@ -780,9 +869,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <div className="vclip-tpl-grid">
                   {COVER_TEMPLATES.map((tpl) => (
                     <button key={tpl.id} type="button" className={`vclip-tpl-btn ${coverTpl === tpl.id ? "on" : ""}`} onClick={() => setCoverTpl(tpl.id)}>
-                      <span className="vclip-tpl-swatch" style={{ background: tpl.bg }}>
-                        <b style={{ color: tpl.id === "marker" ? "#ffffff" : (tpl.id === "magazine" ? "#18181b" : tpl.fg) }}>{t("金")}</b>
-                        <i style={{ background: tpl.accent }} />
+                      <span className="vclip-tpl-swatch">
+                        {tplThumbs[tpl.id] ? <img src={tplThumbs[tpl.id]} alt="" /> : <Loader2 size={12} className="spin muted" />}
                       </span>
                       <span>{t(tpl.name)}</span>
                     </button>
@@ -843,7 +931,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <div className="vclip-toggles">
                   <label><input type="checkbox" checked={embedThumbnail} onChange={(e) => setEmbedThumbnail(e.target.checked)} /> {t("内嵌视频缩略图")}</label>
                   <label><input type="checkbox" checked={saveCoverSidecar} onChange={(e) => setSaveCoverSidecar(e.target.checked)} /> {t("同目录保存封面 PNG")}</label>
-                  {layout !== "landscape" && saveCoverSidecar && (
+                  {videoCoverAspect !== "16:9" && saveCoverSidecar && (
                     <label><input type="checkbox" checked={extraLandscapeCover} onChange={(e) => setExtraLandscapeCover(e.target.checked)} /> {t("附带 16:9 横版封面（公众号/B站）")}</label>
                   )}
                 </div>

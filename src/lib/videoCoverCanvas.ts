@@ -1,9 +1,9 @@
-// Viral cover renderer (4 templates × 9:16 / 16:9 / 3:4) with `【keyword】` highlight tokens.
+// Share covers: 8 styles at any of 9:16 / 3:4 / 1:1 / 16:9, with `【keyword】` highlighting. Everything is sized
+// from the canvas, so a style looks the same at every aspect. No product branding: the footer is the user's own.
 import { clock } from "./format";
-import { t } from "./i18n";
 
-export type CoverTemplateId = "impact" | "magazine" | "marker" | "cinema";
-export type CoverAspect = "9:16" | "16:9" | "3:4";
+export type CoverTemplateId = "impact" | "marker" | "split" | "bold" | "quote" | "magazine" | "cinema" | "minimal";
+export type CoverAspect = "9:16" | "16:9" | "3:4" | "1:1";
 
 export interface CoverConfig {
   template: CoverTemplateId;
@@ -14,6 +14,10 @@ export interface CoverConfig {
   showName: string;
   durationSec: number;
   backdropUrl?: string | null;
+  /** The user's own footer (an account or brand name); nothing when empty. */
+  brand?: string;
+  /** Share of the picture's bottom to leave out (burned-in subtitles there). */
+  cropBottom?: number;
 }
 
 const SANS = '-apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif';
@@ -23,6 +27,7 @@ const NO_START = /^[，。、：；！？）」』》”’,.;:!?)\]…—]/;
 export function coverDimensions(aspect: CoverAspect): { width: number; height: number } {
   if (aspect === "16:9") return { width: 1920, height: 1080 };
   if (aspect === "3:4") return { width: 1080, height: 1440 };
+  if (aspect === "1:1") return { width: 1080, height: 1080 };
   return { width: 1080, height: 1920 };
 }
 
@@ -115,19 +120,22 @@ function drawCoverImage(
   dw: number,
   dh: number,
   focusY = 0.42,
+  cropBottom = 0,
+  focusX = 0.5,
 ) {
   const sw = img.naturalWidth || 1280;
-  const sh = img.naturalHeight || 720;
+  const sh = (img.naturalHeight || 720) * (1 - cropBottom);
   const scale = Math.max(dw / sw, dh / sh);
   const rw = sw * scale;
   const rh = sh * scale;
-  const ox = dx + (dw - rw) / 2;
+  // Centred on the subject when the picture is wider than the box, without showing past its edges.
+  const ox = rw > dw ? Math.min(dx, Math.max(dx + dw - rw, dx + dw / 2 - rw * focusX)) : dx + (dw - rw) / 2;
   const oy = dy + (dh - rh) * focusY;
   g.save();
   g.beginPath();
   g.rect(dx, dy, dw, dh);
   g.clip();
-  g.drawImage(img, ox, oy, rw, rh);
+  g.drawImage(img, 0, 0, sw, sh, ox, oy, rw, rh);
   g.restore();
 }
 
@@ -215,233 +223,381 @@ function drawFallbackBackdrop(g: CanvasRenderingContext2D, W: number, H: number)
   g.fillRect(0, 0, W, H);
 }
 
-/** Renders a share-ready viral cover canvas for the configured template and aspect ratio. */
+
+/** Chinese system fonts stop at semibold: a same-colour outline gives poster weight. */
+function heavy(g: CanvasRenderingContext2D, size: number) {
+  g.lineJoin = "round";
+  g.lineWidth = Math.max(1, size * 0.045);
+}
+
+/** A rich line drawn heavy: fill plus a same-colour stroke per run, optional dark outline under it. */
+function drawHeavyLine(
+  g: CanvasRenderingContext2D, tokens: RichToken[], x: number, y: number, size: number,
+  ink: string, hot: string, opts: { outline?: string; outlineW?: number; marker?: string; markerInk?: string } = {},
+) {
+  let cx = x;
+  let i = 0;
+  while (i < tokens.length) {
+    let j = i, run = "";
+    const hi = tokens[i].hi;
+    while (j < tokens.length && tokens[j].hi === hi) { run += tokens[j].text; j++; }
+    const w = g.measureText(run).width;
+    if (hi && opts.marker) {
+      const px = Math.round(size * 0.16);
+      g.save();
+      g.shadowColor = "transparent";
+      g.fillStyle = opts.marker;
+      roundRect(g, cx, y - size * 0.92, w + px * 2, size * 1.16, size * 0.14);
+      g.fill();
+      g.fillStyle = opts.markerInk ?? "#141416";
+      g.strokeStyle = opts.markerInk ?? "#141416";
+      heavy(g, size);
+      g.strokeText(run, cx + px, y);
+      g.fillText(run, cx + px, y);
+      g.restore();
+      cx += w + px * 2;
+    } else {
+      const color = hi ? hot : ink;
+      if (opts.outline) {
+        g.save();
+        g.shadowColor = "transparent";
+        g.lineJoin = "round";
+        g.lineWidth = opts.outlineW ?? size * 0.16;
+        g.strokeStyle = opts.outline;
+        g.strokeText(run, cx, y);
+        g.restore();
+      }
+      g.fillStyle = color;
+      g.strokeStyle = color;
+      heavy(g, size);
+      g.strokeText(run, cx, y);
+      g.fillText(run, cx, y);
+      cx += w;
+    }
+    i = j;
+  }
+}
+
+/** The biggest size (from `max` down) at which `text` fits in `lines` lines of `maxW`. */
+function fitTitle(g: CanvasRenderingContext2D, text: string, font: (s: number) => string, maxW: number, lines: number, max: number, min: number): { size: number; rows: RichToken[][] } {
+  // Phrases (split after punctuation outside 【】) each start a line when that still fits: titles read in
+  // sense groups instead of breaking wherever the width runs out.
+  const phrases: string[] = [];
+  let cur = "", depth = 0;
+  for (const ch of text) {
+    cur += ch;
+    if (ch === "【") depth++;
+    if (ch === "】") depth = Math.max(0, depth - 1);
+    if (!depth && /[，、：；！？,:;!?]/.test(ch)) { phrases.push(cur); cur = ""; }
+  }
+  if (cur.trim()) phrases.push(cur);
+  // A line of one or two characters (an orphaned "后，") reads as a mistake: a smaller size is better.
+  const ok = (rows: RichToken[][]) => rows.length <= lines && rows.every((r) => r.map((t) => t.text).join("").replace(/[\s，。、：；！？,.:;!?]/g, "").length >= 3);
+  // Sense groups are worth some size: they win down to 70% of the largest size before width-only breaking.
+  const byPhrase = (size: number) => { g.font = font(size); return phrases.flatMap((p) => wrapRichLines(g, p.trim(), maxW, lines + 1)); };
+  if (phrases.length > 1) {
+    for (let size = max; size >= Math.max(min, max * 0.7); size -= 2) { const rows = byPhrase(size); if (ok(rows)) return { size, rows }; }
+  }
+  for (let size = max; size >= min; size -= 2) {
+    g.font = font(size);
+    const rows = wrapRichLines(g, text, maxW, lines + 1);
+    if (ok(rows)) return { size, rows };
+  }
+  g.font = font(min);
+  return { size: min, rows: wrapRichLines(g, text, maxW, lines) };
+}
+
+function pill(g: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, bg: string, ink: string, align: "left" | "right" = "left") {
+  g.font = `600 ${size}px ${SANS}`;
+  const w = g.measureText(text).width + size * 1.2;
+  const h = size * 1.9;
+  const px = align === "right" ? x - w : x;
+  g.fillStyle = bg;
+  roundRect(g, px, y, w, h, h / 2);
+  g.fill();
+  g.fillStyle = ink;
+  g.fillText(text, px + size * 0.6, y + h * 0.66);
+  return w;
+}
+
+function shade(g: CanvasRenderingContext2D, W: number, y0: number, y1: number, from: string, to: string) {
+  const gr = g.createLinearGradient(0, y0, 0, y1);
+  gr.addColorStop(0, from);
+  gr.addColorStop(1, to);
+  g.fillStyle = gr;
+  g.fillRect(0, y0, W, y1 - y0);
+}
+
+const subjectCache = new Map<string, number>();
+
+/** Where the person is, left to right (0–1): the middle of skin-toned pixels in a small copy of the picture.
+ *  Talk shows put the speaker off centre, and a vertical crop of the middle would cut them in half. */
+export function subjectCenterX(img: HTMLImageElement, cropBottom = 0): number {
+  const key = `${img.src.slice(-64)}|${cropBottom}`;
+  const hit = subjectCache.get(key);
+  if (hit != null) return hit;
+  const w = 96, h = 54;
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d", { willReadFrequently: true })!;
+  g.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight * (1 - cropBottom), 0, 0, w, h);
+  let data: Uint8ClampedArray;
+  try { data = g.getImageData(0, 0, w, h).data; } catch { return 0.5; }
+  const cols = new Float64Array(w);
+  let total = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const r = data[i], gr = data[i + 1], b = data[i + 2];
+      // Skin in YCbCr (works across skin tones and most studio lighting).
+      const cb = 128 - 0.168736 * r - 0.331264 * gr + 0.5 * b;
+      const cr = 128 + 0.5 * r - 0.418688 * gr - 0.081312 * b;
+      const yy = 0.299 * r + 0.587 * gr + 0.114 * b;
+      if (yy > 50 && cb >= 77 && cb <= 127 && cr >= 135 && cr <= 173) { cols[x] += 1; total++; }
+    }
+  }
+  let res = 0.5;
+  if (total > w * h * 0.004) {
+    // The densest stretch of columns, not the mean (two people would average to the empty middle).
+    const win = Math.round(w * 0.22);
+    let best = -1, at = 0, run = 0;
+    for (let x = 0; x < w; x++) {
+      run += cols[x] - (x >= win ? cols[x - win] : 0);
+      if (x >= win - 1 && run > best) { best = run; at = x - win / 2 + 0.5; }
+    }
+    res = Math.min(0.95, Math.max(0.05, at / w));
+  }
+  subjectCache.set(key, res);
+  return res;
+}
+
+/** Renders a share-ready cover for the style and aspect. */
 export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvasElement> {
   const { width: W, height: H } = coverDimensions(config.aspect);
   const c = document.createElement("canvas");
   c.width = W;
   c.height = H;
   const g = c.getContext("2d")!;
+  g.textBaseline = "alphabetic";
   const img = await loadImageSafe(config.backdropUrl);
-  const isLand = config.aspect === "16:9";
-  const durText = `▶ ${clock(config.durationSec)}`;
-  const kickerText = (config.kicker || config.showName || t("播客高光切片")).trim();
-  const titleText = (config.hookTitle || t("精彩片段")).trim();
-  const subText = config.subTitle.trim();
-
-  if (config.template === "magazine") {
-    // Editorial Magazine: crisp top still + clean warm paper card bottom
-    const photoH = isLand ? Math.round(H * 0.56) : Math.round(H * 0.50);
-    g.fillStyle = "#faf7f2";
-    g.fillRect(0, 0, W, H);
-    if (img) drawCoverImage(g, img, 0, 0, W, photoH, 0.36);
-    else drawFallbackBackdrop(g, W, photoH);
-
-    // Subtle dark top pill for duration + SubCast mark
-    g.font = `600 ${isLand ? 24 : 26}px ${SANS}`;
-    const dw = g.measureText(durText).width + 32;
-    g.fillStyle = "rgba(18, 18, 22, 0.72)";
-    roundRect(g, W - 56 - dw, 48, dw, 46, 23);
-    g.fill();
-    g.fillStyle = "#ffffff";
-    g.fillText(durText, W - 56 - dw + 16, 48 + 31);
-
-    // Soft transition edge
-    const fade = g.createLinearGradient(0, photoH - 80, 0, photoH);
-    fade.addColorStop(0, "rgba(250,247,242,0)");
-    fade.addColorStop(1, "#faf7f2");
-    g.fillStyle = fade;
-    g.fillRect(0, photoH - 80, W, 80);
-
-    const padX = isLand ? 120 : 84;
-    const maxW = W - padX * 2;
-    let y = photoH + (isLand ? 58 : 74);
-
-    // Kicker badge (no vertical side bar!)
-    g.font = `700 ${isLand ? 24 : 28}px ${SANS}`;
-    g.fillStyle = "#d9481a";
-    g.fillText(kickerText.toUpperCase(), padX, y);
-    y += isLand ? 34 : 44;
-
-    const titleSize = isLand ? (titleText.length > 20 ? 58 : 68) : (titleText.length > 20 ? 64 : 76);
-    g.font = `800 ${titleSize}px ${SANS}`;
-    const lines = wrapRichLines(g, titleText, maxW, isLand ? 2 : 3);
-    const lineH = Math.round(titleSize * 1.26);
-    lines.forEach((ln) => {
-      y += lineH;
-      drawRichLine(g, ln, padX, y - lineH * 0.16, titleSize, "#18181b", "#d9481a");
-    });
-
-    if (subText) {
-      y += isLand ? 24 : 34;
-      const subSize = isLand ? 30 : 34;
-      g.font = `500 ${subSize}px ${SANS}`;
-      g.fillStyle = "#57534e";
-      wrapPlain(g, subText, maxW, 2).forEach((ln) => {
-        y += Math.round(subSize * 1.4);
-        g.fillText(ln, padX, y - subSize * 0.25);
-      });
-    }
-
-    // Bottom footer rule & SubCast attribution
-    const fy = H - (isLand ? 48 : 68);
-    g.fillStyle = "#e6e0d6";
-    g.fillRect(padX, fy - 48, maxW, 2);
-    g.font = `600 ${isLand ? 22 : 25}px ${SERIF}`;
-    g.fillStyle = "#78716c";
-    const footLeft = [config.showName, "SubCast"].filter(Boolean).join(" · ");
-    g.fillText(footLeft, padX, fy);
-    return c;
-  }
-
-  if (config.template === "cinema") {
-    // Cinema Poster: dark letterbox frame, centered sharp still, editorial gold highlight below
-    g.fillStyle = "#141315";
-    g.fillRect(0, 0, W, H);
-    const padX = isLand ? 120 : 72;
-    const frameW = W - padX * 2;
-    const frameTop = isLand ? 92 : Math.round(H * 0.14);
-    const frameH = isLand ? Math.round(H * 0.50) : Math.round(frameW * 9 / 16);
-
-    // Top masthead
-    g.font = `600 ${isLand ? 22 : 25}px ${SANS}`;
-    g.fillStyle = "rgba(255,255,255,0.68)";
-    g.fillText(kickerText, padX, frameTop - 26);
-    const dw = g.measureText(durText).width;
-    g.fillStyle = "#f59e0b";
-    g.fillText(durText, W - padX - dw, frameTop - 26);
-
-    if (img) drawCoverImage(g, img, padX, frameTop, frameW, frameH, 0.42);
-    else drawFallbackBackdrop(g, frameW, frameH);
-    g.strokeStyle = "rgba(255,255,255,0.12)";
-    g.lineWidth = 2;
-    g.strokeRect(padX, frameTop, frameW, frameH);
-
-    let y = frameTop + frameH + (isLand ? 42 : 76);
-    const titleSize = isLand ? (titleText.length > 20 ? 52 : 60) : (titleText.length > 20 ? 60 : 70);
-    g.font = `700 ${titleSize}px ${SERIF}`;
-    const lines = wrapRichLines(g, titleText, frameW, isLand ? 2 : 3);
-    const lineH = Math.round(titleSize * 1.32);
-    lines.forEach((ln) => {
-      y += lineH;
-      const lw = measureRichLine(g, ln, titleSize, false);
-      drawRichLine(g, ln, (W - lw) / 2, y - lineH * 0.16, titleSize, "#f5f2eb", "#fbbf24");
-    });
-
-    if (subText) {
-      y += isLand ? 16 : 28;
-      const subSize = isLand ? 26 : 32;
-      g.font = `400 ${subSize}px ${SANS}`;
-      g.fillStyle = "rgba(245,242,235,0.72)";
-      wrapPlain(g, subText, frameW, 2).forEach((ln) => {
-        y += Math.round(subSize * 1.45);
-        const lw = g.measureText(ln).width;
-        g.fillText(ln, (W - lw) / 2, y - subSize * 0.25);
-      });
-    }
-
-    g.font = `500 ${isLand ? 20 : 23}px ${SANS}`;
-    const brand = [config.showName, "SubCast · " + t("双语播客切片")].filter(Boolean).join(" · ");
-    const bw = g.measureText(brand).width;
-    g.fillStyle = "rgba(255,255,255,0.42)";
-    g.fillText(brand, (W - bw) / 2, H - (isLand ? 36 : 72));
-    return c;
-  }
-
-  // `impact` or `marker`: full-bleed still + dramatic gradient scrim + big centered/anchored headline
-  if (img) drawCoverImage(g, img, 0, 0, W, H, 0.38);
-  else drawFallbackBackdrop(g, W, H);
-
-  const isMarker = config.template === "marker";
-  const scrim = g.createLinearGradient(0, 0, 0, H);
-  scrim.addColorStop(0, "rgba(10,10,14,0.62)");
-  scrim.addColorStop(0.32, isMarker ? "rgba(10,10,14,0.34)" : "rgba(10,10,14,0.16)");
-  scrim.addColorStop(0.62, isMarker ? "rgba(10,10,14,0.58)" : "rgba(10,10,14,0.72)");
-  scrim.addColorStop(1, "rgba(10,10,14,0.94)");
-  g.fillStyle = scrim;
-  g.fillRect(0, 0, W, H);
-
-  const padX = isLand ? 130 : 78;
+  const subjectX = img ? subjectCenterX(img, config.cropBottom ?? 0) : 0.5;
+  const u = Math.min(W, H) / 1080;
+  const land = W > H * 1.2;
+  const tall = H > W * 1.5;
+  const dur = config.durationSec > 0 ? `▶ ${clock(config.durationSec)}` : "";
+  const kicker = (config.kicker || config.showName || "").trim();
+  const title = (config.hookTitle || "").trim() || " ";
+  const sub = config.subTitle.trim();
+  const brand = (config.brand ?? "").trim();
+  const padX = Math.round((land ? 110 : 76) * u);
   const maxW = W - padX * 2;
+  const titleLines = land ? 2 : tall ? 4 : 3;
+  // A wide canvas is measured by its short side: titles there get more room to stay prominent.
+  const fit = (text: string, font: (s: number) => string, width: number, lines: number, max: number, min: number) => fitTitle(g, text, font, width, lines, Math.round(max * (land ? 1.3 : 1)), Math.round(min * (land ? 1.2 : 1)));
+  const photo = (x: number, y: number, w: number, h: number, focus = 0.4) => { if (img) drawCoverImage(g, img, x, y, w, h, focus, config.cropBottom ?? 0, subjectX); else { g.save(); g.translate(x, y); drawFallbackBackdrop(g, w, h); g.restore(); } };
+  const footer = (color: string, y: number, align: "center" | "left" = "center") => {
+    const text = [brand, !brand ? config.showName : ""].filter(Boolean).join(" · ");
+    if (!text) return;
+    g.font = `500 ${Math.round(24 * u)}px ${SANS}`;
+    g.fillStyle = color;
+    const w = g.measureText(text).width;
+    g.fillText(text, align === "center" ? (W - w) / 2 : padX, y);
+  };
+  const subLines = (font: string, width: number) => { g.font = font; return sub ? wrapPlain(g, sub, width, 2) : []; };
 
-  // Top bar: kicker pill on left + duration pill on right
-  const topY = isLand ? 52 : 76;
-  g.font = `600 ${isLand ? 24 : 26}px ${SANS}`;
-  if (kickerText) {
-    const kw = Math.min(maxW - 180, g.measureText(kickerText).width);
-    g.fillStyle = "rgba(20,20,24,0.72)";
-    roundRect(g, padX, topY, kw + 36, 48, 24);
-    g.fill();
-    g.strokeStyle = "rgba(255,255,255,0.18)";
-    g.lineWidth = 1.5;
-    g.stroke();
-    g.fillStyle = "#ffd866";
-    g.fillText(kickerText, padX + 18, topY + 32, kw);
+  switch (config.template) {
+    case "split": {
+      // Picture on top, a solid colour block with a huge left-aligned title below (knowledge-account style).
+      const ph = Math.round(H * (land ? 1 : tall ? 0.5 : 0.52));
+      const bx = land ? Math.round(W * 0.5) : 0;
+      if (land) photo(0, 0, bx, H, 0.4); else photo(0, 0, W, ph, 0.38);
+      g.fillStyle = "#121214";
+      if (land) g.fillRect(bx, 0, W - bx, H); else g.fillRect(0, ph, W, H - ph);
+      const left = (land ? bx : 0) + padX;
+      const width = (land ? W - bx : W) - padX * 2;
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${SANS}`, width, land ? 3 : 4, Math.round((tall ? 112 : 96) * u), Math.round(56 * u));
+      const slPre = subLines(`500 ${Math.round(32 * u)}px ${SANS}`, width);
+      // The words sit in the middle of their block.
+      const blockH = (kicker ? Math.round(76 * u) : 0) + rows.length * Math.round(size * 1.22) + (slPre.length ? Math.round(24 * u) + slPre.length * Math.round(46 * u) : 0);
+      const areaTop = land ? 0 : ph, areaH = (land ? H : H - ph) - Math.round(90 * u);
+      let y = areaTop + Math.max(Math.round(50 * u), Math.round((areaH - blockH) / 2));
+      if (kicker) { pill(g, kicker, left, y, Math.round(24 * u), "#ffd23f", "#141416"); y += Math.round(76 * u); }
+      g.font = `700 ${size}px ${SANS}`;
+      rows.forEach((r) => { y += Math.round(size * 1.22); drawHeavyLine(g, r, left, y, size, "#ffffff", "#ffd23f"); });
+      const sl = subLines(`500 ${Math.round(32 * u)}px ${SANS}`, width);
+      y += Math.round(24 * u);
+      g.fillStyle = "rgba(255,255,255,0.66)";
+      sl.forEach((l) => { y += Math.round(46 * u); g.fillText(l, left, y); });
+      if (dur) pill(g, dur, W - padX, Math.round(40 * u), Math.round(22 * u), "rgba(0,0,0,0.55)", "#fff", "right");
+      footer("rgba(255,255,255,0.45)", H - Math.round(48 * u), land ? "left" : "center");
+      return c;
+    }
+    case "bold": {
+      // 大字报: full picture, huge white words with a thick black outline across the middle, keyword in yellow.
+      photo(0, 0, W, H, 0.38);
+      shade(g, W, 0, H, "rgba(0,0,0,0.12)", "rgba(0,0,0,0.32)");
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${SANS}`, maxW, titleLines, Math.round((land ? 120 : 118) * u), Math.round(64 * u));
+      g.font = `700 ${size}px ${SANS}`;
+      const lh = Math.round(size * 1.18);
+      // Lower half: the face stays visible above the words.
+      let y = Math.round(H * (land ? 0.52 : tall ? 0.64 : 0.6) - (rows.length * lh) / 2);
+      rows.forEach((r) => { y += lh; const w = measureRichLine(g, r, size, false); drawHeavyLine(g, r, (W - w) / 2, y, size, "#ffffff", "#ffe14d", { outline: "#111", outlineW: size * 0.2 }); });
+      const sl = subLines(`600 ${Math.round(36 * u)}px ${SANS}`, maxW);
+      if (sl.length) {
+        y += Math.round(30 * u);
+        sl.forEach((l) => {
+          g.font = `600 ${Math.round(36 * u)}px ${SANS}`;
+          const w = g.measureText(l).width + 36 * u;
+          y += Math.round(60 * u);
+          g.fillStyle = "rgba(0,0,0,0.72)";
+          roundRect(g, (W - w) / 2, y - 44 * u, w, 58 * u, 10 * u);
+          g.fill();
+          g.fillStyle = "#fff";
+          g.fillText(l, (W - w) / 2 + 18 * u, y);
+        });
+      }
+      if (kicker) pill(g, kicker, padX, Math.round(56 * u), Math.round(24 * u), "rgba(0,0,0,0.6)", "#ffe14d");
+      footer("rgba(255,255,255,0.8)", H - Math.round(60 * u));
+      return c;
+    }
+    case "quote": {
+      // 金句卡: paper card, the speaker's round portrait, a big quote mark and the line in serif, centred.
+      g.fillStyle = "#f4efe6";
+      g.fillRect(0, 0, W, H);
+      const r = Math.round((land ? 170 : tall ? 120 : 96) * u);
+      const left = padX;
+      const width = land ? W - padX * 3 - r * 2 : maxW;
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${SERIF}`, width, titleLines, Math.round((tall ? 96 : 80) * u), Math.round(48 * u));
+      const lh = Math.round(size * 1.38);
+      const sl = subLines(`400 ${Math.round(32 * u)}px ${SANS}`, width);
+      const markH = Math.round(110 * u);
+      const blockH = (land ? 0 : r * 2 + Math.round(60 * u)) + markH + rows.length * lh + (sl.length ? Math.round(30 * u) + sl.length * Math.round(48 * u) : 0);
+      let y = Math.max(Math.round(60 * u), Math.round((H - Math.round(140 * u) - blockH) / 2));
+      const cx = land ? W - padX - r : W / 2;
+      const cy = land ? H / 2 : y + r;
+      if (img) {
+        g.save();
+        g.beginPath();
+        g.arc(cx, cy, r, 0, Math.PI * 2);
+        g.clip();
+        drawCoverImage(g, img, cx - r, cy - r, r * 2, r * 2, 0.25, config.cropBottom ?? 0, subjectX);
+        g.restore();
+      }
+      if (!land) y += r * 2 + Math.round(60 * u);
+      g.font = `700 ${Math.round(160 * u)}px ${SERIF}`;
+      g.fillStyle = "#d9480f";
+      g.fillText("“", left - 8 * u, y + Math.round(120 * u));
+      y += markH;
+      g.font = `700 ${size}px ${SERIF}`;
+      rows.forEach((row) => { y += lh; drawRichLine(g, row, left, y - lh * 0.2, size, "#18181b", "#d9480f"); });
+      y += Math.round(30 * u);
+      g.font = `400 ${Math.round(32 * u)}px ${SANS}`;
+      g.fillStyle = "#57534e";
+      sl.forEach((l) => { y += Math.round(48 * u); g.fillText(l, left, y); });
+      g.fillStyle = "rgba(24,24,27,0.16)";
+      g.fillRect(left, H - Math.round(118 * u), Math.round(80 * u), Math.max(2, 3 * u));
+      g.font = `600 ${Math.round(26 * u)}px ${SANS}`;
+      g.fillStyle = "#3f3f46";
+      g.fillText(kicker, left, H - Math.round(70 * u));
+      if (brand) { g.font = `500 ${Math.round(24 * u)}px ${SANS}`; g.fillStyle = "#78716c"; const w = g.measureText(brand).width; g.fillText(brand, W - padX - w, H - Math.round(70 * u)); }
+      return c;
+    }
+    case "magazine": {
+      const ph = Math.round(H * (land ? 0.6 : 0.52));
+      g.fillStyle = "#faf7f2";
+      g.fillRect(0, 0, W, H);
+      photo(0, 0, W, ph, 0.36);
+      shade(g, W, ph - 90 * u, ph, "rgba(250,247,242,0)", "#faf7f2");
+      if (dur) pill(g, dur, W - padX, Math.round(44 * u), Math.round(22 * u), "rgba(18,18,22,0.72)", "#fff", "right");
+      let y = ph + Math.round((land ? 40 : 64) * u);
+      g.font = `700 ${Math.round(26 * u)}px ${SANS}`;
+      g.fillStyle = "#d9481a";
+      if (kicker) { g.fillText(kicker, padX, y); y += Math.round(20 * u); }
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${SANS}`, maxW, land ? 2 : 3, Math.round(82 * u), Math.round(52 * u));
+      g.font = `700 ${size}px ${SANS}`;
+      rows.forEach((r) => { y += Math.round(size * 1.24); drawHeavyLine(g, r, padX, y, size, "#18181b", "#d9481a"); });
+      const sl = subLines(`500 ${Math.round(32 * u)}px ${SANS}`, maxW);
+      y += Math.round(18 * u);
+      g.fillStyle = "#57534e";
+      sl.forEach((l) => { y += Math.round(46 * u); g.fillText(l, padX, y); });
+      g.fillStyle = "#e6e0d6";
+      g.fillRect(padX, H - Math.round(100 * u), maxW, Math.max(2, 2 * u));
+      footer("#78716c", H - Math.round(54 * u), "left");
+      return c;
+    }
+    case "cinema": {
+      g.fillStyle = "#121113";
+      g.fillRect(0, 0, W, H);
+      const fw = W - padX * 2;
+      const fh = Math.round(land ? H * 0.52 : (fw * 9) / 16);
+      const top = Math.round(land ? 96 * u : H * (tall ? 0.16 : 0.12));
+      g.font = `600 ${Math.round(24 * u)}px ${SANS}`;
+      g.fillStyle = "rgba(255,255,255,0.66)";
+      if (kicker) g.fillText(kicker, padX, top - 26 * u);
+      if (dur) { const dw = g.measureText(dur).width; g.fillStyle = "#f5a623"; g.fillText(dur, W - padX - dw, top - 26 * u); }
+      photo(padX, top, fw, fh, 0.42);
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${SERIF}`, fw, titleLines, Math.round((tall ? 92 : 80) * u), Math.round(48 * u));
+      const slPre = subLines(`400 ${Math.round(30 * u)}px ${SANS}`, fw);
+      const blockH = rows.length * Math.round(size * 1.32) + (slPre.length ? Math.round(16 * u) + slPre.length * Math.round(44 * u) : 0);
+      const below = H - (top + fh) - Math.round(100 * u);
+      let y = top + fh + Math.max(Math.round((land ? 20 : 50) * u), Math.round((below - blockH) / 2));
+      g.font = `700 ${size}px ${SERIF}`;
+      rows.forEach((r) => { y += Math.round(size * 1.32); const w = measureRichLine(g, r, size, false); drawRichLine(g, r, (W - w) / 2, y, size, "#f5f2eb", "#fbbf24"); });
+      const sl = subLines(`400 ${Math.round(30 * u)}px ${SANS}`, fw);
+      y += Math.round(16 * u);
+      g.fillStyle = "rgba(245,242,235,0.7)";
+      sl.forEach((l) => { y += Math.round(44 * u); g.fillText(l, (W - g.measureText(l).width) / 2, y); });
+      footer("rgba(255,255,255,0.4)", H - Math.round(54 * u));
+      return c;
+    }
+    case "minimal": {
+      // Quiet: the picture, a soft bottom shade, a modest serif title bottom-left.
+      photo(0, 0, W, H, 0.4);
+      shade(g, W, H * 0.45, H, "rgba(0,0,0,0)", "rgba(0,0,0,0.78)");
+      const { size, rows } = fit(title, (s) => `600 ${s}px ${SERIF}`, maxW, land ? 2 : 3, Math.round(84 * u), Math.round(48 * u));
+      g.font = `600 ${size}px ${SERIF}`;
+      const sl = subLines(`400 ${Math.round(28 * u)}px ${SANS}`, maxW);
+      const lh = Math.round(size * 1.34);
+      let y = H - Math.round((brand || config.showName ? 130 : 90) * u) - rows.length * lh - sl.length * Math.round(42 * u);
+      g.shadowColor = "rgba(0,0,0,0.5)"; g.shadowBlur = 12 * u;
+      rows.forEach((r) => { y += lh; drawRichLine(g, r, padX, y, size, "#ffffff", "#ffd27a"); });
+      g.font = `400 ${Math.round(28 * u)}px ${SANS}`;
+      g.fillStyle = "rgba(255,255,255,0.78)";
+      y += Math.round(8 * u);
+      sl.forEach((l) => { y += Math.round(42 * u); g.fillText(l, padX, y); });
+      g.shadowColor = "transparent"; g.shadowBlur = 0;
+      if (kicker) { g.font = `500 ${Math.round(24 * u)}px ${SANS}`; g.fillStyle = "rgba(255,255,255,0.8)"; g.fillText(kicker.toUpperCase(), padX, Math.round(80 * u)); }
+      footer("rgba(255,255,255,0.6)", H - Math.round(56 * u), "left");
+      return c;
+    }
+    default: {
+      // impact / marker: full picture, strong bottom shade, a big centred headline.
+      const marker = config.template === "marker";
+      photo(0, 0, W, H, 0.38);
+      shade(g, W, 0, H * 0.3, "rgba(8,8,12,0.55)", "rgba(8,8,12,0)");
+      shade(g, W, H * 0.38, H, "rgba(8,8,12,0)", "rgba(8,8,12,0.92)");
+      const top = Math.round(56 * u);
+      if (kicker) pill(g, kicker, padX, top, Math.round(24 * u), "rgba(18,18,22,0.7)", "#ffd23f");
+      if (dur) pill(g, dur, W - padX, top, Math.round(24 * u), "rgba(18,18,22,0.7)", "#fff", "right");
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${SANS}`, maxW, titleLines, Math.round((land ? 96 : 100) * u), Math.round(56 * u));
+      const sl = subLines(`500 ${Math.round(34 * u)}px ${SANS}`, maxW);
+      const lh = Math.round(size * 1.26);
+      const subH = sl.length ? sl.length * Math.round(50 * u) + Math.round(26 * u) : 0;
+      let y = H - Math.round((land ? 100 : tall ? 220 : 130) * u) - rows.length * lh - subH;
+      g.font = `700 ${size}px ${SANS}`;
+      g.shadowColor = "rgba(0,0,0,0.6)"; g.shadowBlur = 20 * u; g.shadowOffsetY = 3 * u;
+      rows.forEach((r) => {
+        y += lh;
+        const w = measureRichLine(g, r, size, marker);
+        drawHeavyLine(g, r, (W - w) / 2, y, size, "#ffffff", "#ffd23f", marker ? { marker: "#ffd23f", markerInk: "#141416" } : {});
+      });
+      g.shadowColor = "transparent"; g.shadowBlur = 0; g.shadowOffsetY = 0;
+      g.font = `500 ${Math.round(34 * u)}px ${SANS}`;
+      g.fillStyle = "rgba(255,255,255,0.86)";
+      y += Math.round(26 * u);
+      sl.forEach((l) => { y += Math.round(50 * u); g.fillText(l, (W - g.measureText(l).width) / 2, y); });
+      footer("rgba(255,255,255,0.55)", H - Math.round((land ? 40 : 70) * u));
+      return c;
+    }
   }
-  const dw = g.measureText(durText).width + 32;
-  g.fillStyle = "rgba(20,20,24,0.72)";
-  roundRect(g, W - padX - dw, topY, dw, 48, 24);
-  g.fill();
-  g.fillStyle = "#ffffff";
-  g.fillText(durText, W - padX - dw + 16, topY + 32);
-
-  // Main title + subtitle anchored in lower third (impact) or slightly higher visual center (marker)
-  const titleSize = isLand ? (titleText.length > 20 ? 64 : 74) : (titleText.length > 18 ? 68 : 78);
-  g.font = `800 ${titleSize}px ${SANS}`;
-  const lines = wrapRichLines(g, titleText, maxW, isLand ? 2 : 3);
-  const lineH = Math.round(titleSize * 1.30);
-
-  const subSize = isLand ? 30 : 34;
-  g.font = `500 ${subSize}px ${SANS}`;
-  const subLines = subText ? wrapPlain(g, subText, maxW, 2) : [];
-  const subH = subLines.length ? Math.round(subSize * 1.45) * subLines.length + 24 : 0;
-
-  const blockH = lines.length * lineH + subH;
-  const anchorBottom = H - (isLand ? 112 : isMarker ? 280 : 190);
-  let y = anchorBottom - blockH;
-
-  g.font = `800 ${titleSize}px ${SANS}`;
-  g.shadowColor = "rgba(0,0,0,0.65)";
-  g.shadowBlur = 22;
-  g.shadowOffsetY = 4;
-  lines.forEach((ln) => {
-    y += lineH;
-    const lw = measureRichLine(g, ln, titleSize, isMarker);
-    const x = (W - lw) / 2;
-    drawRichLine(
-      g,
-      ln,
-      x,
-      y - lineH * 0.16,
-      titleSize,
-      "#ffffff",
-      "#ffd866",
-      isMarker ? "#facc15" : undefined,
-      isMarker ? "#141416" : undefined,
-    );
-  });
-
-  if (subLines.length) {
-    y += 20;
-    g.font = `500 ${subSize}px ${SANS}`;
-    g.fillStyle = "rgba(255,255,255,0.84)";
-    subLines.forEach((ln) => {
-      y += Math.round(subSize * 1.42);
-      const lw = g.measureText(ln).width;
-      g.fillText(ln, (W - lw) / 2, y - subSize * 0.2);
-    });
-  }
-
-  g.shadowColor = "transparent";
-  g.shadowBlur = 0;
-  g.shadowOffsetY = 0;
-
-  // Footer micro-attribution
-  g.font = `500 ${isLand ? 21 : 24}px ${SANS}`;
-  const foot = [config.showName, "SubCast · " + t("双语字幕")].filter(Boolean).join(" · ");
-  const fw = g.measureText(foot).width;
-  g.fillStyle = "rgba(255,255,255,0.58)";
-  g.fillText(foot, (W - fw) / 2, H - (isLand ? 44 : 78));
-
-  return c;
 }
