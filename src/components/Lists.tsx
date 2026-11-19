@@ -7,7 +7,7 @@ import { ArrowDownToLine, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRig
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
-import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, subscribedShow, type Pick, type Topic } from "../lib/picks";
+import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, subscribedShow, subscriptionVisible, type Pick, type Topic } from "../lib/picks";
 import { isChineseUi, t, useLang } from "../lib/i18n";
 import { HOME_SHOW_FEED, showLinks } from "../lib/showLinks";
 import { AlsoOn, HomeShowBanner, YtButton, usePromo } from "./YtPromo";
@@ -302,7 +302,12 @@ export function LatestView() {
   const recs = useMemo(() => recommend({ shows, recent, favorites: favEps, downloads: dlEps }, 6), [shows, recent, favEps, dlEps]);
   const subscribe = async (input: string, name: string) => {
     setAdding(input);
-    try { const r = await api.addSubscription(input); await reloadShows(); if (r.show) notify(t("已订阅「{name}」", { name })); }
+    try {
+      const r = await api.addSubscription(input);
+      await reloadShows();
+      if (!subscriptionVisible(input, r.show, useStore.getState().shows)) { notify(t("没有订上，再试一次")); return; }
+      notify(t("已订阅「{name}」", { name }));
+    }
     catch (err) { notify(errorText(err)); } finally { setAdding(null); }
   };
   const welcome = useStore((s) => s.welcome);
@@ -643,6 +648,9 @@ function WelcomeCard() {
   );
 }
 
+const addInput = (prev: ReadonlySet<string>, input: string) => { const next = new Set(prev); next.add(input); return next; };
+const dropInput = (prev: ReadonlySet<string>, input: string) => { const next = new Set(prev); next.delete(input); return next; };
+
 export function DiscoverView() {
   const { shows, reloadShows, notify, go } = useStore(useShallow((s) => ({ shows: s.shows, reloadShows: s.reloadShows, notify: s.notify, go: s.go })));
   const [adding, setAdding] = useState<string | null>(null);
@@ -650,19 +658,47 @@ export function DiscoverView() {
   const promo = usePromo();
   const bannerHidden = useStore((s) => s.settings.homeBannerHidden);
   const showBanner = promo && !bannerHidden;
-  const subscribed = (p: Pick) => isSubscribed(p, shows);
+  // The check appears before the feed finishes. It comes off again if the library does not actually have the show.
+  const [optimistic, setOptimistic] = useState<ReadonlySet<string>>(new Set());
+  const inflight = useRef(new Set<string>());
+  const subscribed = (p: Pick) => optimistic.has(p.input) || isSubscribed(p, shows);
   const home = PICKS.find((p) => p.input === HOME_SHOW_FEED);
   const add = async (input: string, title: string) => {
+    if (inflight.current.has(input)) return;
+    inflight.current.add(input);
+    setOptimistic((prev) => addInput(prev, input));
     setAdding(input);
     try {
-      await api.addSubscription(input);
+      const r = await api.addSubscription(input);
       await reloadShows();
+      const showsNow = useStore.getState().shows;
+      if (!subscriptionVisible(input, r.show, showsNow)) {
+        setOptimistic((prev) => dropInput(prev, input));
+        notify(t("没有订上，再试一次"));
+        return;
+      }
+      setOptimistic((prev) => dropInput(prev, input));
       notify(t("已订阅「{name}」", { name: title }));
+    } catch (err) {
+      setOptimistic((prev) => dropInput(prev, input));
+      notify(errorText(err));
+    } finally { inflight.current.delete(input); setAdding(null); }
+  };
+  const drop = async (p: Pick) => {
+    const sub = subscribedShow(p, useStore.getState().shows);
+    if (!sub?.id) { setOptimistic((prev) => dropInput(prev, p.input)); return; }
+    if (!(await ask({ title: t("取消订阅「{name}」？", { name: pickName(p) }), message: t("已生成的字幕、精读和收听进度会保留。"), ok: t("取消订阅"), danger: true }))) return;
+    setAdding(p.input);
+    try {
+      await api.removeShow(sub.id);
+      await reloadShows();
+      setOptimistic((prev) => dropInput(prev, p.input));
+      notify(t("已取消订阅「{name}」", { name: pickName(p) }));
     } catch (err) { notify(errorText(err)); } finally { setAdding(null); }
   };
-  const subBtn = (input: string, title: string, done: boolean) => done
-    ? <span className="tile-done" title={t("已订阅")}><Check size={16} /></span>
-    : <button className="tile-add" title={t("订阅")} onClick={(e) => { e.stopPropagation(); void add(input, title); }} disabled={adding != null}>{adding === input ? <Loader2 size={16} className="spin" /> : <Plus size={18} />}</button>;
+  const subBtn = (p: Pick, done: boolean) => done
+    ? <button type="button" className="tile-done" title={t("再点一次，取消订阅")} aria-label={t("再点一次，取消订阅")} onClick={(e) => { e.stopPropagation(); void drop(p); }} disabled={adding != null}><Check size={16} className="when-idle" /><X size={16} className="when-hover" /></button>
+    : <button className="tile-add" title={t("订阅")} onClick={(e) => { e.stopPropagation(); void add(p.input, pickName(p)); }} disabled={adding != null}>{adding === p.input ? <Loader2 size={16} className="spin" /> : <Plus size={18} />}</button>;
   return (
     <div className="page">
       <h1 className="page-title">{t("发现")}</h1>
@@ -670,7 +706,7 @@ export function DiscoverView() {
       {showBanner && home && !topics.length && <HomeShowBanner onHide={() => { void useStore.getState().saveSettings({ homeBannerHidden: true }); notify(t("好的，不再显示。可以在设置 › 通用里重新打开")); }} subscribed={subscribed(home)} busy={adding === home.input} onSubscribe={() => void add(home.input, pickName(home))} onOpen={() => go({ kind: "channel", input: home.input })} />}
       <TopicChips topics={topics} setTopics={setTopics} />
       <div className="tile-grid">
-        {visible(topics).filter((p) => !(showBanner && p === home && !topics.length)).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} onOpen={() => go({ kind: "channel", input: p.input })} action={subBtn(p.input, pickName(p), subscribed(p))} />)}
+        {visible(topics).filter((p) => !(showBanner && p === home && !topics.length)).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} onOpen={() => go({ kind: "channel", input: p.input })} action={subBtn(p, subscribed(p))} />)}
       </div>
     </div>
   );
@@ -706,7 +742,9 @@ export function ChannelView({ input }: { input: string }) {
     try {
       const r = await api.addSubscription(input);
       await reloadShows();
-      if (r.show) { notify(t("已订阅「{name}」", { name: pick ? pickName(pick) : r.show.title })); go({ kind: "show", id: r.show.id }); }
+      if (!r.show || !subscriptionVisible(input, r.show, useStore.getState().shows)) { notify(t("没有订上，再试一次")); return; }
+      notify(t("已订阅「{name}」", { name: pick ? pickName(pick) : r.show.title }));
+      go({ kind: "show", id: r.show.id });
     } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
   };
   const cover = pick?.cover ?? data?.show.cover;
