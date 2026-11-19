@@ -654,6 +654,7 @@ const dict: Record<string, string> = {
   "这一集正在转写": "This episode is already being transcribed",
   "超时": "Timed out",
   "在侧栏显示「乔木精读」推荐": "Show Qiaomu Deep Reads picks in the sidebar",
+  "翻译订阅节目的名字": "Translate subscribed show names",
   "播放全部": "Play all",
   "按列表顺序连着播放没听完的 {n} 集": "Play the {n} unfinished episodes in list order",
   "节目方中文字幕": "Publisher's Chinese subtitles",

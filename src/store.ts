@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { api, type Episode, type Show } from "./lib/api";
 import { DEFAULTS, loadSettings, type Settings } from "./lib/settings";
-import { setLang, t } from "./lib/i18n";
+import { setLang, setTranslateNames, t } from "./lib/i18n";
 import type { Aligned, AlignStatus } from "./lib/timemap";
 
 export type View =
@@ -116,6 +116,7 @@ export const useStore = create<State>((set, get) => ({
   async init() {
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
     setLang(settings.uiLang);
+    setTranslateNames(settings.translateShowNames);
     void api.setMenuLabels([t("设置…")]).catch(() => {});
     set({ settings, shows, ready: true });
     void get().checkUpdates();
@@ -153,6 +154,7 @@ export const useStore = create<State>((set, get) => ({
   async saveSettings(patch, lazy) {
     const settings = { ...get().settings, ...patch };
     if (patch.uiLang) { setLang(patch.uiLang); void api.setMenuLabels([t("设置…")]).catch(() => {}); }
+    if (patch.translateShowNames !== undefined) setTranslateNames(patch.translateShowNames);
     set({ settings });
     window.clearTimeout(settingsTimer);
     settingsTimer = 0;

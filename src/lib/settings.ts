@@ -58,6 +58,8 @@ export interface Settings {
   uiLang: LangSetting;
   /** Show the "subscribe on YouTube" links for shows that have an official channel. */
   youtubePromo: boolean;
+  /** Show subscribed shows under their Chinese names (curated or machine-translated) in a Chinese interface. */
+  translateShowNames: boolean;
   /** Download new versions in the background; they install on the next restart. */
   autoUpdate: boolean;
   /** The Discover banner for our own show was closed by the user. */
@@ -207,6 +209,7 @@ export const DEFAULTS: Settings = {
   quickPrompts: null,
   uiLang: "auto",
   youtubePromo: true,
+  translateShowNames: true,
   autoUpdate: true,
   homeBannerHidden: false,
   sideCurated: true,
