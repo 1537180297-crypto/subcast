@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, Loader2, RefreshCw, Settings2, Square, SquarePen } from "lucide-react";
 import { api, errorText, rawErrorText, type ChatMessage, type Episode } from "../lib/api";
@@ -17,10 +18,14 @@ import { openVideoClipDialog } from "./VideoClipDialog";
 
 /** Whether a model is connected for Q&A; re-checked whenever settings change or the settings window closes. */
 function useConnected() {
-  const settings = useStore((s) => s.settings);
+  const { chatProvider, chatModel, providers } = useStore(useShallow((s) => ({
+    chatProvider: s.settings.chatProvider,
+    chatModel: s.settings.chatModel,
+    providers: s.settings.providers,
+  })));
   const open = useStore((s) => s.settingsOpen);
   const [ok, setOk] = useState<boolean | null>(null);
-  useEffect(() => { if (!open) void llmReady("chat").then(setOk); }, [settings, open]);
+  useEffect(() => { if (!open) void llmReady("chat").then(setOk); }, [chatProvider, chatModel, providers, open]);
   return ok;
 }
 
@@ -43,8 +48,15 @@ function ConnectCard({ what }: { what: string }) {
 function useReady(ep: Episode) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const translation = useJobs((s) => s.translations[ep.id]);
-  const settings = useStore((s) => s.settings);
-  const provider = providerFor(settings, "chat");
+  const { chatProvider, chatModel, providers } = useStore(useShallow((s) => ({
+    chatProvider: s.settings.chatProvider,
+    chatModel: s.settings.chatModel,
+    providers: s.settings.providers,
+  })));
+  const provider = useMemo(() => {
+    const p = providers[chatProvider];
+    return p && chatModel ? { ...p, model: chatModel } : p;
+  }, [providers, chatProvider, chatModel]);
   const context = () => transcriptForModel(transcript!.segments, translation?.items);
   // Errors that the settings window fixes carry `setup`, so the panel can offer a way there whatever the language.
   const setupError = (message: string) => Object.assign(new Error(message), { setup: true });
@@ -88,9 +100,13 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
   const connected = useConnected();
   // A local agent (Claude Code…) is started in the background as the panel opens, so the first answer is quicker.
-  const chatProvider = useStore((x) => x.settings.chatProvider);
+  const { chatProvider, chatPromptOn, chatPrompt, savedPrompts } = useStore(useShallow((s) => ({
+    chatProvider: s.settings.chatProvider,
+    chatPromptOn: s.settings.chatPromptOn,
+    chatPrompt: s.settings.chatPrompt,
+    savedPrompts: s.settings.quickPrompts,
+  })));
   useEffect(() => { warmAgent(providerFor(useStore.getState().settings, "chat")); }, [chatProvider]);
-  const settings = useStore((s) => s.settings);
   const seek = useSeek(ep);
   const translation = useJobs((s) => s.translations[ep.id]);
   const clipRange = useMemo(() => {
@@ -113,7 +129,7 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   const box = useRef<HTMLTextAreaElement>(null);
   // The four the listener uses most (the first four by default) are shown; the rest open with "More".
   const [allPrompts, setAllPrompts] = useState(false);
-  const prompts = useMemo(() => byUse(quickPrompts(settings).filter((p) => p.enabled)), [settings]);
+  const prompts = useMemo(() => byUse(quickPrompts({ quickPrompts: savedPrompts }).filter((p) => p.enabled)), [savedPrompts]);
   const shownPrompts = allPrompts ? prompts : prompts.slice(0, 4);
 
   useEffect(() => {
@@ -148,7 +164,7 @@ export function ChatPanel({ ep }: { ep: Episode }) {
     chatAborts.set(ep.id, ctl);
     let partial = "";
     try {
-      const answer = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history, instruction: settings.chatPromptOn ? settings.chatPrompt : "", onDelta: (d) => { partial = d; putChat(ep.id, { streaming: d }); }, signal: ctl.signal });
+      const answer = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history, instruction: chatPromptOn ? chatPrompt : "", onDelta: (d) => { partial = d; putChat(ep.id, { streaming: d }); }, signal: ctl.signal });
       // Some agents only stream and return an empty final answer: keep what was shown.
       const content = answer.trim() ? answer : partial;
       save([...history, { role: "assistant", content: content.trim() ? content : t("出错了：{error}", { error: t("模型没有返回内容，请重试或换一个模型") }), model }]);

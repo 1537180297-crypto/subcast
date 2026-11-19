@@ -1,7 +1,9 @@
 // Chinese translations of titles and show notes, fetched lazily as they appear on screen. Requests made within
 // a short window are sent together; results are cached in memory here and on disk by the Rust side.
 // Only Chinese interfaces get them, in the script the interface uses (zh-CN or zh-TW).
+import { useEffect, useMemo } from "react";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { api } from "./api";
 import { t, useLang, type Lang } from "./i18n";
 
@@ -61,7 +63,9 @@ export function useZh(text: string | undefined | null): string | undefined {
   const clean = (text ?? "").trim();
   const key = target && clean.length > 0 && !isZh(clean) ? keyOf(target, clean) : null;
   const value = useZhStore((s) => (key ? s.map[key] : undefined));
-  if (key && !value) request(key);
+  useEffect(() => {
+    if (key && !value) request(key);
+  }, [key, value]);
   return value;
 }
 
@@ -91,13 +95,22 @@ export function useNameMatch(): (q: string, ...texts: (string | undefined)[]) =>
 /** Long text (show notes): split into paragraphs so each is translated and cached on its own. */
 export function useZhParagraphs(text: string | undefined, enabled: boolean): string[] | undefined {
   const target = targetOf(useLang((s) => s.lang));
-  const paras = target && enabled && text ? text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean).slice(0, 40).map((p) => p.slice(0, 3000)) : [];
-  const map = useZhStore((s) => s.map);
-  if (!target || !paras.length || isZh(text ?? "")) return undefined;
-  const missing = paras.filter((p) => !map[keyOf(target, p)]);
-  missing.forEach((p) => request(keyOf(target, p)));
-  if (missing.length) return undefined;
-  return paras.map((p) => map[keyOf(target, p)] ?? p);
+  const paras = useMemo(
+    () =>
+      target && enabled && text && !isZh(text)
+        ? text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean).slice(0, 40).map((p) => p.slice(0, 3000))
+        : [],
+    [target, enabled, text],
+  );
+  const keys = useMemo(() => (target ? paras.map((p) => keyOf(target, p)) : []), [target, paras]);
+  const vals = useZhStore(useShallow((s) => keys.map((k) => s.map[k])));
+  useEffect(() => {
+    for (let i = 0; i < keys.length; i++) {
+      if (!vals[i]) request(keys[i]);
+    }
+  }, [keys, vals]);
+  if (!keys.length || vals.some((v) => !v)) return undefined;
+  return vals as string[];
 }
 
 export { CJK };

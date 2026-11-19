@@ -1,8 +1,12 @@
 // The word book: words saved from subtitles, each with the sentence it came from, scheduled for review with FSRS
 // (ts-fsrs, MIT). Kept as one JSON blob in the local database, so it needs no backend of its own.
+import { useEffect, useMemo } from "react";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { createEmptyCard, fsrs, Rating, State, type Card, type Grade } from "ts-fsrs";
 import { api } from "./api";
+import { t } from "./i18n";
+import { useStore } from "../store";
 
 export interface SavedCard { due: number; stability: number; difficulty: number; scheduled_days: number; learning_steps: number; reps: number; lapses: number; state: State; last_review?: number }
 
@@ -169,4 +173,28 @@ const csvCell = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` 
 export function toCsv(words: Word[], header: string[]): string {
   const rows = words.map((w) => [w.word, w.ipa, w.meaning.replace(/\n/g, " "), w.ctx ?? "", w.sentence, w.sentenceZh ?? "", w.showTitle ?? "", w.episodeTitle, at(w.start), new Date(w.added).toLocaleDateString("sv")]);
   return "﻿" + [header, ...rows].map((r) => r.map((c) => csvCell(String(c))).join(",")).join("\n") + "\n";
+}
+
+/** Words due today, for the sidebar badge without pulling Learn.tsx into the initial bundle. */
+export function useDueCount(): number {
+  const on = useStore((s) => s.settings.learnOn);
+  const dailyNew = useStore((s) => s.settings.learnDaily);
+  const { words, day, newToday } = useWords(useShallow((s) => ({ words: s.words, day: s.day, newToday: s.newToday })));
+  useEffect(() => { if (on) void useWords.getState().load(); }, [on]);
+  return useMemo(() => (on ? reviewQueue({ words, day, newToday }, dailyNew).length : 0), [on, words, day, newToday, dailyNew]);
+}
+
+/** Once a day after launch: a reminder when words are waiting, if asked for. */
+export async function remindReview() {
+  const s = useStore.getState().settings;
+  if (!s.learnOn || !s.learnRemind) return;
+  const key = "subcast-learn-reminded";
+  const d = new Date().toLocaleDateString("sv");
+  try { if (localStorage.getItem(key) === d) return; } catch { /* private mode: remind anyway */ }
+  await useWords.getState().load();
+  const w = useWords.getState();
+  const n = reviewQueue(w, s.learnDaily).length;
+  if (!n) return;
+  try { localStorage.setItem(key, d); } catch { /* ignore */ }
+  useStore.getState().notify(t("生词本里有 {n} 个词等你复习", { n }));
 }

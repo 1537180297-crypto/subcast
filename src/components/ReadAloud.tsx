@@ -8,7 +8,7 @@ import { currentTtsService, isKeyError, speak, stopSpeaking } from "../lib/tts";
 import { useStore } from "../store";
 import { t, tr } from "../lib/i18n";
 import { localInstalled, refreshLocalTts, useLocalTts } from "../lib/localTts";
-import { KeyField, NO_AUTO } from "./SettingsDialog";
+import { KeyField, NO_AUTO } from "./KeyField";
 import { PreviewButton, SHARED_KEY, isLocalEngine, useSystemVoices } from "./TtsSettings";
 import { RateControl, RatePicker } from "./RatePicker";
 

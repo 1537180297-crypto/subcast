@@ -1628,6 +1628,15 @@ const dict: Record<string, string> = {
   "原片链接": "Watch original",
   "播客高光切片": "Podcast Highlight",
   "精彩片段": "Highlight Clip",
+  "返回（⌘[）": "Back (⌘[)",
+  "前进（⌘]）": "Forward (⌘])",
+  "清除": "Clear",
+  "点击跳转进度": "Click to seek",
+  "上一处（⇧↵）": "Previous match (⇧↵)",
+  "上一处": "Previous match",
+  "下一处（↵）": "Next match (↵)",
+  "下一处": "Next match",
+  "回到当前位置": "Back to current line",
 };
 
 export default dict;

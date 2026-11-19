@@ -1,8 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AudioLines, BookA, Check, ChevronDown, Play, Scissors, Sparkles, Square, Volume2, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, RefreshCw, Search, X } from "lucide-react";
+import { AudioLines, BookA, Check, ChevronDown, ChevronUp, Crosshair, Play, Scissors, Sparkles, Square, Volume2, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, RefreshCw, Search, X } from "lucide-react";
 import { AlignBar, anchorHere } from "./AlignBar";
 import { Modal } from "./Chrome";
 import { ReadAloudSettings } from "./ReadAloud";
@@ -44,6 +44,40 @@ function highlight(text: string, query: string) {
 }
 
 const NO_SEGMENTS: Segment[] = [];
+const VIRTUAL_THRESHOLD = 250;
+const OVERSCAN = 24;
+
+function computeWindow(heights: Float32Array, scrollTop: number, viewH: number) {
+  const n = heights.length;
+  if (!n) return { start: 0, end: 0, topPad: 0, bottomPad: 0 };
+  let y = 0;
+  let i = 0;
+  while (i < n && y + heights[i] < scrollTop) {
+    y += heights[i];
+    i++;
+  }
+  const start = Math.max(0, i - OVERSCAN);
+  let topPad = 0;
+  for (let p = 0; p < start; p++) topPad += heights[p];
+
+  let j = i;
+  let visibleBottom = y;
+  while (j < n && visibleBottom < scrollTop + viewH) {
+    visibleBottom += heights[j];
+    j++;
+  }
+  const end = Math.min(n, j + OVERSCAN);
+  let bottomPad = 0;
+  for (let p = end; p < n; p++) bottomPad += heights[p];
+  return { start, end, topPad, bottomPad };
+}
+
+function rowBounds(heights: Float32Array, pos: number) {
+  let top = 0;
+  for (let i = 0; i < pos && i < heights.length; i++) top += heights[i];
+  const h = heights[pos] ?? 60;
+  return { top, bottom: top + h, height: h };
+}
 
 // A click on a line plays from it, but selecting text never touches playback: the jump waits out a possible
 // double-click (which selects a word) and is dropped when the click ended a drag-selection.
@@ -57,17 +91,65 @@ function onLineClick(e: React.MouseEvent, seek: () => void) {
   lineClick = window.setTimeout(() => { if (!window.getSelection()?.toString().trim()) seek(); }, 260);
 }
 
-const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks, reading, hlClass }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number, i: number) => void; query: string; current: boolean; marks: LearnMarks | null; reading?: boolean; hlClass?: string }) {
+const Row = memo(function Row({ seg, i, k, zh, active, playingActive, mode, pending, onSeek, query, current, marks, reading, hlClass, hl, onHlPreview, onHlClip, registerRow }: {
+  seg: Segment; i: number; k: number; zh?: string | null; active: boolean; playingActive: boolean; mode: string; pending: boolean;
+  onSeek: (t: number, i: number) => void; query: string; current: boolean; marks: LearnMarks | null; reading?: boolean;
+  /** Highlight span styling, and the clip that starts at this line (its heading is drawn above it). */
+  hlClass?: string; hl?: HighlightClip; onHlPreview?: (c: HighlightClip) => void; onHlClip?: (c: HighlightClip) => void;
+  registerRow?: (k: number, el: HTMLDivElement | null) => void;
+}) {
   const showZh = mode !== "original";
   // "中文" means Chinese only, learning mode or not; a line not translated yet shows its original meanwhile.
   const showOrig = mode !== "translation" || (!zh && !pending);
-  return (
-    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""} ${reading ? "zh-reading" : ""} ${hlClass ?? ""}`} data-i={i} data-active={active || undefined} data-reading={reading || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start, i))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start, i)}>
-      <span className="line-time">{clock(seg.start)}</span>
+  const setRef = useCallback((el: HTMLDivElement | null) => { registerRow?.(k, el); }, [registerRow, k]);
+  const line = (
+    <div
+      ref={registerRow && !hl ? setRef : undefined}
+      className={`line ${active ? "active" : ""} ${current ? "hit" : ""} ${reading ? "zh-reading" : ""} ${hlClass ?? ""}`}
+      data-i={i}
+      data-active={active || undefined}
+      data-reading={reading || undefined}
+      data-hit={current || undefined}
+      role="button"
+      tabIndex={0}
+      onPointerDown={onLinePointerDown}
+      onClick={(e) => onLineClick(e, () => onSeek(seg.start, i))}
+      onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start, i)}
+    >
+      <span
+        className="line-time"
+        title={t("跳到这里播放")}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onSeek(seg.start, i); }}
+      >
+        {playingActive && <span className="live-dot" aria-hidden />}
+        {clock(seg.start)}
+      </span>
       <div className="line-text">
         {showZh && (zh ? <p className="zh">{highlight(zh, query)}</p> : pending ? <span className="skeleton" /> : null)}
         {showOrig && <p className="orig">{marks && !query ? <LearnText text={seg.text} marks={marks} /> : highlight(seg.text, query)}</p>}
       </div>
+    </div>
+  );
+  if (!hl) return line;
+  // The heading lives inside the measured element, so the virtual list counts its height.
+  return (
+    <div ref={registerRow ? setRef : undefined} className="hl-group">
+      <div className="hl-head">
+        <span className="hl-score">✦ {hl.score}</span>
+        <span className="hl-head-title clamp1">{hl.title}</span>
+        <span className="num small muted">{Math.round(hl.end - hl.start)}s</span>
+        <span className="spacer" />
+        <button type="button" className="link-btn" onClick={() => onHlPreview?.(hl)}>
+          <Play size={11} fill="currentColor" /> {t("试看")}
+        </button>
+        {onHlClip && (
+          <button type="button" className="link-btn hl-clip-btn" onClick={() => onHlClip(hl)}>
+            <Scissors size={11} /> {t("剪视频")}
+          </button>
+        )}
+      </div>
+      {line}
     </div>
   );
 });
@@ -135,6 +217,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const segments = transcript?.segments ?? NO_SEGMENTS;
   // Re-renders when the active line changes, not on every time update.
   const active = useStore((s) => (s.current?.id === ep.id ? activeIndex(segments, s.time) : -1));
+  const isPlaying = useStore((s) => s.current?.id === ep.id && s.playing);
   // Stable, so the memoised rows don't all re-render whenever this panel does.
   const seek = useCallback((t: number) => { if (isCurrent) player?.seek(t); }, [isCurrent, player]);
   // 对齐字幕 (podcast audio playing here only): while its bar is open, a click on a line lines it up instead.
@@ -143,7 +226,10 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   useEffect(() => { if (!canAlign) setAligning(false); }, [canAlign]);
   const wantsZh = transcript ? needsTranslation(transcript) : false;
   const mode = wantsZh ? settings.subtitleMode : "original";
-  const english = transcript ? looksEnglish(transcript.language, segments.slice(0, 20).map((x) => x.text).join(" ")) : false;
+  const english = useMemo(
+    () => (transcript ? looksEnglish(transcript.language, segments.slice(0, 20).map((x) => x.text).join(" ")) : false),
+    [transcript, segments],
+  );
   const marks = useLearnMarks(english);
   const learning = !!marks || (english && settings.learnOn);
   const [card, setCard] = useState<CardTarget | null>(null);
@@ -204,16 +290,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   }, [readSetup]);
   // Leaving the episode stops reading it.
   useEffect(() => () => { if (useZhRead.getState().epId === ep.id) stopZhRead(); }, [ep.id]);
-  // The line being read stays in view, like the one being played.
-  useEffect(() => {
-    if (readIndex == null || Date.now() - userScrolled.current < 5000 || query) return;
-    list.current?.querySelector<HTMLElement>("[data-reading]")?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [readIndex, query]);
-  useEffect(() => {
-    if (active < 0 || Date.now() - userScrolled.current < 5000 || query) return;
-    list.current?.querySelector<HTMLElement>("[data-active]")?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [active, query]);
-
+  // Highlight headings: stable callbacks, so the memoised rows don't re-render every tick.
+  const onHlPreview = useCallback((c: HighlightClip) => previewEpisodeRange(ep, c.start, c.end), [ep]);
+  const onHlClip = useCallback((c: HighlightClip) => openVideoClipDialog({ ep, segments, zh: zhItems, clip: c }), [ep, segments, zhItems]);
   // ⌘F searches the transcript; Enter / ⇧Enter step through matches.
   useEffect(() => {
     const k = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") { e.preventDefault(); setShowHighlights(false); setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); } };
@@ -240,8 +319,232 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     const q = query.toLowerCase();
     return segments.map((s, i) => (s.text.toLowerCase().includes(q) || translation?.items[i]?.toLowerCase().includes(q) ? i : -1)).filter((i) => i >= 0);
   }, [query, segments, translation]);
+  const rows = useMemo(() => matches ?? segments.map((_, i) => i), [matches, segments]);
+  const virtual = rows.length > VIRTUAL_THRESHOLD;
+  const activePos = useMemo(() => (active < 0 ? -1 : matches ? matches.indexOf(active) : active), [active, matches]);
+
+  const heightsRef = useRef<Float32Array>(new Float32Array(0));
+  const lastWidthRef = useRef(0);
+  const [win, setWin] = useState<{ start: number; end: number; topPad: number; bottomPad: number }>({ start: 0, end: 80, topPad: 0, bottomPad: 0 });
+  const [activeOffscreen, setActiveOffscreen] = useState(false);
+  const followPaused = useRef(false);
+  const programmaticUntil = useRef(0);
+  const prevActiveRef = useRef(active);
+
+  const checkActiveOffscreen = useCallback((box: HTMLDivElement | null, pos: number) => {
+    if (!box || !isCurrent || pos < 0 || query) {
+      setActiveOffscreen(false);
+      return false;
+    }
+    if (virtual) {
+      const { top, bottom } = rowBounds(heightsRef.current, pos);
+      const st = box.scrollTop;
+      const vh = box.clientHeight;
+      const off = bottom < st + 8 || top > st + vh - 8;
+      setActiveOffscreen(off);
+      return off;
+    }
+    const el = box.querySelector<HTMLElement>("[data-active]");
+    if (!el) { setActiveOffscreen(false); return false; }
+    const br = box.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    const off = er.bottom < br.top + 8 || er.top > br.bottom - 8;
+    setActiveOffscreen(off);
+    return off;
+  }, [isCurrent, query, virtual]);
+
+  const rowRefs = useRef(new Map<number, HTMLElement>());
+  const rowRoRef = useRef<ResizeObserver | null>(null);
+  const syncWindowRef = useRef<() => void>(() => {});
+  const syncRaf = useRef(0);
+
+  const scheduleSync = useCallback(() => {
+    if (syncRaf.current) return;
+    syncRaf.current = requestAnimationFrame(() => {
+      syncRaf.current = 0;
+      syncWindowRef.current();
+    });
+  }, []);
+
+  useEffect(() => () => { if (syncRaf.current) cancelAnimationFrame(syncRaf.current); }, []);
+
+  syncWindowRef.current = () => {
+    const box = list.current;
+    if (!box) return;
+    if (virtual) {
+      const next = computeWindow(heightsRef.current, box.scrollTop, box.clientHeight || 600);
+      setWin((prev) =>
+        prev.start === next.start &&
+        prev.end === next.end &&
+        Math.abs(prev.topPad - next.topPad) < 1 &&
+        Math.abs(prev.bottomPad - next.bottomPad) < 1
+          ? prev
+          : next,
+      );
+    }
+    const off = checkActiveOffscreen(box, activePos);
+    if (performance.now() > programmaticUntil.current) {
+      if (off) followPaused.current = true;
+      else followPaused.current = false;
+    }
+  };
+
+  const registerRow = useCallback((k: number, el: HTMLDivElement | null) => {
+    const prev = rowRefs.current.get(k);
+    if (prev && prev !== el) {
+      rowRoRef.current?.unobserve(prev);
+      rowRefs.current.delete(k);
+    }
+    if (el) {
+      el.dataset.k = String(k);
+      rowRefs.current.set(k, el);
+      rowRoRef.current?.observe(el);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!virtual) {
+      heightsRef.current = new Float32Array(0);
+      setWin({ start: 0, end: rows.length, topPad: 0, bottomPad: 0 });
+      return;
+    }
+    const est = mode === "bilingual" ? 84 : 46;
+    heightsRef.current = new Float32Array(rows.length).fill(est);
+    const box = list.current;
+    const st = box?.scrollTop ?? 0;
+    const vh = box?.clientHeight || 600;
+    lastWidthRef.current = box?.clientWidth ?? 0;
+    setWin(computeWindow(heightsRef.current, st, vh));
+    const raf = requestAnimationFrame(() => {
+      let changed = false;
+      for (const [k, el] of rowRefs.current) {
+        if (k < heightsRef.current.length) {
+          const h = el.getBoundingClientRect().height;
+          if (h > 0 && Math.abs(heightsRef.current[k] - h) > 0.5) {
+            heightsRef.current[k] = h;
+            changed = true;
+          }
+        }
+      }
+      if (changed) scheduleSync();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [virtual, rows.length, ep.id, mode, query, settings.subtitleSize, settings.subtitleFont, scheduleSync]);
+
+  useEffect(() => {
+    if (!virtual) return;
+    const ro = new ResizeObserver((entries) => {
+      let changed = false;
+      const box = list.current;
+      for (const entry of entries) {
+        const el = entry.target as HTMLElement;
+        const k = Number(el.dataset.k);
+        if (!Number.isFinite(k) || k >= heightsRef.current.length) continue;
+        const h = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        if (h > 0 && Math.abs(heightsRef.current[k] - h) > 0.5) {
+          const delta = h - heightsRef.current[k];
+          heightsRef.current[k] = h;
+          if (box && performance.now() > programmaticUntil.current && el.getBoundingClientRect().bottom <= box.getBoundingClientRect().top + 4) {
+            box.scrollTop += delta;
+          }
+          changed = true;
+        }
+      }
+      if (changed) scheduleSync();
+    });
+    rowRoRef.current = ro;
+    for (const el of rowRefs.current.values()) ro.observe(el);
+    return () => {
+      ro.disconnect();
+      rowRoRef.current = null;
+    };
+  }, [virtual, scheduleSync]);
+
+  useEffect(() => {
+    const box = list.current;
+    if (!box) return;
+    const ro = new ResizeObserver(() => {
+      const w = box.clientWidth;
+      if (virtual && Math.abs(w - lastWidthRef.current) > 8) {
+        lastWidthRef.current = w;
+        heightsRef.current.fill(mode === "bilingual" ? 84 : 46);
+        for (const [k, el] of rowRefs.current) {
+          if (k < heightsRef.current.length) {
+            const h = el.getBoundingClientRect().height;
+            if (h > 0) heightsRef.current[k] = h;
+          }
+        }
+      }
+      scheduleSync();
+    });
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [virtual, mode, scheduleSync, !!transcript, showHighlights]);
+
+  const scrollToPos = useCallback((pos: number, behavior: ScrollBehavior) => {
+    const box = list.current;
+    if (!box || pos < 0 || pos >= rows.length) return;
+    const targetIdx = rows[pos];
+    const el = box.querySelector<HTMLElement>(`[data-i="${targetIdx}"]`);
+    programmaticUntil.current = performance.now() + (behavior === "smooth" ? 650 : 140);
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior });
+      return;
+    }
+    if (!virtual) return;
+    const { top, height } = rowBounds(heightsRef.current, pos);
+    const dest = Math.max(0, top - box.clientHeight / 2 + height / 2);
+    const far = Math.abs(dest - box.scrollTop) > box.clientHeight * 2;
+    box.scrollTo({ top: dest, behavior: far ? "auto" : behavior });
+    if (far || behavior === "auto") {
+      setWin(computeWindow(heightsRef.current, dest, box.clientHeight || 600));
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const mounted = list.current?.querySelector<HTMLElement>(`[data-i="${targetIdx}"]`);
+      if (mounted) {
+        programmaticUntil.current = performance.now() + 140;
+        mounted.scrollIntoView({ block: "center", behavior: "auto" });
+      }
+    }));
+  }, [rows, virtual]);
+
+  useEffect(() => {
+    const jumped = Math.abs(active - prevActiveRef.current) > 3;
+    prevActiveRef.current = active;
+    if (jumped) {
+      followPaused.current = false;
+      userScrolled.current = 0;
+    }
+    if (active < 0 || query || !isCurrent || cardOpen) {
+      setActiveOffscreen(false);
+      return;
+    }
+    if (followPaused.current || Date.now() - userScrolled.current < 5000) {
+      checkActiveOffscreen(list.current, activePos);
+      return;
+    }
+    setActiveOffscreen(false);
+    scrollToPos(activePos, jumped ? "auto" : "smooth");
+  }, [active, activePos, query, isCurrent, cardOpen, scrollToPos, checkActiveOffscreen]);
+
+  // The line being read aloud stays in view, like the one being played.
+  useEffect(() => {
+    if (readIndex == null || Date.now() - userScrolled.current < 5000 || query) return;
+    scrollToPos(rows.indexOf(readIndex), "smooth");
+  }, [readIndex, query, rows, scrollToPos]);
+
   useEffect(() => { setHit(0); }, [query]);
-  useEffect(() => { list.current?.querySelector<HTMLElement>("[data-hit]")?.scrollIntoView({ block: "center" }); }, [hit, matches]);
+  useEffect(() => {
+    if (!matches?.length) return;
+    scrollToPos(hit, "auto");
+  }, [hit, matches, scrollToPos]);
+
+  const jumpToActive = () => {
+    followPaused.current = false;
+    userScrolled.current = 0;
+    setActiveOffscreen(false);
+    scrollToPos(activePos, "smooth");
+  };
 
   if (!transcript) return <NoTranscript ep={ep} official={official} officialError={officialError} />;
 
@@ -301,7 +604,10 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   else if (done < total) status = <StatusLine left={modeControl} text={done ? t("已翻译 {done}/{total}", { done, total }) : source} action={<button className="btn primary sm" onClick={() => start()}>{done ? t("继续翻译") : t("翻译成中文")}</button>} right={searchBtn} />;
   else status = <StatusLine left={modeControl} text="" title={`${source} · ${engineName}`} action={translation?.engine === "google" && canUpgrade ? <button className="btn ghost sm" onClick={() => start("llm")}>{t("用模型重译")}</button> : undefined} right={searchBtn} />;
 
-  const rows = matches ?? segments.map((_, i) => i);
+  const visibleStart = virtual ? win.start : 0;
+  const visibleEnd = virtual ? win.end : rows.length;
+  const visibleRows = virtual ? rows.slice(visibleStart, visibleEnd) : rows;
+
   return (
     <div className="transcript">
       {status}
@@ -313,7 +619,17 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
               if (e.key === "Escape") { setQuery(""); setSearching(false); }
               if (e.key === "Enter" && matches?.length) setHit((h) => (h + (e.shiftKey ? -1 : 1) + matches.length) % matches.length);
             }} />
-          {matches && <span className="muted small">{matches.length ? `${hit + 1}/${matches.length}` : t("无结果")}</span>}
+          {matches && (
+            <>
+              <span className="muted small search-hits">{matches.length ? `${hit + 1}/${matches.length}` : t("无结果")}</span>
+              {matches.length > 1 && (
+                <>
+                  <button type="button" className="icon-btn sm" title={t("上一处（⇧↵）")} aria-label={t("上一处")} onClick={() => setHit((h) => (h - 1 + matches.length) % matches.length)}><ChevronUp size={14} /></button>
+                  <button type="button" className="icon-btn sm" title={t("下一处（↵）")} aria-label={t("下一处")} onClick={() => setHit((h) => (h + 1) % matches.length)}><ChevronDown size={14} /></button>
+                </>
+              )}
+            </>
+          )}
           <button className="icon-btn sm" onClick={() => { setQuery(""); setSearching(false); }} aria-label={t("关闭搜索")}><X size={14} /></button>
         </div>
       )}
@@ -329,47 +645,65 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
           onJumpToTranscript={(idx, start) => {
             setShowHighlights(false);
             seek(start);
-            window.setTimeout(() => list.current?.querySelector<HTMLElement>(`[data-i="${idx}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }), 50);
+            window.setTimeout(() => scrollToPos(rows.indexOf(idx), "smooth"), 50);
           }}
         />
       ) : (
-      <div className={`lines${marks && settings.learnCard ? " learning" : ""}`} ref={list} onWheel={() => (userScrolled.current = Date.now())} onClickCapture={onWordClick}>
+      <div
+        className={`lines${marks && settings.learnCard ? " learning" : ""}`}
+        ref={list}
+        onWheel={() => (userScrolled.current = Date.now())}
+        onTouchStart={() => (userScrolled.current = Date.now())}
+        onScroll={scheduleSync}
+        onClickCapture={onWordClick}
+      >
         {english && <LearnTip />}
-        {rows.map((i, k) => {
-          const hlStart = !matches ? hlMap.starts.get(i) : undefined;
+        {virtual && win.topPad > 0 && <div style={{ height: win.topPad }} aria-hidden />}
+        {visibleRows.map((i, offset) => {
+          const k = visibleStart + offset;
+          const hl = !matches ? hlMap.starts.get(i) : undefined;
           const hlClass = !matches && hlMap.inside.has(i)
-            ? `hl-in${hlStart ? " hl-start" : ""}${hlMap.ends.has(i) ? " hl-end" : ""}`
+            ? `hl-in${hl ? " hl-start" : ""}${hlMap.ends.has(i) ? " hl-end" : ""}`
             : undefined;
           return (
-            <Fragment key={i}>
-              {hlStart && (
-                <div className="hl-head">
-                  <span className="hl-score">✦ {hlStart.score}</span>
-                  <span className="hl-head-title clamp1">{hlStart.title}</span>
-                  <span className="num small muted">{Math.round(hlStart.end - hlStart.start)}s</span>
-                  <span className="spacer" />
-                  <button type="button" className="link-btn" onClick={() => previewEpisodeRange(ep, hlStart.start, hlStart.end)}>
-                    <Play size={11} fill="currentColor" /> {t("试看")}
-                  </button>
-                  {ep.videoId && (
-                    <button type="button" className="link-btn hl-clip-btn" onClick={() => openVideoClipDialog({ ep, segments, zh: translation?.items, clip: hlStart })}>
-                      <Scissors size={11} /> {t("剪视频")}
-                    </button>
-                  )}
-                </div>
-              )}
-              <Row i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={aligning && canAlign ? anchorHere : (readingHere || (mode === "translation" && done > 0)) ? readAt : seek} query={query} current={!!matches && k === hit} marks={marks} reading={i === readIndex} hlClass={hlClass} />
-            </Fragment>
+            <Row
+              key={i}
+              i={i}
+              k={k}
+              seg={segments[i]}
+              zh={translation?.items[i]}
+              active={i === active}
+              playingActive={i === active && isPlaying}
+              mode={mode}
+              pending={pending}
+              onSeek={aligning && canAlign ? anchorHere : (readingHere || (mode === "translation" && done > 0)) ? readAt : seek}
+              query={query}
+              current={!!matches && k === hit}
+              marks={marks}
+              reading={i === readIndex}
+              hlClass={hlClass}
+              hl={hl}
+              onHlPreview={onHlPreview}
+              onHlClip={ep.videoId ? onHlClip : undefined}
+              registerRow={virtual ? registerRow : undefined}
+            />
           );
         })}
+        {virtual && win.bottomPad > 0 && <div style={{ height: win.bottomPad }} aria-hidden />}
         {card && <WordCard target={card} ep={ep} onClose={closeCard} />}
-        {!matches && total > 0 && (
+        {!matches && total > 0 && visibleEnd >= rows.length && (
           <div className={`lines-end ${active === total - 1 ? "reached" : ""}`}>
             <FlatLineArt />
             {active === total - 1 && <p>{t("到最后一句了，耳朵辛苦了")}</p>}
           </div>
         )}
       </div>
+      )}
+      {isCurrent && active >= 0 && !query && activeOffscreen && (
+        <button type="button" className="jump-active" onClick={jumpToActive}>
+          <Crosshair size={13} />
+          <span>{t("回到当前位置")}</span>
+        </button>
       )}
     </div>
   );

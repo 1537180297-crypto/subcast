@@ -319,7 +319,7 @@ h1, h2, .ep-name { text-wrap: balance; }
 .link-btn { display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; padding: 0; color: var(--accent-text); font-size: 12.5px; cursor: pointer; }
 .link-btn:hover { text-decoration: underline; }
 .flip { transform: rotate(180deg); }
-svg { transition: transform .16s var(--ease); }
+.adv-toggle svg, .link-btn svg, .track-pick svg, .notes-head svg { transition: transform .16s var(--ease); }
 
 /* sidebar */
 .brand { padding: 10px 8px 14px; gap: 9px; }
@@ -806,11 +806,10 @@ body.resizing iframe, body.resizing video { pointer-events: none; }
 @media (max-width: 900px) { .mf-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .mf-cell.hot:not(.on) { color: #fff; }
 .media-switch { align-self: flex-end; margin-bottom: -6px; }
-/* One thumbnail shape for every row (16:9), so titles line up; square podcast art sits on a blurred copy of itself. */
+/* One thumbnail shape for every row (16:9), so titles line up; square podcast art sits framed inside. */
 .ep-thumb, .ep-thumb.wide { width: 112px; height: 63px; border-radius: 10px; overflow: hidden; background: var(--soft); }
 .ep-thumb .thumb-img { position: relative; width: 100%; height: 100%; object-fit: cover; }
 .ep-thumb.square .thumb-img { width: 63px; margin: 0 auto; display: block; box-shadow: 0 0 0 1px rgba(0,0,0,.06); }
-.ep-thumb .thumb-bg { position: absolute; inset: -12px; width: calc(100% + 24px); height: calc(100% + 24px); object-fit: cover; filter: blur(14px) saturate(1.2); opacity: .75; transform: none !important; }
 .sk-thumb { width: 112px; height: 63px; }
 /* One reading column for show / channel pages: header row, calendar and list share the same width. */
 .list-head, .month-filter, .ep-feed { max-width: 880px; }
@@ -984,7 +983,7 @@ input:focus, select:focus, textarea:focus { border-color: color-mix(in srgb, var
 .markdown ul.timeline li:last-child { border-left-color: transparent; padding-bottom: 2px; }
 .markdown ul.timeline li::before { content: ""; position: absolute; left: -4.5px; top: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--panel); border: 2px solid var(--accent); box-sizing: border-box; }
 .markdown ul.timeline .stamp { margin-left: 0; }
-.markdown blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--line-strong); color: var(--text-2); }
+.markdown blockquote { margin: 10px 0; padding: 10px 14px; border-radius: 10px; background: var(--soft); color: var(--text-2); }
 .md-table { overflow-x: auto; margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; }
 .md-table table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.55; }
 .md-table th, .md-table td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
@@ -2245,7 +2244,8 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .hl-toggle.on { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 600; }
 .hl-badge { font-size: 11px; font-variant-numeric: tabular-nums; opacity: .85; }
 
-.hl-head { display: flex; align-items: center; gap: 8px; margin: 12px 2px 0; padding: 7px 12px 6px; border-radius: 10px 10px 0 0; background: color-mix(in srgb, var(--active-line) 78%, var(--soft)); font-size: 12px; }
+.hl-group { padding-top: 12px; }
+.hl-head { display: flex; align-items: center; gap: 8px; margin: 0 2px; padding: 7px 12px 6px; border-radius: 10px 10px 0 0; background: color-mix(in srgb, var(--active-line) 78%, var(--soft)); font-size: 12px; }
 .hl-head-title { font-weight: 600; color: var(--text); min-width: 0; flex: 0 1 auto; }
 .hl-head .link-btn { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--text-2); flex: none; }
 .hl-head .link-btn:hover { color: var(--text); }
@@ -2253,7 +2253,8 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .line.hl-in { background: color-mix(in srgb, var(--active-line) 50%, transparent); border-radius: 0; margin-inline: 2px; }
 .line.hl-in:hover { background: color-mix(in srgb, var(--active-line) 82%, var(--soft)); }
 .line.hl-in.active { background: var(--active-line); }
-.line.hl-in.hl-end { border-radius: 0 0 10px 10px; margin-bottom: 10px; }
+/* A transparent border, not a margin, so the virtual list measures the gap with the row. */
+.line.hl-in.hl-end { border-radius: 0 0 10px 10px; border-bottom: 10px solid transparent; background-clip: padding-box; }
 
 .hl-score { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; flex: none; }
 
