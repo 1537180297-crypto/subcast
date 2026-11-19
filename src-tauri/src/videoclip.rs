@@ -1362,3 +1362,38 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
         let _ = std::fs::remove_dir_all(&data);
     }
 }
+
+#[cfg(test)]
+mod render_live {
+    use super::*;
+    /// Real render of the cached 105 s clip (run with --ignored): 9:16 card cropped to 4:3, blurred background,
+    /// a static layer and 20 subtitle bands. Prints the time and checks the output's size and length.
+    #[tokio::test]
+    #[ignore]
+    async fn renders_card_crop() {
+        let data = dirs::data_dir().unwrap().join("ai.qiaomu.subcast");
+        let src = data.join("work/clips/xgAJkGC89rM/541390-646520.mp4");
+        let ff = find_ffmpeg(&data).unwrap();
+        let png = |w: u32, h: u32| -> String {
+            let out = std::process::Command::new(&ff).args(["-v", "error", "-f", "lavfi", "-i", &format!("color=c=white@0.0:s={w}x{h},format=rgba,drawbox=x=100:y=20:w=600:h=60:color=white@0.9:t=fill"), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]).output().unwrap();
+            base64::engine::general_purpose::STANDARD.encode(out.stdout)
+        };
+        let band = { let out = std::process::Command::new(&ff).args(["-v", "error", "-f", "lavfi", "-i", "color=c=red:s=1080x120", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]).output().unwrap(); base64::engine::general_purpose::STANDARD.encode(out.stdout) };
+        let cues = (0..20).map(|k| CueOverlay { start: k as f64 * 5.0, end: k as f64 * 5.0 + 4.5, y: 1500, png_base64: band.clone() }).collect();
+        let out = std::env::temp_dir().join("subcast-render-test.mp4");
+        let _ = std::fs::remove_file(&out);
+        let req = RenderRequest {
+            frame: Some(Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: true }),
+            raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
+            layout: "frame".into(), card_bg: "blur".into(), crop_x: 0.7, duration: 105.16,
+            static_overlay_png: Some(png(1080, 1920)), cues, cover_png: None, cover_mode: "none".into(),
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
+        };
+        let t = std::time::Instant::now();
+        render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
+        let (dur, w, h, audio) = probe_video_meta(&ff, &out, 0.0).await;
+        eprintln!("render took {:?}: {w}x{h}, {dur:.2}s, audio={audio}", t.elapsed());
+        assert_eq!((w, h), (1080, 1920));
+        assert!((dur - 105.16).abs() < 0.3 && audio);
+    }
+}
