@@ -2133,3 +2133,20 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .sub-export-preview { margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; border-radius: 8px; background: var(--soft); color: var(--text); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
 .sub-export .row-actions { justify-content: flex-end; }
 .modal:has(.sub-export) { width: min(660px, calc(100vw - 32px)); }
+
+/* ===================== speed menu, full screen button ===================== */
+.rate-menu { position: relative; flex: none; }
+.rate-pop { position: absolute; z-index: 30; bottom: calc(100% + 6px); right: 0; min-width: 104px; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 10px 28px rgba(0,0,0,.16); }
+.rate-pop button { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border: 0; border-radius: 7px; background: transparent; color: inherit; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; text-align: left; cursor: pointer; white-space: nowrap; }
+.rate-pop button:hover:not(:disabled) { background: var(--soft); }
+.rate-pop button.on { font-weight: 600; }
+.rate-pop button:disabled { opacity: .4; cursor: default; }
+.rate-pop .rate-check { visibility: hidden; color: var(--text-2); }
+.rate-pop button.on .rate-check { visibility: visible; }
+.video-fs { position: absolute; right: 10px; bottom: 10px; z-index: 7; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; backdrop-filter: blur(6px); opacity: 0; transition: opacity .2s var(--ease); }
+.video:hover .video-fs, .video-fs:focus-visible { opacity: 1; }
+.video-fs:hover { background: rgba(0,0,0,.75); }
+.video-dock.floating .video-fs { display: none; }
+/* The video lives in a fixed layer (z-index 30) over the page: an open speed menu has to rise above it. */
+.controls-slot:has(.rate-pop), .controls-dock:has(.rate-pop) { position: relative; z-index: 46; }
+.controls-dock:has(.rate-pop) { position: sticky; }

@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Loader2, Minimize2, Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from "lucide-react";
+import { Check, ExternalLink, Loader2, Maximize2, Minimize2, Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from "lucide-react";
 import { followVolume, gainOf, setLevel, toggleMute, useVolume } from "../lib/volume";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, browserLocked, isBotCheck, needsBrowserAccess, signInExpired, type Episode } from "../lib/api";
@@ -181,7 +181,7 @@ function hideYouTubeCaptions(player: any) {
   try { player.unloadModule?.("captions"); player.unloadModule?.("cc"); } catch { /* not loaded */ }
 }
 
-export const RATES = [0.8, 1, 1.15, 1.25, 1.5, 1.75, 2];
+export const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
 /** YouTube without YouTube's chrome: the embed runs with its controls off, cropped so the title bar and logo fall
  *  outside the frame, under a shield that keeps hover UI from appearing. Our own controls and subtitles drive it.
@@ -311,6 +311,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
       )}
       {error && <div className="video-error">{error} {openBtn}</div>}
       {overlay}
+      {!theater && <button className="video-fs" title={t("全屏（F）")} aria-label={t("全屏")} onClick={(e) => { e.stopPropagation(); fullscreen(); }}><Maximize2 size={16} /></button>}
       {theater && (
         <div className="theater-bar" onClick={(e) => e.stopPropagation()}>
           <p className="theater-title clamp1">{ep.title}</p>
@@ -371,6 +372,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
               toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : (waiting(true), player.playVideo())),
               play: () => { waiting(true); player.playVideo(); },
               setRate: (r: number) => player.setPlaybackRate(r),
+              // YouTube's embedded player goes no faster than 2×.
+              maxRate: 2,
             };
             offerPlayer(handle, { length: player.getDuration?.() || ep.duration || 0 });
             const applyVolume = () => { const v = useVolume.getState(); player.setVolume?.(Math.round(gainOf(v) * 100)); if (v.muted) player.mute?.(); else player.unMute?.(); };
@@ -489,7 +492,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
   );
 }
 
-export function Controls({ compact = false }: { compact?: boolean }) {
+export function Controls({ compact = false, video = false }: { compact?: boolean; video?: boolean }) {
   // Whole seconds: the clock and bar move once a second instead of re-rendering on every time update.
   // The bar and clock follow the player's own clock (`rawTime`), which can differ from subtitle time.
   const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: Math.floor(s.rawTime ?? s.time), length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
@@ -498,7 +501,6 @@ export function Controls({ compact = false }: { compact?: boolean }) {
   const [drag, setDrag] = useState<number | null>(null);
 
   const shown = drag ?? time;
-  const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
       <button className="icon-btn" title={t("后退 {n} 秒（←）", { n: settings.skipBack ?? 15 })} onClick={() => player?.seek(Math.max(0, sub() - (settings.skipBack ?? 15)))} disabled={!player}><RotateCcw size={18} /></button>
@@ -522,9 +524,49 @@ export function Controls({ compact = false }: { compact?: boolean }) {
       />
       <span className="time">{length ? clock(length) : "--:--"}</span>
       <VolumeControl />
-      <button className={`rate-btn${settings.playbackRate >= 2 ? " fast" : ""}`} onClick={nextRate} title={t("播放速度（S）")}>{settings.playbackRate >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{settings.playbackRate}×</button>
+      <RateMenu rate={settings.playbackRate} max={player?.maxRate} />
+      {!compact && video && <button className="icon-btn" title={t("全屏（F）")} aria-label={t("全屏")} onClick={() => toggleTheater(true)}><Maximize2 size={17} /></button>}
     </div>
   );
+}
+
+/** The speed, picked from a list that opens upwards (the controls sit at the bottom). */
+function RateMenu({ rate, max }: { rate: number; max?: number }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("pointerdown", away);
+    window.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("pointerdown", away); window.removeEventListener("keydown", esc, true); };
+  }, [open]);
+  const shown = max && rate > max ? max : rate;
+  return (
+    <div className="rate-menu" ref={box}>
+      <button className={`rate-btn${shown >= 2 ? " fast" : ""}`} onClick={() => setOpen(!open)} title={t("播放速度")} aria-haspopup="menu" aria-expanded={open}>{shown >= 2 && <span className="rate-bars" aria-hidden><i /><i /><i /></span>}{shown}×</button>
+      {open && (
+        <div className="rate-pop" role="menu" aria-label={t("播放速度")}>
+          {[...RATES].reverse().map((r) => {
+            const off = !!max && r > max;
+            return (
+              <button key={r} role="menuitemradio" aria-checked={r === shown} disabled={off} title={off ? t("YouTube 视频最快 2 倍速，切到「仅音频」可以更快") : undefined}
+                className={r === shown ? "on" : ""} onClick={() => { setRate(r); setOpen(false); }}>
+                <Check size={13} className="rate-check" />{r === 1 ? t("正常") : `${r}×`}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function setRate(r: number) {
+  const { saveSettings, player } = useStore.getState();
+  player?.setRate(r);
+  void saveSettings({ playbackRate: r });
 }
 
 /** Speaker button (click mutes) with a slider that opens on hover or keyboard focus; the wheel over it adjusts. */
@@ -553,16 +595,12 @@ export function cycleMode() {
 /** Steps the speed up or down one notch (for shortcuts). */
 export function stepRate(dir: 1 | -1) {
   const { settings, saveSettings, player, notify } = useStore.getState();
-  const i = RATES.indexOf(settings.playbackRate);
-  const r = RATES[Math.min(RATES.length - 1, Math.max(0, (i < 0 ? RATES.indexOf(1) : i) + dir))];
+  const cur = settings.playbackRate;
+  const max = player?.maxRate ?? RATES[RATES.length - 1];
+  const r = Math.min(max, dir > 0 ? (RATES.find((x) => x > cur + 0.001) ?? cur) : ([...RATES].reverse().find((x) => x < cur - 0.001) ?? cur));
   player?.setRate(r);
   void saveSettings({ playbackRate: r });
   notify(`${r}×`);
 }
 
-export function cycleRate() {
-  const { settings, saveSettings, player } = useStore.getState();
-  const r = RATES[(RATES.indexOf(settings.playbackRate) + 1) % RATES.length];
-  player?.setRate(r);
-  void saveSettings({ playbackRate: r });
-}
+

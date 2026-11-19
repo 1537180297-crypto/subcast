@@ -172,7 +172,6 @@ const dict: Record<string, string> = {
   "暂停（空格）": "Pause (Space)",
   "播放（空格）": "Play (Space)",
   "播放进度": "Playback position",
-  "播放速度（S）": "Playback speed (S)",
   "双语": "Bilingual",
   "中文": "Chinese",
   "已复制，带出处": "Copied with source",
@@ -1277,6 +1276,11 @@ const dict: Record<string, string> = {
   "字幕大小 {n}%": "Subtitles {n}%",
   "字幕变大": "Bigger subtitles",
   "字幕变小": "Smaller subtitles",
+  "全屏（F）": "Full screen (F)",
+  "全屏": "Full screen",
+  "播放速度": "Playback speed",
+  "YouTube 视频最快 2 倍速，切到「仅音频」可以更快": "YouTube videos play at most 2×; switch to Audio only to go faster",
+  "正常": "Normal",
 };
 
 export default dict;

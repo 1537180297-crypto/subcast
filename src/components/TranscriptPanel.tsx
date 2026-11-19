@@ -51,8 +51,8 @@ function onLineClick(e: React.MouseEvent, seek: () => void) {
 
 const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean; marks: LearnMarks | null }) {
   const showZh = mode !== "original";
-  // Learning English: the original stays visible even in "中文" mode, it is what you are learning.
-  const showOrig = mode !== "translation" || (!zh && !pending) || !!marks;
+  // "中文" means Chinese only, learning mode or not; a line not translated yet shows its original meanwhile.
+  const showOrig = mode !== "translation" || (!zh && !pending);
   return (
     <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""}`} data-i={i} data-active={active || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
       <span className="line-time">{clock(seg.start)}</span>
