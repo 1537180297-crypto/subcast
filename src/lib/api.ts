@@ -54,7 +54,7 @@ export interface CloudAsr { id: string; name: string; note: string; protocol: "d
 export interface LocalTtsStatus { supported: boolean; runtime: boolean; models: { id: string; installed: boolean; bytes: number }[] }
 export interface TtsRequest {
   engine: string;
-  protocol: "edge" | "local" | "system" | "doubao" | "mimo" | "openai" | "qwen" | "minimax" | "elevenlabs";
+  protocol: "edge" | "local" | "system" | "doubao" | "mimo" | "openai" | "qwen" | "minimax" | "elevenlabs" | "deepseek";
   baseUrl?: string;
   model?: string;
   voice: string;

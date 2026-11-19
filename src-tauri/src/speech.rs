@@ -22,7 +22,7 @@ const DOUBAO_RATE: u32 = 24_000;
 pub struct TtsRequest {
     /// Service id (e.g. "edge", "local", "system", "doubao", "mimo", "qwen", "openai", "siliconflow", "minimax", "elevenlabs", "custom").
     pub engine: String,
-    /// Wire protocol: "edge" | "system" | "local" | "doubao" | "mimo" | "openai" | "qwen" | "minimax" | "elevenlabs".
+    /// Wire protocol: "edge" | "system" | "local" | "doubao" | "mimo" | "openai" | "qwen" | "minimax" | "elevenlabs" | "deepseek".
     pub protocol: String,
     #[serde(default)]
     pub base_url: Option<String>,
@@ -183,6 +183,7 @@ fn resolve_key(engine: &str, protocol: &str) -> Option<String> {
         ("minimax", _) | (_, "minimax") => &["minimax-cn"],
         ("openai", _) => &["openai"],
         ("siliconflow", _) => &["siliconflow", "asr.siliconflow"],
+        ("deepseek", _) | (_, "deepseek") => &["deepseek", "asr.deepseek"],
         _ => &[],
     };
     for acct in fallbacks {
@@ -239,6 +240,7 @@ pub async fn synthesize(data: &Path, req: TtsRequest) -> Result<TtsResult> {
         "qwen" => qwen_tts(&req, text).await?,
         "minimax" => (minimax_tts(&req, text, rate).await?, "mp3"),
         "elevenlabs" => (elevenlabs_tts(&req, text, rate).await?, "mp3"),
+        "deepseek" => (deepseek_tts(&req, text).await?, "wav"),
         other => return Err(anyhow!("不支持的朗读引擎：{other}")),
     };
     if bytes.len() < 64 { return Err(anyhow!("朗读服务没有返回有效音频")); }
@@ -466,6 +468,50 @@ async fn elevenlabs_tts(req: &TtsRequest, text: &str, rate: f64) -> Result<Vec<u
     Ok(resp.bytes().await.map_err(net::describe)?.to_vec())
 }
 
+/// DeepSeek text to speech (https://api-docs.deepseek.com/guides/tts): WAV streamed in the body. It has no speed
+/// setting, so the app asks for 1× and speeds playback up instead.
+async fn deepseek_tts(req: &TtsRequest, text: &str) -> Result<Vec<u8>> {
+    let key = require_key(req)?;
+    let base = req.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        .unwrap_or("https://api.deepseek.com").trim_end_matches('/');
+    let url = if base.ends_with("/tools/tts") { base.to_string() } else { format!("{base}/v1/tools/tts") };
+    let voice = if req.voice.trim().is_empty() { "stella" } else { req.voice.trim() };
+    let resp = net::client().post(&url)
+        .bearer_auth(&key)
+        .json(&json!({ "text": text, "voice_id": voice, "format": "wav", "filter_markdown": true }))
+        .timeout(Duration::from_secs(120))
+        .send().await.map_err(net::describe)?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        if status.as_u16() == 400 && body.contains("Content Exists Risk") { return Err(anyhow!("DeepSeek 拒绝朗读这段文字（内容审核未通过）")); }
+        return Err(http_err(status.as_u16(), &body));
+    }
+    let mut bytes = resp.bytes().await.map_err(net::describe)?.to_vec();
+    fix_streamed_wav(&mut bytes);
+    Ok(bytes)
+}
+
+/// A WAV streamed before its length was known says 0xFFFFFFFF for the RIFF and data sizes; write the real ones so
+/// players and the duration estimate read it as an ordinary file.
+fn fix_streamed_wav(b: &mut [u8]) {
+    if b.len() < 12 || !b.starts_with(b"RIFF") || &b[8..12] != b"WAVE" { return; }
+    let mut i = 12;
+    while i + 8 <= b.len() {
+        let size = u32::from_le_bytes([b[i + 4], b[i + 5], b[i + 6], b[i + 7]]);
+        if &b[i..i + 4] == b"data" {
+            if size == u32::MAX || size == 0 || i + 8 + size as usize > b.len() {
+                let data = ((b.len() - i - 8) & !1) as u32;
+                b[i + 4..i + 8].copy_from_slice(&data.to_le_bytes());
+                let riff = (b.len() - 8) as u32;
+                b[4..8].copy_from_slice(&riff.to_le_bytes());
+            }
+            return;
+        }
+        i += 8 + size as usize + (size as usize & 1);
+    }
+}
+
 // ---- System TTS (macOS say / Windows SAPI / Linux espeak-ng) -------------------------------------
 
 async fn system_tts(voice: &str, text: &str, rate: f64) -> Result<Vec<u8>> {
@@ -675,5 +721,20 @@ mod tests {
     fn macos_lists_system_voices() {
         let voices = list_system_voices();
         assert!(!voices.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod deepseek_wav_tests {
+    #[test]
+    fn streamed_wav_gets_real_sizes() {
+        let mut b = b"RIFF\xff\xff\xff\xffWAVEfmt \x10\0\0\0\x01\0\x01\0\xc0\x5d\0\0\x80\xbb\0\0\x02\0\x10\0data\xff\xff\xff\xff".to_vec();
+        b.extend_from_slice(&[0u8; 100]);
+        super::fix_streamed_wav(&mut b);
+        assert_eq!(u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize, b.len() - 8);
+        assert_eq!(u32::from_le_bytes([b[40], b[41], b[42], b[43]]), 100);
+        let before = b.clone();
+        super::fix_streamed_wav(&mut b);
+        assert_eq!(b, before);
     }
 }

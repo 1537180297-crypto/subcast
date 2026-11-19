@@ -1306,7 +1306,6 @@ const dict: Record<string, string> = {
   "可选，本地服务可留空": "Optional; leave empty for local services",
   "用于精读和字幕中文翻译的朗读。": "Used to read deep reads and Chinese subtitles aloud.",
   "系统语音": "System voice",
-  "豆包、MiMo、通义、Edge（免 Key）等": "Doubao, MiMo, Qwen, Edge (no key), etc.",
   "收起其他语言音色": "Hide other languages",
   "其他语言音色（{n}）": "Other languages ({n})",
   "朗读语速": "Reading speed",
@@ -1461,6 +1460,12 @@ const dict: Record<string, string> = {
   "先播放这一集": "Play this episode first",
   "退出跟读模式": "Stop shadowing",
   "跟读模式": "Shadowing",
+  "豆包、DeepSeek、MiMo、Edge（免 Key）等": "Doubao, DeepSeek, MiMo, Edge (no key), etc.",
+  "两种音色，中英文都能读，与 AI 模型共用 Key": "Two voices, reads Chinese and English, shares the AI model key",
+  "填过「AI 模型」里的 DeepSeek 可以留空": "Leave empty if DeepSeek is set up under AI models",
+  "Stella（女声）": "Stella (female)",
+  "Tide（男声）": "Tide (male)",
+  "DeepSeek 拒绝朗读这段文字（内容审核未通过）": "DeepSeek declined to read this text (content review)",
 };
 
 export default dict;

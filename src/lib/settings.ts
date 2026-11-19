@@ -211,7 +211,7 @@ export const VOICES: [string, string][] = [
 ];
 
 /** Cloud TTS services shown upfront; the rest sit behind 「更多」. */
-export const TTS_CLOUD_MAIN = ["doubao", "mimo", "qwen", "openai", "edge"];
+export const TTS_CLOUD_MAIN = ["doubao", "deepseek", "mimo", "qwen", "openai", "edge"];
 
 const v = (list: [string, string][]): TtsVoice[] => list.map(([id, name]) => ({ id, name }));
 
@@ -244,6 +244,17 @@ export const TTS_SERVICES: TtsService[] = [
     needsKey: true, sharedKeyHint: tk("填过豆包语音识别的可以留空"),
     voice: "zh_female_vv_uranus_bigtts",
     voices: v(VOICES),
+  },
+  {
+    id: "deepseek", name: "DeepSeek", note: tk("两种音色，中英文都能读，与 AI 模型共用 Key"), group: "cloud",
+    protocol: "deepseek", baseUrl: "https://api.deepseek.com", model: "", models: [],
+    keyUrl: "https://platform.deepseek.com/api_keys",
+    needsKey: true, sharedKeyHint: tk("填过「AI 模型」里的 DeepSeek 可以留空"),
+    voice: "stella",
+    voices: v([
+      ["stella", tk("Stella（女声）")],
+      ["tide", tk("Tide（男声）")],
+    ]),
   },
   {
     id: "mimo", name: tk("小米 MiMo"), note: tk("自然播客语调，与 AI 模型共用 Key"), group: "cloud",

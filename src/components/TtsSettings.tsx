@@ -176,7 +176,7 @@ function CloudTtsEditor({
                   placeholder="https://…/v1"
                 />
               </label>
-              {svc.protocol !== "doubao" && (
+              {svc.protocol !== "doubao" && svc.protocol !== "deepseek" && (
                 <>
                   <label>
                     <span>{t("模型")}</span>
@@ -417,7 +417,7 @@ export function TtsSettings() {
             <Cloud size={18} />
             <div>
               <p>{t("云端服务")}</p>
-              <p className="muted small">{t("豆包、MiMo、通义、Edge（免 Key）等")}</p>
+              <p className="muted small">{t("豆包、DeepSeek、MiMo、Edge（免 Key）等")}</p>
             </div>
           </button>
         </div>

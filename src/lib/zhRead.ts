@@ -49,7 +49,7 @@ export async function startZhRead(epId: string, items: (string | null | undefine
       }
       return;
     }
-    const fetched = new Map<number, Promise<{ url: string; path: string; seconds: number }>>();
+    const fetched = new Map<number, Promise<{ url: string; path: string; seconds: number; speed: number }>>();
     const fetchLine = (k: number) => {
       if (k >= lines.length) return;
       if (!fetched.has(k)) {
@@ -65,7 +65,7 @@ export async function startZhRead(epId: string, items: (string | null | undefine
       if (id !== session) return;
       useZhRead.setState({ index: lines[k] });
       const el = new Audio(res.url);
-      el.playbackRate = Math.min(2, Math.max(0.5, useStore.getState().settings.playbackRate || 1));
+      el.playbackRate = Math.min(2, Math.max(0.5, (useStore.getState().settings.playbackRate || 1) * res.speed));
       audio = el;
       await new Promise<void>((resolve, reject) => { el.onended = () => resolve(); el.onerror = () => reject(new Error(t("音频播放失败"))); void el.play().catch(reject); });
       if (id !== session) return;
