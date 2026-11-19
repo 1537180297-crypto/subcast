@@ -6,6 +6,7 @@ mod clip;
 mod agents;
 mod cloud;
 mod db;
+mod edge_tts;
 mod feeds;
 mod hlsproxy;
 mod import;
@@ -18,6 +19,7 @@ mod offline;
 mod ota;
 mod qiaomu;
 mod shared;
+mod speech;
 mod transcript;
 mod translate;
 mod youtube;
@@ -537,12 +539,30 @@ fn save_text(path: String, text: String) -> Res<()> { std::fs::write(path, text)
 #[tauri::command]
 async fn list_models(provider: llm::Provider) -> Res<Vec<String>> { cloud::list_models(&provider).await.map_err(e) }
 
-/// Doubao TTS: a base64 WAV for up to 1,000 characters.
+/// Legacy Doubao TTS command (kept for compatibility with older UI bundles).
 #[tauri::command]
 async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res<String> {
     use base64::Engine;
     let wav = cloud::tts(&voice, resource.as_deref().unwrap_or(""), &text).await.map_err(e)?;
     Ok(base64::engine::general_purpose::STANDARD.encode(wav))
+}
+
+/// Multi-engine TTS: synthesises to `<data>/tts-cache/` and returns the local file path + duration.
+#[tauri::command]
+async fn tts_synthesize(state: State<'_, AppState>, req: speech::TtsRequest) -> Res<speech::TtsResult> {
+    speech::synthesize(&state.data, req).await.map_err(e)
+}
+
+/// Installed OS voices for the System TTS engine.
+#[tauri::command(async)]
+fn tts_system_voices() -> Vec<speech::SystemVoice> {
+    speech::list_system_voices()
+}
+
+/// Clears cached TTS audio files.
+#[tauri::command(async)]
+fn clear_tts_cache(state: State<'_, AppState>) -> Res<()> {
+    speech::clear_cache(&state.data).map_err(e)
 }
 
 #[derive(Serialize)]
@@ -754,14 +774,20 @@ fn storage_info(state: State<'_, AppState>) -> serde_json::Value {
         "library": library,
         "temp": dir_bytes(&d.join("work")),
         "audioCache": dir_bytes(&offline::cache_dir(d)),
+        "ttsCache": dir_bytes(&speech::cache_dir(d)),
     })
 }
 
-/// Opens one of SubCast's folders in Finder / Explorer ("downloads" or "models"), creating it first.
+/// Opens one of SubCast's folders in Finder / Explorer ("downloads", "models", or "tts-cache"), creating it first.
 #[tauri::command]
 fn open_data_folder(app: AppHandle, state: State<'_, AppState>, kind: String) -> Res<()> {
     use tauri_plugin_opener::OpenerExt;
-    let dir = match kind.as_str() { "downloads" => offline::dir(&state.data), "models" => asr::models_dir(&state.data), _ => state.data.clone() };
+    let dir = match kind.as_str() {
+        "downloads" => offline::dir(&state.data),
+        "models" => asr::models_dir(&state.data),
+        "tts-cache" => speech::cache_dir(&state.data),
+        _ => state.data.clone(),
+    };
     std::fs::create_dir_all(&dir).map_err(e)?;
     app.opener().open_path(dir.to_string_lossy(), None::<&str>).map_err(e)
 }
@@ -1499,7 +1525,7 @@ pub fn run() {
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
             download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             app_update_check, app_update_download, app_update_install,
-            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
+            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

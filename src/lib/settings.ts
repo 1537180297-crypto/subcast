@@ -1,5 +1,25 @@
-import { api, type CloudAsr, type Provider } from "./api";
+import { api, type CloudAsr, type Provider, type TtsRequest } from "./api";
 import { t, tk, type LangSetting } from "./i18n";
+
+export type TtsProtocol = TtsRequest["protocol"];
+export interface TtsVoice { id: string; name: string }
+export interface TtsService {
+  id: string;
+  name: string;
+  note: string;
+  group: "free" | "cloud";
+  protocol: TtsProtocol;
+  baseUrl: string;
+  model: string;
+  models: string[];
+  voice: string;
+  voices: TtsVoice[];
+  resource?: string;
+  keyUrl?: string;
+  needsKey: boolean;
+  /** Shown as placeholder on the Key field when an AI/ASR key can be reused. */
+  sharedKeyHint?: string;
+}
 
 export interface Settings {
   providers: Record<string, Provider>;
@@ -45,6 +65,12 @@ export interface Settings {
   /** "local", or the id of a cloud transcription service. */
   asrEngine: string;
   cloudAsr: Record<string, CloudAsr>;
+  /** Active TTS engine id ("edge", "system", "doubao", "mimo", "qwen", "openai", "siliconflow", "minimax", "elevenlabs", "custom"). */
+  ttsEngine: string;
+  ttsServices: Record<string, TtsService>;
+  /** Speech rate multiplier for TTS synthesis (0.75–1.5, default 1). */
+  ttsRate: number;
+  /** Legacy Doubao fields kept synced for older versions. */
   ttsVoice: string;
   ttsResource: string;
   /** The chat model picked in the chat box; "" means the chat provider's own model. */
@@ -182,6 +208,145 @@ export const VOICES: [string, string][] = [
   ["en_female_dacey_uranus_bigtts", "Dacey"],
 ];
 
+/** Cloud TTS services shown upfront; the rest sit behind 「更多」. */
+export const TTS_CLOUD_MAIN = ["doubao", "mimo", "qwen", "openai"];
+
+const v = (list: [string, string][]): TtsVoice[] => list.map(([id, name]) => ({ id, name }));
+
+export const TTS_SERVICES: TtsService[] = [
+  {
+    id: "edge", name: tk("Edge 在线语音"), note: tk("免费、无需 Key，中英文自然清晰"), group: "free",
+    protocol: "edge", baseUrl: "", model: "", models: [], needsKey: false,
+    voice: "zh-CN-YunxiNeural",
+    voices: v([
+      ["zh-CN-YunxiNeural", tk("云希（男声）")],
+      ["zh-CN-XiaoxiaoNeural", tk("晓晓（女声）")],
+      ["zh-CN-YunjianNeural", tk("云健（播音）")],
+      ["zh-CN-XiaoyiNeural", tk("晓伊（温和）")],
+      ["zh-CN-YunyangNeural", tk("云扬（新闻）")],
+      ["zh-TW-HsiaoChenNeural", tk("晓臻（台湾）")],
+      ["zh-HK-HiuMaanNeural", tk("晓曼（粤语）")],
+      ["en-US-AndrewMultilingualNeural", "Andrew"],
+      ["en-US-EmmaMultilingualNeural", "Emma"],
+    ]),
+  },
+  {
+    id: "system", name: tk("系统语音"), note: tk("使用本机自带语音，完全离线、无需 Key"), group: "free",
+    protocol: "system", baseUrl: "", model: "", models: [], needsKey: false,
+    voice: "", voices: [],
+  },
+  {
+    id: "doubao", name: tk("豆包语音"), note: tk("中文自然度高，支持复刻音色和原生变速"), group: "cloud",
+    protocol: "doubao", baseUrl: "https://openspeech.bytedance.com/api/v3/tts/unidirectional",
+    model: "seed-tts-2.0", models: ["seed-tts-2.0"], resource: "seed-tts-2.0",
+    keyUrl: "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default",
+    needsKey: true, sharedKeyHint: tk("填过豆包语音识别的可以留空"),
+    voice: "zh_female_vv_uranus_bigtts",
+    voices: v(VOICES),
+  },
+  {
+    id: "mimo", name: tk("小米 MiMo"), note: tk("自然播客语调，与 AI 模型共用 Key"), group: "cloud",
+    protocol: "mimo", baseUrl: "https://api.xiaomimimo.com/v1",
+    model: "mimo-v2.5-tts", models: ["mimo-v2.5-tts", "mimo-v2-tts"],
+    keyUrl: "https://platform.xiaomimimo.com/",
+    needsKey: true, sharedKeyHint: tk("填过「AI 模型」里的小米 MiMo 可以留空"),
+    voice: "default_zh",
+    voices: v([
+      ["default_zh", tk("中文默认")],
+      ["mimo_default", tk("通用默认")],
+      ["default_en", tk("英文默认")],
+    ]),
+  },
+  {
+    id: "qwen", name: tk("通义 Qwen-TTS"), note: tk("阿里云百炼，音质清晰，与通义千问共用 Key"), group: "cloud",
+    protocol: "qwen", baseUrl: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+    model: "qwen3-tts-flash", models: ["qwen3-tts-flash", "qwen-tts"],
+    keyUrl: "https://bailian.console.aliyun.com/?apiKey=1",
+    needsKey: true, sharedKeyHint: tk("填过「AI 模型」里的通义千问可以留空"),
+    voice: "Cherry",
+    voices: v([
+      ["Cherry", tk("芊悦 Cherry")],
+      ["Ethan", tk("晨煦 Ethan")],
+      ["Chelsie", tk("千雪 Chelsie")],
+      ["Serena", tk("苏瑶 Serena")],
+      ["Dylan", tk("晓东 Dylan")],
+      ["Jada", tk("阿珍 Jada")],
+      ["Sunny", tk("晴儿 Sunny")],
+    ]),
+  },
+  {
+    id: "openai", name: "OpenAI", note: tk("官方语音接口，与 OpenAI 模型共用 Key"), group: "cloud",
+    protocol: "openai", baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini-tts", models: ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"],
+    keyUrl: "https://platform.openai.com/api-keys",
+    needsKey: true, sharedKeyHint: tk("填过「AI 模型」里的 OpenAI 可以留空"),
+    voice: "alloy",
+    voices: v([
+      ["alloy", "Alloy"], ["ash", "Ash"], ["coral", "Coral"], ["echo", "Echo"],
+      ["nova", "Nova"], ["onyx", "Onyx"], ["sage", "Sage"], ["shimmer", "Shimmer"],
+    ]),
+  },
+  {
+    id: "siliconflow", name: tk("硅基流动"), note: tk("CosyVoice2 / MOSS，价格低，与硅基流动共用 Key"), group: "cloud",
+    protocol: "openai", baseUrl: "https://api.siliconflow.cn/v1",
+    model: "FunAudioLLM/CosyVoice2-0.5B", models: ["FunAudioLLM/CosyVoice2-0.5B", "fnlp/MOSS-TTSD-v0.5"],
+    keyUrl: "https://cloud.siliconflow.cn/account/ak",
+    needsKey: true, sharedKeyHint: tk("填过「AI 模型」里的硅基流动可以留空"),
+    voice: "anna",
+    voices: v([
+      ["anna", tk("Anna（沉稳女声）")],
+      ["alex", tk("Alex（沉稳男声）")],
+      ["bella", tk("Bella（激情女声）")],
+      ["benjamin", tk("Benjamin（低沉男声）")],
+      ["claire", tk("Claire（温柔女声）")],
+      ["charles", tk("Charles（磁性男声）")],
+      ["diana", tk("Diana（欢快女声）")],
+      ["david", tk("David（欢快男声）")],
+    ]),
+  },
+  {
+    id: "minimax", name: "MiniMax", note: tk("Speech 02 / 2.6，韵律自然，与 MiniMax 共用 Key"), group: "cloud",
+    protocol: "minimax", baseUrl: "https://api.minimaxi.com/v1",
+    model: "speech-02-hd", models: ["speech-02-hd", "speech-02-turbo", "speech-2.6-hd"],
+    keyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+    needsKey: true, sharedKeyHint: tk("填过「AI 模型」里的 MiniMax 可以留空"),
+    voice: "male-qn-qingse",
+    voices: v([
+      ["male-qn-qingse", tk("青涩青年")],
+      ["female-shaonv", tk("少女音色")],
+      ["male-qn-jingying", tk("精英青年")],
+      ["female-yujie", tk("御姐音色")],
+      ["presenter_male", tk("男性主持人")],
+      ["presenter_female", tk("女性主持人")],
+      ["audiobook_male_1", tk("有声书男声")],
+      ["audiobook_female_1", tk("有声书女声")],
+    ]),
+  },
+  {
+    id: "elevenlabs", name: "ElevenLabs", note: tk("多语种拟真语音，英文表现突出"), group: "cloud",
+    protocol: "elevenlabs", baseUrl: "https://api.elevenlabs.io/v1",
+    model: "eleven_multilingual_v2", models: ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5"],
+    keyUrl: "https://elevenlabs.io/app/settings/api-keys",
+    needsKey: true,
+    voice: "JBFqnCBsd6RMkjVDRZzb",
+    voices: v([
+      ["JBFqnCBsd6RMkjVDRZzb", "George"],
+      ["21m00Tcm4TlvDq8ikWAM", "Rachel"],
+      ["EXAVITQu4vr4xnSDxMaL", "Sarah"],
+      ["pNInz6obpgDQGcFmaJgB", "Adam"],
+      ["Xb7hH8MSUJpSbSDYk0k2", "Alice"],
+    ]),
+  },
+  {
+    id: "custom", name: tk("其他（OpenAI 兼容）"), note: tk("兼容 /audio/speech 的云端或本机服务"), group: "cloud",
+    protocol: "openai", baseUrl: "http://127.0.0.1:8880/v1",
+    model: "tts-1", models: ["tts-1"],
+    needsKey: false,
+    voice: "alloy",
+    voices: [],
+  },
+];
+
 export const DEFAULTS: Settings = {
   providers: Object.fromEntries(PRESETS.map((p) => [p.id, p])),
   chatProvider: "deepseek",
@@ -199,6 +364,9 @@ export const DEFAULTS: Settings = {
   playbackRate: 1,
   asrEngine: "local",
   cloudAsr: Object.fromEntries(ASR_SERVICES.map((a) => [a.id, a])),
+  ttsEngine: "edge",
+  ttsServices: Object.fromEntries(TTS_SERVICES.map((s) => [s.id, s])),
+  ttsRate: 1,
   ttsVoice: "zh_female_vv_uranus_bigtts",
   ttsResource: "seed-tts-2.0",
   chatModel: "",
@@ -232,7 +400,30 @@ export async function loadSettings(): Promise<Settings> {
   for (const p of PRESETS) providers[p.id] = { ...p, ...(raw.providers?.[p.id] ?? {}), keyUrl: p.keyUrl, models: p.models, needsKey: p.needsKey, name: p.name, group: p.group };
   const cloudAsr: Record<string, CloudAsr> = {};
   for (const a of ASR_SERVICES) cloudAsr[a.id] = { ...a, ...(raw.cloudAsr?.[a.id] ?? {}), name: a.name, note: a.note, models: a.models, keyUrl: a.keyUrl, needsKey: a.needsKey, protocol: a.protocol };
-  return migrate({ ...DEFAULTS, ...raw, providers, cloudAsr });
+  const ttsServices: Record<string, TtsService> = {};
+  for (const s of TTS_SERVICES) {
+    ttsServices[s.id] = {
+      ...s,
+      ...(raw.ttsServices?.[s.id] ?? {}),
+      name: s.name, note: s.note, group: s.group, protocol: s.protocol,
+      models: s.models, voices: s.voices, keyUrl: s.keyUrl, needsKey: s.needsKey, sharedKeyHint: s.sharedKeyHint,
+    };
+  }
+  // Carry legacy Doubao voice/resource forward, and keep existing Doubao users on Doubao when they already set a key.
+  if (!raw.ttsServices?.doubao) {
+    if (raw.ttsVoice) ttsServices.doubao.voice = raw.ttsVoice;
+    if (raw.ttsResource) ttsServices.doubao.resource = raw.ttsResource;
+  }
+  let ttsEngine = raw.ttsEngine;
+  if (!ttsEngine) {
+    const [hasTts, hasAsr] = await Promise.all([
+      api.hasApiKey("tts.doubao").catch(() => false),
+      api.hasApiKey("asr.doubao").catch(() => false),
+    ]);
+    ttsEngine = hasTts || hasAsr ? "doubao" : "edge";
+  }
+  if (!ttsServices[ttsEngine]) ttsEngine = "edge";
+  return migrate({ ...DEFAULTS, ...raw, providers, cloudAsr, ttsEngine, ttsServices });
 }
 
 /** 0.2.6 removed several switches; carry what each one meant into what remains. Idempotent. */

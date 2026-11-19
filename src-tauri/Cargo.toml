@@ -27,6 +27,10 @@ tiny_http = "0.12"
 minisign-verify = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "socks", "gzip", "brotli", "system-proxy", "multipart"] }
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
+rustls-pki-types = "1"
+webpki-roots = "1"
 futures-util = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
 roxmltree = "0.20"
