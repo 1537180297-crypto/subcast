@@ -1,7 +1,7 @@
 // Subtitles saved as files with their timestamps: SRT, WebVTT, ASS (two styles for the two languages), LRC,
 // plain text and Markdown. Long blocks are cut into sentence-sized cues the way the video overlay shows them.
 import type { Episode, Segment } from "./api";
-import { pieces } from "./pieces";
+import { timedPieces as spread } from "./pieces";
 import { toPlay, type TimeMap } from "./timemap";
 
 export type SubFormat = "srt" | "vtt" | "ass" | "lrc" | "txt" | "md";
@@ -19,27 +19,6 @@ export const FORMATS: { id: SubFormat; name: string; ext: string }[] = [
 export interface Cue { start: number; end: number; orig: string; zh?: string }
 
 const hasCjk = (s: string) => /[一-鿿]/.test(s);
-/** Shorter pieces join the next one: a cue that flashes by can't be read. */
-const MIN_CUE = 1;
-
-/** Pieces of a block with times spread over it by length (as the overlay assumes speech is spread evenly). */
-function spread(text: string, cjk: boolean, start: number, end: number): { start: number; end: number; text: string }[] {
-  const ps = pieces(text, cjk);
-  const total = ps.reduce((n, p) => n + p.length, 0) || 1;
-  const out: { start: number; end: number; text: string }[] = [];
-  let acc = 0;
-  for (const p of ps) {
-    const s = start + (end - start) * (acc / total);
-    acc += p.length;
-    const e = start + (end - start) * (acc / total);
-    const last = out[out.length - 1];
-    if (last && last.end - last.start < MIN_CUE) { last.end = e; last.text += (cjk ? "" : " ") + p; }
-    else out.push({ start: s, end: e, text: p });
-  }
-  const last = out[out.length - 1];
-  if (out.length > 1 && last.end - last.start < MIN_CUE) { const prev = out[out.length - 2]; prev.end = last.end; prev.text += (cjk ? "" : " ") + last.text; out.pop(); }
-  return out;
-}
 
 /** Sentence-sized cues. Bilingual cues follow the original's sentences, each with the translation pieces that
  *  fall in it (or, when none starts there, the one being shown at that moment). */

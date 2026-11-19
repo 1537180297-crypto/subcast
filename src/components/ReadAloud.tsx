@@ -7,8 +7,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { currentTtsService, isKeyError, speak, stopSpeaking } from "../lib/tts";
 import { useStore } from "../store";
 import { t, tr } from "../lib/i18n";
+import { localInstalled, refreshLocalTts, useLocalTts } from "../lib/localTts";
 import { KeyField, NO_AUTO } from "./SettingsDialog";
-import { PreviewButton, useSystemVoices } from "./TtsSettings";
+import { PreviewButton, isLocalEngine, useSystemVoices } from "./TtsSettings";
 
 export function ReadAloud({ text, title }: { text: () => string; title?: string }) {
   const speaking = useStore((s) => s.speaking);
@@ -42,14 +43,16 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
   const svc = currentTtsService(settings);
   const [custom, setCustom] = useState(false);
   const sysVoices = useSystemVoices(svc.id === "system");
+  const localStatus = useLocalTts((s) => s.status);
+  useEffect(() => { void refreshLocalTts(); }, []);
 
   useEffect(() => {
     setCustom(svc.group === "cloud" && svc.voices.length > 0 && !svc.voices.some((v) => v.id === svc.voice));
   }, [svc.id]);
 
-  // Quick-switch row: System Enhanced voice + Doubao + Edge + currently selected cloud engine (if another one).
-  const quickIds = ["system", "doubao", "edge"];
-  if (!quickIds.includes(svc.id)) quickIds.push(svc.id);
+  // Quick-switch row: offline (System Enhanced / Melo / Kokoro) + Doubao + Edge + currently selected cloud engine.
+  const quickIds = ["local", "doubao", "edge"];
+  if (!quickIds.includes(svc.id) && svc.id !== "system") quickIds.push(svc.id);
 
   const setVoice = (voice: string, extra?: Partial<typeof svc>, quiet = false) => {
     const next = { ...svc, voice, ...extra };
@@ -81,11 +84,12 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
         {quickIds.map((id) => {
           const item = settings.ttsServices[id];
           if (!item) return null;
+          const on = id === "local" ? isLocalEngine(svc.id) : svc.id === id;
           return (
             <button
               key={id}
-              className={`chip sm ${svc.id === id ? "on" : ""}`}
-              onClick={() => void saveSettings({ ttsEngine: id })}
+              className={`chip sm ${on ? "on" : ""}`}
+              onClick={() => void saveSettings({ ttsEngine: id === "local" ? (isLocalEngine(svc.id) ? svc.id : "system") : id })}
             >
               {t(item.name)}
             </button>
@@ -98,17 +102,51 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
         <PreviewButton engine={svc.id} voice={svc.voice} />
       </div>
 
-      {svc.id === "system" ? (
-        <div className="model-chips">
-          <button className={`chip sm ${!svc.voice ? "on" : ""}`} onClick={() => setVoice("")}>
-            {t("系统默认")}
-          </button>
-          {popSysVoices.map((v) => (
-            <button key={v.id} className={`chip sm ${svc.voice === v.id ? "on" : ""}`} onClick={() => setVoice(v.id)}>
-              {v.name}
+      {isLocalEngine(svc.id) ? (
+        <>
+          <div className="model-chips">
+            <button className={`chip sm ${svc.id === "system" ? "on" : ""}`} onClick={() => void saveSettings({ ttsEngine: "system" })}>
+              {t("系统增强语音")}
             </button>
-          ))}
-        </div>
+            {(["melo", "kokoro"] as const).map((m) => {
+              const ready = localInstalled(localStatus, m);
+              return (
+                <button
+                  key={m}
+                  className={`chip sm ${svc.id === "local" && settings.ttsServices.local.model === m ? "on" : ""}`}
+                  title={ready ? undefined : t("首次使用需要下载")}
+                  onClick={() => {
+                    if (!ready) { onClose?.(); openSettings("tts"); return; }
+                    void saveSettings({ ttsEngine: "local", ttsServices: { ...settings.ttsServices, local: { ...settings.ttsServices.local, model: m } } });
+                  }}
+                >
+                  {m === "melo" ? "Melo" : "Kokoro"}{ready ? "" : " ↓"}
+                </button>
+              );
+            })}
+          </div>
+          {svc.id === "system" && (
+            <div className="model-chips">
+              <button className={`chip sm ${!svc.voice ? "on" : ""}`} onClick={() => setVoice("")}>
+                {t("系统默认")}
+              </button>
+              {popSysVoices.map((v) => (
+                <button key={v.id} className={`chip sm ${svc.voice === v.id ? "on" : ""}`} onClick={() => setVoice(v.id)}>
+                  {v.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {svc.id === "local" && svc.model === "kokoro" && (
+            <div className="model-chips">
+              {svc.voices.map((v) => (
+                <button key={v.id} className={`chip sm ${svc.voice === v.id ? "on" : ""}`} onClick={() => setVoice(v.id)}>
+                  {t(v.name)}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       ) : svc.voices.length > 0 ? (
         <div className="model-chips">
           {svc.voices.map((v) => (
@@ -175,7 +213,7 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
       )}
 
       <p className="muted small">
-        {svc.id === "system"
+        {isLocalEngine(svc.id)
           ? t("完全在本机离线合成，文字不会离开你的电脑。")
           : t("朗读时文字会发送到 {name}。", { name: t(svc.name) })}
       </p>

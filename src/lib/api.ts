@@ -51,9 +51,10 @@ export interface SearchResult { title: string; author: string; cover?: string; f
 export interface ModelInfo { id: string; name: string; sizeMb: number; note: string; installed: boolean; /** Another app's copy, used in place (no download). */ from?: string | null }
 export interface Provider { id: string; name: string; protocol: "openai" | "anthropic" | "cli"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[]; group?: "relay" | "provider" | "local" | "cli" }
 export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai" | "deepseek"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
+export interface LocalTtsStatus { supported: boolean; runtime: boolean; models: { id: string; installed: boolean; bytes: number }[] }
 export interface TtsRequest {
   engine: string;
-  protocol: "edge" | "system" | "doubao" | "mimo" | "openai" | "qwen" | "minimax" | "elevenlabs";
+  protocol: "edge" | "local" | "system" | "doubao" | "mimo" | "openai" | "qwen" | "minimax" | "elevenlabs";
   baseUrl?: string;
   model?: string;
   voice: string;
@@ -124,6 +125,9 @@ export const api = {
   ttsSynthesize: (req: TtsRequest) => invoke<TtsResult>("tts_synthesize", { req }),
   ttsSystemVoices: () => invoke<SystemVoice[]>("tts_system_voices"),
   clearTtsCache: () => invoke<void>("clear_tts_cache"),
+  localTtsStatus: () => invoke<LocalTtsStatus>("local_tts_status"),
+  localTtsInstall: (id: string, mirrorFirst: boolean) => invoke<void>("local_tts_install", { id, mirrorFirst }),
+  localTtsDelete: (id: string) => invoke<void>("local_tts_delete", { id }),
   youtubeStream: (videoId: string, mode: "native-hls" | "proxy-hls" | "mp4", fresh = false) => invoke<{ url: string; kind: "hls" | "mp4" }>("youtube_stream", { videoId, mode, fresh }),
   uiReady: () => invoke<{ shell: string; build: number | null }>("ui_ready"),
   shareTranslation: (episodeId: string, engine: string, model: string) => invoke<string>("share_translation", { episodeId, engine, model }),
@@ -136,6 +140,12 @@ export const api = {
   youtubeSignedIn: () => invoke<boolean>("youtube_signed_in"),
   youtubeSignOut: () => invoke<void>("youtube_sign_out"),
   openPrivacySettings: () => invoke<void>("open_privacy_settings"),
+  shadowStart: () => invoke<void>("shadow_start"),
+  shadowStop: () => invoke<void>("shadow_stop"),
+  shadowClear: () => invoke<void>("shadow_clear"),
+  shadowReady: (model: string) => invoke<boolean>("shadow_ready", { model }),
+  shadowHear: (model: string, language: string) => invoke<string>("shadow_hear", { model, language }),
+  openMicSettings: () => invoke<void>("open_mic_settings"),
   youtubeTracks: (episodeId: string) => invoke<{ language: string; auto: boolean }[]>("youtube_tracks", { episodeId }),
   useYoutubeTrack: (episodeId: string, language: string, auto: boolean) => invoke<Transcript>("use_youtube_track", { episodeId, language, auto }),
   translateTexts: (texts: string[], target = "zh-CN") => invoke<string[]>("translate_texts", { texts, target }),
@@ -143,12 +153,12 @@ export const api = {
   listDownloads: () => invoke<Saved[]>("list_downloads"),
   deleteDownload: (episodeId: string) => invoke<void>("delete_download", { episodeId }),
   clearDownloads: () => invoke<void>("clear_downloads"),
-  storageInfo: () => invoke<{ downloads: number; models: number; library: number; temp: number; audioCache: number; ttsCache?: number }>("storage_info"),
+  storageInfo: () => invoke<{ downloads: number; models: number; library: number; temp: number; audioCache: number; ttsCache?: number; ttsModels?: number }>("storage_info"),
   alignAudio: (episodeId: string, force: boolean, model?: string) => invoke<Aligned>("align_audio", { episodeId, force, model }),
   saveTimeMap: (episodeId: string, map: TimeMap) => invoke<void>("save_time_map", { episodeId, map }),
   listAudioCache: () => invoke<Saved[]>("list_audio_cache"),
   clearAudioCache: () => invoke<void>("clear_audio_cache"),
-  openDataFolder: (kind: "downloads" | "models" | "data" | "tts-cache") => invoke<void>("open_data_folder", { kind }),
+  openDataFolder: (kind: "downloads" | "models" | "data" | "tts-cache" | "tts-models") => invoke<void>("open_data_folder", { kind }),
   revealDownload: (episodeId: string) => invoke<void>("reveal_download", { episodeId }),
   clearTemp: () => invoke<void>("clear_temp"),
   fullNotes: (episodeId: string) => invoke<string | null>("full_notes", { episodeId }),

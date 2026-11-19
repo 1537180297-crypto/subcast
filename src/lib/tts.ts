@@ -29,6 +29,8 @@ function maxChunkChars(protocol: TtsService["protocol"]): number {
     case "qwen": return 480;
     case "doubao": return 900;
     case "edge": return 800;
+    // One process per chunk on this machine: short chunks get the first words out sooner.
+    case "local": case "system": return 280;
     default: return 800;
   }
 }

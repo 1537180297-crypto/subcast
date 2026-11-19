@@ -33,7 +33,7 @@ jobs:
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config cmake clang
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev libasound2-dev pkg-config cmake clang
       - name: Windows dependencies
         if: startsWith(matrix.platform, 'windows')
         run: choco install -y llvm cmake --no-progress

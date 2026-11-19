@@ -11,10 +11,12 @@ mod feeds;
 mod hlsproxy;
 mod import;
 mod llm;
+mod local_tts;
 mod model;
 mod net;
 mod align;
 mod offline;
+mod shadow;
 #[cfg_attr(debug_assertions, allow(dead_code))] // serving the interface is release-only
 mod ota;
 mod qiaomu;
@@ -569,6 +571,31 @@ fn tts_system_voices() -> Vec<speech::SystemVoice> {
     speech::list_system_voices()
 }
 
+/// Offline Melo / Kokoro: whether this system can run them and which are downloaded.
+#[tauri::command(async)]
+fn local_tts_status(state: State<'_, AppState>) -> local_tts::Status {
+    local_tts::status(&state.data)
+}
+
+/// Downloads a local TTS model (and the sherpa-onnx runtime when missing), emitting `local-tts-download`.
+/// Cancel with `cancel_job("local-tts:<id>")`.
+#[tauri::command]
+async fn local_tts_install(app: AppHandle, state: State<'_, AppState>, id: String, mirror_first: bool) -> Res<()> {
+    let job = format!("local-tts:{id}");
+    let cancel = state.job(&job);
+    let (app2, id2) = (app.clone(), id.clone());
+    let r = local_tts::install(&state.data, &id, cancel.clone(), mirror_first, move |got, total| {
+        let _ = app2.emit("local-tts-download", json!({"id": id2, "received": got, "total": total}));
+    }).await;
+    state.done_with(&job, &cancel);
+    r.map_err(e)
+}
+
+#[tauri::command(async)]
+fn local_tts_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    local_tts::delete(&state.data, &id).map_err(e)
+}
+
 /// Clears cached TTS audio files.
 #[tauri::command(async)]
 fn clear_tts_cache(state: State<'_, AppState>) -> Res<()> {
@@ -785,6 +812,7 @@ fn storage_info(state: State<'_, AppState>) -> serde_json::Value {
         "temp": dir_bytes(&d.join("work")),
         "audioCache": dir_bytes(&offline::cache_dir(d)),
         "ttsCache": dir_bytes(&speech::cache_dir(d)),
+        "ttsModels": dir_bytes(&local_tts::models_dir(d)),
     })
 }
 
@@ -796,6 +824,7 @@ fn open_data_folder(app: AppHandle, state: State<'_, AppState>, kind: String) ->
         "downloads" => offline::dir(&state.data),
         "models" => asr::models_dir(&state.data),
         "tts-cache" => speech::cache_dir(&state.data),
+        "tts-models" => local_tts::models_dir(&state.data),
         _ => state.data.clone(),
     };
     std::fs::create_dir_all(&dir).map_err(e)?;
@@ -979,6 +1008,20 @@ async fn listen_probes(state: &AppState, path: &std::path::Path, starts: &[f64],
     let _ = tokio::fs::remove_dir_all(&work).await;
     heard
 }
+
+/// 跟读打分 (src-tauri/src/shadow.rs): the microphone on or off, a new turn, and what was said in it.
+#[tauri::command]
+fn shadow_start(app: tauri::AppHandle) -> Res<()> { shadow::start(move |peak| { let _ = app.emit("shadow-level", peak); }).map_err(e) }
+#[tauri::command]
+fn shadow_stop() { shadow::stop() }
+#[tauri::command]
+fn shadow_clear() { shadow::clear() }
+#[tauri::command]
+fn shadow_ready(state: State<'_, AppState>, model: String) -> bool { shadow::ready(&state.data, &model) }
+#[tauri::command]
+async fn shadow_hear(state: State<'_, AppState>, model: String, language: String) -> Res<String> { shadow::hear(&state.data, &model, &language).await.map_err(e) }
+#[tauri::command]
+fn open_mic_settings() { shadow::open_mic_settings() }
 
 /// Saves a time map adjusted by hand ("对齐到这一句").
 #[tauri::command]
@@ -1535,7 +1578,8 @@ pub fn run() {
             set_progress, set_watched, mark_show_watched, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
             download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             app_update_check, app_update_download, app_update_install,
-            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache
+            shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
+            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

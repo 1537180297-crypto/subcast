@@ -334,14 +334,14 @@ const REPO = "https://github.com/joeseesun/subcast";
 /** "占用 1.9 GB" for the 通用 page's storage row. */
 function StorageTotal() {
   const [total, setTotal] = useState<number | null>(null);
-  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp + (i.audioCache ?? 0) + (i.ttsCache ?? 0))).catch(() => {}); }, []);
+  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp + (i.audioCache ?? 0) + (i.ttsCache ?? 0) + (i.ttsModels ?? 0))).catch(() => {}); }, []);
   return <span className="muted small">{total == null ? "" : t("占用 {size}", { size: bytes(total) })}</span>;
 }
 
 function Storage({ onAsr }: { onAsr: () => void }) {
   const go = useStore((s) => s.go);
   const saved = useOffline((s) => s.saved);
-  const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number; audioCache: number; ttsCache?: number } | null>(null);
+  const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number; audioCache: number; ttsCache?: number; ttsModels?: number } | null>(null);
   const load = () => void api.storageInfo().then(setInfo).catch(() => {});
   useEffect(load, [saved]);
   const n = Object.keys(saved).length;
@@ -388,6 +388,16 @@ function Storage({ onAsr }: { onAsr: () => void }) {
             </div>
             <span className="storage-size">{size(info.audioCache)}</span>
             <button className="btn sm" onClick={() => void clearAudioCache().then(load)}>{t("清理")}</button>
+          </div>
+        )}
+        {!!info?.ttsModels && (
+          <div className="storage-row">
+            <div className="storage-row-text">
+              <p className="storage-row-name">{t("本地语音模型")}</p>
+              <p className="muted small">{t("Melo、Kokoro 离线朗读用的模型，在「朗读」里下载或删除")}</p>
+            </div>
+            <span className="storage-size">{size(info.ttsModels)}</span>
+            <button className="btn sm" onClick={() => void api.openDataFolder("tts-models")}><FolderOpen size={13} /> {t("打开文件夹")}</button>
           </div>
         )}
         {!!info?.ttsCache && (

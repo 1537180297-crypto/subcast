@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shadow-clear"
+description = "Enables the shadow_clear command without any pre-configured scope."
+commands.allow = ["shadow_clear"]
+
+[[permission]]
+identifier = "deny-shadow-clear"
+description = "Denies the shadow_clear command without any pre-configured scope."
+commands.deny = ["shadow_clear"]

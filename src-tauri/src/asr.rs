@@ -915,7 +915,6 @@ pub fn decode_mono(path: &Path, mut f: impl FnMut(u32, &[f32])) -> Result<()> {
 }
 
 /// Box-filtered linear resampling of a whole buffer (tests compare `Resampler` against it).
-#[cfg(test)]
 pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || input.is_empty() { return input.to_vec(); }
     let mut r = Resampler::new(from, to);

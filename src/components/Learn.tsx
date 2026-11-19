@@ -315,34 +315,12 @@ export function EpisodeWords({ ep, segments, zh, onClose }: { ep: Episode; segme
   );
 }
 
-// ---- shadowing --------------------------------------------------------------------------------------------
-
-/** 跟读: after each sentence the player pauses about as long as the sentence took, so you can say it back. */
-export function useShadowing(on: boolean, epId: string, segments: Segment[]) {
-  useEffect(() => {
-    if (!on) return;
-    let resume: number | undefined;
-    let lastEnd = -1;
-    const unsub = useStore.subscribe((s, prev) => {
-      if (s.current?.id !== epId || !s.playing || s.time === prev.time) return;
-      // The sentence that just finished: playback crossed its end since the last update.
-      const seg = segments.find((x) => prev.time < x.end && s.time >= x.end && s.time - x.end < 1.5);
-      if (!seg || seg.end === lastEnd) return;
-      lastEnd = seg.end;
-      s.player?.toggle();
-      const gap = Math.min(12, Math.max(1.5, (seg.end - seg.start) * 1.1 + 0.6));
-      resume = window.setTimeout(() => { const st = useStore.getState(); if (!st.playing && st.current?.id === epId) st.player?.play(); }, gap * 1000);
-    });
-    return () => { unsub(); window.clearTimeout(resume); };
-  }, [on, epId, segments]);
-}
-
 // ---- dictation --------------------------------------------------------------------------------------------
 
 const norm = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").match(/[a-z0-9']+/g) ?? [];
 
 /** Marks each word of the original as heard (typed) or missed, by longest common subsequence. */
-function compare(original: string, typed: string): { word: string; ok: boolean }[] {
+export function compare(original: string, typed: string): { word: string; ok: boolean }[] {
   const a = original.match(/\S+/g) ?? [];
   const an = a.map((w) => norm(w).join(""));
   const b = norm(typed);

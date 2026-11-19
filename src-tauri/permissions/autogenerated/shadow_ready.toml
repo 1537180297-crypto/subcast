@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shadow-ready"
+description = "Enables the shadow_ready command without any pre-configured scope."
+commands.allow = ["shadow_ready"]
+
+[[permission]]
+identifier = "deny-shadow-ready"
+description = "Denies the shadow_ready command without any pre-configured scope."
+commands.deny = ["shadow_ready"]

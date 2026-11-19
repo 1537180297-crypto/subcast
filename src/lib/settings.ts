@@ -65,7 +65,7 @@ export interface Settings {
   /** "local", or the id of a cloud transcription service. */
   asrEngine: string;
   cloudAsr: Record<string, CloudAsr>;
-  /** Active TTS engine id ("edge", "system", "doubao", "mimo", "qwen", "openai", "siliconflow", "minimax", "elevenlabs", "custom"). */
+  /** Active TTS engine id ("edge", "local", "system", "doubao", "mimo", "qwen", "openai", "siliconflow", "minimax", "elevenlabs", "custom"). */
   ttsEngine: string;
   ttsServices: Record<string, TtsService>;
   /** Speech rate multiplier for TTS synthesis (0.75–1.5, default 1). */
@@ -106,6 +106,8 @@ export interface Settings {
   learnSounds: boolean;
   /** Pause playback while a word card is open (and resume when it closes). */
   learnPauseCard: boolean;
+  /** 跟读: hear the listener with the microphone and move on once the sentence was said (else timed pauses). */
+  shadowScore?: boolean;
   /** The one-time "想顺便学英语吗？" tip was answered. */
   learnAsked: boolean;
   /** Upload transcripts we make to the shared library (anonymous; reading shared ones is always on). */
@@ -233,6 +235,21 @@ export const TTS_SERVICES: TtsService[] = [
       ["zh-HK-HiuMaanNeural", tk("晓曼（粤语）")],
       ["en-US-AndrewMultilingualNeural", "Andrew"],
       ["en-US-EmmaMultilingualNeural", "Emma"],
+    ]),
+  },
+  {
+    id: "local", name: tk("本地语音"), note: tk("在本机离线合成，文字不会离开你的电脑"), group: "free",
+    protocol: "local", baseUrl: "", model: "melo", models: ["melo", "kokoro"], needsKey: false,
+    voice: "zf_001",
+    voices: v([
+      ["zf_001", tk("知夏（女声）")],
+      ["zf_002", tk("清禾（女声）")],
+      ["zf_003", tk("晴岚（女声）")],
+      ["zf_004", tk("沐言（女声）")],
+      ["zm_009", tk("言川（男声）")],
+      ["zm_010", tk("远山（男声）")],
+      ["zm_011", tk("景和（男声）")],
+      ["zm_012", tk("明朗（男声）")],
     ]),
   },
   {

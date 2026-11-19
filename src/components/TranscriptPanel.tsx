@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AudioLines, BookA, Check, ChevronDown, Square, Volume2, Download, Ellipsis, Languages, ListChecks, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { AudioLines, BookA, Check, ChevronDown, Square, Volume2, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, RefreshCw, Search, X } from "lucide-react";
 import { AlignBar, anchorHere } from "./AlignBar";
 import { Modal } from "./Chrome";
 import { ReadAloudSettings } from "./ReadAloud";
@@ -20,6 +20,7 @@ import { ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { lang, t, tk, tr, useLang } from "../lib/i18n";
 import { looksEnglish } from "../lib/dict";
 import { EpisodeWords, LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget, type LearnMarks } from "./Learn";
+import { ShadowBar, useShadowing } from "./Shadowing";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
 
@@ -139,6 +140,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const marks = useLearnMarks(english);
   const learning = !!marks || (english && settings.learnOn);
   const [card, setCard] = useState<CardTarget | null>(null);
+  const [shadow, setShadow] = useState(false);
+  useShadowing(shadow && isCurrent, ep.id, segments, transcript?.language?.startsWith("en") ? "en" : "auto");
+  useEffect(() => { if (!learning) setShadow(false); }, [learning]);
   const closeCard = useCallback(() => setCard(null), []);
   // Looking a word up pauses playback (as Language Reactor and asbplayer do), and closing the card resumes it
   // when the card was what paused it.
@@ -249,7 +253,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     )}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
-    {total > 0 && <PanelMenu ep={ep} segments={segments} zh={translation?.items} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items } : undefined} onAlign={canAlign ? () => setAligning(true) : undefined} />}
+    {total > 0 && <PanelMenu ep={ep} segments={segments} zh={translation?.items} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, shadow, setShadow, canShadow: isCurrent } : undefined} onAlign={canAlign ? () => setAligning(true) : undefined} />}
   </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
 
@@ -278,6 +282,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
         </div>
       )}
       {aligning && canAlign && <AlignBar onClose={() => setAligning(false)} />}
+      {shadow && isCurrent && (
+        <ShadowBar onExit={() => setShadow(false)} />
+      )}
       <div className={`lines${marks && settings.learnCard ? " learning" : ""}`} ref={list} onWheel={() => (userScrolled.current = Date.now())} onClickCapture={onWordClick}>
         {english && <LearnTip />}
         {rows.map((i, k) => (
@@ -296,7 +303,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
 }
 
 /** "…" on the subtitle bar: the rarer tools (本集术语表, retranslating with the model, exporting). */
-interface LearnMenu { segments: Segment[]; zh: (string | null | undefined)[] | undefined }
+interface LearnMenu { segments: Segment[]; zh: (string | null | undefined)[] | undefined; shadow: boolean; setShadow: (v: boolean) => void; canShadow: boolean }
 
 function PanelMenu({ ep, segments, zh, onRetranslate, learn, onAlign }: { ep: Episode; segments: Segment[]; zh: (string | null | undefined)[] | undefined; onRetranslate?: () => void; learn?: LearnMenu; onAlign?: () => void }) {
   const [menu, setMenu] = useState(false);
@@ -315,9 +322,10 @@ function PanelMenu({ ep, segments, zh, onRetranslate, learn, onAlign }: { ep: Ep
       <button className="icon-btn" title={t("更多")} aria-label={t("更多")} aria-expanded={menu} onClick={() => setMenu(!menu)}><Ellipsis size={15} /></button>
       {menu && (
         <div className="panel-menu-pop" role="menu">
-          {learn && (
+          {learn && <>
             <button role="menuitem" onClick={() => { setMenu(false); setWords(true); }}><ListChecks size={14} /> {t("本期生词…")}</button>
-          )}
+            <button role="menuitemcheckbox" aria-checked={learn.shadow} disabled={!learn.canShadow} title={learn.canShadow ? undefined : t("先播放这一集")} onClick={() => { setMenu(false); learn.setShadow(!learn.shadow); }}><Mic size={14} /> {learn.shadow ? t("退出跟读模式") : t("跟读模式")}</button>
+          </>}
           {learn && onRetranslate && <div className="menu-sep" role="separator" />}
           {onRetranslate && <>
             <button role="menuitem" onClick={() => { setMenu(false); setGloss(true); }}><BookA size={14} /> {t("本集术语表…")}</button>
