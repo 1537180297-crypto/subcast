@@ -64,7 +64,7 @@ describe('basics', () => {
     assert.equal(r.headers['cache-control'], 'public, max-age=300');
     assert.ok(r.headers.etag);
     const t = r.json;
-    assert.deepEqual(Object.keys(t).sort(), ['createdAt', 'id', 'language', 'model', 'score', 'segments', 'source', 'translation', 'versions'].sort());
+    assert.deepEqual(Object.keys(t).sort(), ['audio', 'createdAt', 'id', 'language', 'model', 'score', 'segments', 'source', 'translation', 'versions'].sort());
     assert.equal(t.id, up.json.id);
     assert.equal(t.source, 'whisper');
     assert.equal(t.model, 'large-v3-turbo');
@@ -513,5 +513,94 @@ describe('guides (导读)', () => {
     assert.equal((await putGuide(body({ text: '太短了' }))).status, 400);
     assert.equal((await putGuide(body({ text: 'english only '.repeat(40) }))).status, 400);
     assert.equal((await putGuide(body({ lang: 'en' }))).status, 400);
+  });
+});
+
+describe('audio identity and fingerprints', () => {
+  const fpFor = (secs, seed = 1) => {
+    const n = Math.round(secs * 11025 / 1366);
+    const buf = Buffer.alloc(n * 4);
+    for (let i = 0; i < n; i++) buf.writeUInt32LE((Math.imul(i + seed, 2654435761) >>> 0), i * 4);
+    return buf.toString('base64');
+  };
+  const audio = (secs = 600, extra = {}) => ({ bytes: 9_600_000, etag: '"abc"', secs, fpAlgo: 'chromaprint2', fp: fpFor(secs), ...extra });
+
+  test('stores the audio and serves its fingerprint separately', async () => {
+    const keys = ['yt:audioFp0001'];
+    const up = await post(makeUpload({ keys, seed: 301, audio: audio() }));
+    assert.equal(up.status, 200, up.text);
+    const hit = await lookup(keys);
+    assert.deepEqual(hit.json.audio, { bytes: 9_600_000, etag: '"abc"', secs: 600, fp: true });
+    assert.ok(!hit.text.includes(fpFor(600).slice(0, 40)), 'lookup does not carry the fingerprint itself');
+    const fp = await request(srv.port, 'GET', `/api/v1/transcripts/${up.json.id}/fingerprint`);
+    assert.equal(fp.status, 200, fp.text);
+    assert.deepEqual(fp.json, { algo: 'chromaprint2', secs: 600, fp: fpFor(600) });
+    const again = await request(srv.port, 'GET', `/api/v1/transcripts/${up.json.id}/fingerprint`, { headers: { 'If-None-Match': fp.headers.etag } });
+    assert.equal(again.status, 304);
+  });
+
+  test('older clients without audio still work, and lookups say so', async () => {
+    const keys = ['yt:audioFp0002'];
+    const up = await post(makeUpload({ keys, seed: 302 }));
+    assert.equal(up.status, 200, up.text);
+    assert.equal((await lookup(keys)).json.audio, null);
+    assert.equal((await request(srv.port, 'GET', `/api/v1/transcripts/${up.json.id}/fingerprint`)).status, 404);
+    const sizeOnly = await post(makeUpload({ keys: ['yt:audioFp0003'], seed: 303, audio: { bytes: 5, secs: 600 } }));
+    assert.equal(sizeOnly.status, 200, sizeOnly.text);
+    assert.deepEqual((await lookup(['yt:audioFp0003'])).json.audio, { bytes: 5, etag: '', secs: 600, fp: false });
+  });
+
+  test('a matching upload with a fingerprint takes over one without', async () => {
+    const keys = ['yt:audioFp0004'];
+    const first = await post(makeUpload({ keys, seed: 304 }));
+    const second = await post(makeUpload({ keys, seed: 304, audio: audio() }));
+    assert.equal(second.json.action, 'upgraded', second.text);
+    assert.equal(second.json.id, first.json.id, 'same version, now with audio');
+    assert.equal((await lookup(keys)).json.audio.fp, true);
+    // A later fingerprint-less duplicate does not take it away.
+    const third = await post(makeUpload({ keys, seed: 304 }));
+    assert.equal(third.json.action, 'confirmed');
+    assert.equal((await lookup(keys)).json.audio.fp, true);
+  });
+
+  test('rejects malformed audio', async () => {
+    const bad = [
+      { bytes: 0, secs: 600 },
+      { bytes: 1.5, secs: 600 },
+      { bytes: 10, secs: -1 },
+      { bytes: 10, secs: 600, extra: 1 },
+      audio(600, { fpAlgo: 'other' }),
+      audio(600, { fp: '***' }),
+      audio(600, { fp: fpFor(300) }),
+    ];
+    for (const [i, a] of bad.entries()) {
+      const r = await post(makeUpload({ keys: [`yt:audioBad00${i}`], seed: 310 + i, audio: a }));
+      assert.equal(r.status, 400, `case ${i}: ${r.text}`);
+    }
+  });
+});
+
+describe('schema migration', () => {
+  test('a first-release database gains the audio columns', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { Store } = await import('../src/store.js');
+    const dir = mkdtempSync(join(tmpdir(), 'subcast-mig-'));
+    const old = new DatabaseSync(join(dir, 'subcast.db'));
+    old.exec(`CREATE TABLE versions (id TEXT PRIMARY KEY, episode_id INTEGER NOT NULL, install_hash TEXT NOT NULL, source TEXT NOT NULL,
+      model TEXT NOT NULL, language TEXT NOT NULL, duration REAL NOT NULL, max_end REAL NOT NULL, seg_count INTEGER NOT NULL,
+      quality REAL NOT NULL, segments BLOB NOT NULL, sketch BLOB NOT NULL, tr_lang TEXT, tr_engine TEXT, tr_model TEXT,
+      tr_ratio REAL NOT NULL DEFAULT 0, translation BLOB, votes INTEGER NOT NULL DEFAULT 0, reports INTEGER NOT NULL DEFAULT 0,
+      report_weight REAL NOT NULL DEFAULT 0, score REAL NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0,
+      client_version TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      PRAGMA user_version = 1;`);
+    old.close();
+    const store = new Store(dir);
+    const cols = store.db.prepare('PRAGMA table_info(versions)').all().map((c) => c.name);
+    for (const c of ['audio_bytes', 'audio_etag', 'audio_secs', 'fp_algo', 'fp']) assert.ok(cols.includes(c), c);
+    assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 2);
+    store.close();
+    const reopened = new Store(dir);
+    reopened.close();
   });
 });

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, type Episode, type Show } from "./lib/api";
 import { DEFAULTS, loadSettings, type Settings } from "./lib/settings";
 import { setLang, t } from "./lib/i18n";
+import type { Aligned, AlignStatus } from "./lib/timemap";
 
 export type View =
   | { kind: "latest" }
@@ -11,16 +12,23 @@ export type View =
   | { kind: "downloads" }
   | { kind: "show"; id: string }
   | { kind: "channel"; input: string }
-  | { kind: "episode"; id: string };
+  | { kind: "episode"; id: string }
+  | { kind: "words" }
+  | { kind: "settings" };
 
 export interface PlayerHandle {
+  /** To a subtitle time. */
   seek(seconds: number): void;
+  /** To a time on the player's own clock (the progress bar), when it differs from subtitle time. */
+  seekRaw?(seconds: number): void;
   toggle(): void;
   play(): void;
   setRate(rate: number): void;
   /** The episode this player plays. A video's player can be ready before the episode becomes current. */
   episodeId?: string;
 }
+
+export type SettingsSection = "subtitles" | "ai" | "general" | "learn" | "about" | "model" | "asr" | "reading" | "tts" | "shortcuts" | "storage";
 
 interface State {
   speaking: boolean;
@@ -34,6 +42,13 @@ interface State {
   /** The episode loaded in the player (may differ from the one being viewed). */
   current: Episode | null;
   time: number;
+  /** The audio element's own clock; differs from `time` (subtitle time) when the subtitles were made from another
+   *  cut of the episode (src/lib/timemap.ts). */
+  rawTime?: number;
+  /** How the current episode's subtitles line up with its audio. */
+  align?: (Omit<Aligned, "status"> & { id: string; status: AlignStatus | "working" }) | null;
+  /** Playing something only this audio file has (an ad, most likely) until this time on its clock. */
+  gapEnd?: number | null;
   length: number;
   playing: boolean;
   player: PlayerHandle | null;
@@ -51,9 +66,14 @@ interface State {
   /** Which tab the add dialog opens on. */
   addTab?: "search" | "link" | "import";
   toast: string | null;
+  /** The settings page is showing (kept in step with `view`, for panels that recheck keys when it closes). */
   settingsOpen: boolean;
-  settingsSection?: "model" | "asr" | "reading" | "tts" | "shortcuts" | "general" | "storage" | "about";
+  settingsSection?: SettingsSection;
+  /** Bumped by each openSettings call, so a page already open still jumps to the asked section. */
+  settingsNonce?: number;
   addOpen: boolean;
+  /** The bulk "manage subscriptions" dialog is open. */
+  manageOpen: boolean;
   init(): Promise<void>;
   go(view: View): void;
   back(): void;
@@ -64,7 +84,7 @@ interface State {
   /** Loads an episode into the player without navigating. */
   load(ep: Episode): void;
   notify(text: string): void;
-  openSettings(section?: "model" | "asr" | "tts" | "general" | "storage" | "about"): void;
+  openSettings(section?: SettingsSection): void;
   /** Checks every subscription for new episodes; tells the user when there are some. */
   checkUpdates(): Promise<void>;
   lastChecked: number;
@@ -90,6 +110,7 @@ export const useStore = create<State>((set, get) => ({
   toast: null,
   settingsOpen: false,
   addOpen: false,
+  manageOpen: false,
   async init() {
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
     setLang(settings.uiLang);
@@ -112,12 +133,15 @@ export const useStore = create<State>((set, get) => ({
     } catch { /* offline: try again next time */ }
   },
   go(view) {
-    set((s) => ({ view, history: [...s.history.slice(-30), s.view] }));
+    const cur = get().view;
+    // Opening settings again while on it only switches the section (see openSettings), no new history entry.
+    if (view.kind === "settings" && cur.kind === "settings") return;
+    set((s) => ({ view, history: [...s.history.slice(-30), s.view], settingsOpen: view.kind === "settings" }));
   },
   back() {
     const h = get().history;
-    if (h.length) set({ view: h[h.length - 1], history: h.slice(0, -1) });
-    else set({ view: { kind: "latest" } });
+    const view = h.length ? h[h.length - 1] : { kind: "latest" as const };
+    set({ view, history: h.slice(0, -1), settingsOpen: view.kind === "settings" });
   },
   async reloadShows() {
     // Unchanged after a refresh (the usual case): keep the same array, so pages that depend on it don't reload.
@@ -139,14 +163,17 @@ export const useStore = create<State>((set, get) => ({
   },
   load(ep) {
     // Keep a player that already belongs to this episode (a video ready before "play" was pressed).
-    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : standby.get(ep.id) ?? null }); }
+    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, rawTime: undefined, align: null, gapEnd: null, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : standby.get(ep.id) ?? null }); }
   },
   notify(text) {
     set({ toast: text });
     window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => set({ toast: null }), 4200);
   },
-  openSettings: (section) => set({ settingsOpen: true, settingsSection: section }),
+  openSettings(section) {
+    set((s) => ({ settingsSection: section, settingsNonce: (s.settingsNonce ?? 0) + 1 }));
+    get().go({ kind: "settings" });
+  },
   set: (patch) => set(patch),
 }));
 

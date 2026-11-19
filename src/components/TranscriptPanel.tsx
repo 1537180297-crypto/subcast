@@ -2,7 +2,8 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { BookA, Check, ChevronDown, Ellipsis, Languages, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { AudioLines, BookA, Check, ChevronDown, Ellipsis, Languages, ListChecks, Loader2, Mic, PenLine, RefreshCw, Search, X } from "lucide-react";
+import { AlignBar, anchorHere } from "./AlignBar";
 import { Modal } from "./Chrome";
 import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
@@ -13,6 +14,8 @@ import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTr
 import { providerFor, useStore } from "../store";
 import { ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { lang, t, tk, tr, useLang } from "../lib/i18n";
+import { looksEnglish } from "../lib/dict";
+import { Dictation, EpisodeWords, LearnText, LearnTip, WordCard, useLearnMarks, useShadowing, type CardTarget, type LearnMarks } from "./Learn";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
 
@@ -33,15 +36,28 @@ function highlight(text: string, query: string) {
 
 const NO_SEGMENTS: Segment[] = [];
 
-const Row = memo(function Row({ seg, zh, active, mode, pending, onSeek, query, current }: { seg: Segment; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean }) {
+// A click on a line plays from it, but selecting text never touches playback: the jump waits out a possible
+// double-click (which selects a word) and is dropped when the click ended a drag-selection.
+let lineClick: number | undefined;
+let downAt: { x: number; y: number } | null = null;
+function onLinePointerDown(e: React.PointerEvent) { downAt = { x: e.clientX, y: e.clientY }; }
+function onLineClick(e: React.MouseEvent, seek: () => void) {
+  window.clearTimeout(lineClick);
+  const dragged = downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4;
+  if (e.detail > 1 || dragged || window.getSelection()?.toString().trim()) return;
+  lineClick = window.setTimeout(() => { if (!window.getSelection()?.toString().trim()) seek(); }, 260);
+}
+
+const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean; marks: LearnMarks | null }) {
   const showZh = mode !== "original";
-  const showOrig = mode !== "translation" || (!zh && !pending);
+  // Learning English: the original stays visible even in "中文" mode, it is what you are learning.
+  const showOrig = mode !== "translation" || (!zh && !pending) || !!marks;
   return (
-    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""}`} data-active={active || undefined} data-hit={current || undefined} role="button" tabIndex={0} onClick={() => onSeek(seg.start)} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
+    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""}`} data-i={i} data-active={active || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
       <span className="line-time">{clock(seg.start)}</span>
       <div className="line-text">
         {showZh && (zh ? <p className="zh">{highlight(zh, query)}</p> : pending ? <span className="skeleton" /> : null)}
-        {showOrig && <p className="orig">{highlight(seg.text, query)}</p>}
+        {showOrig && <p className="orig">{marks && !query ? <LearnText text={seg.text} marks={marks} /> : highlight(seg.text, query)}</p>}
       </div>
     </div>
   );
@@ -109,8 +125,52 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const active = useStore((s) => (s.current?.id === ep.id ? activeIndex(segments, s.time) : -1));
   // Stable, so the memoised rows don't all re-render whenever this panel does.
   const seek = useCallback((t: number) => { if (isCurrent) player?.seek(t); }, [isCurrent, player]);
+  // 对齐字幕 (podcast audio playing here only): while its bar is open, a click on a line lines it up instead.
+  const canAlign = isCurrent && !ep.videoId && !!ep.audioUrl;
+  const [aligning, setAligning] = useState(false);
+  useEffect(() => { if (!canAlign) setAligning(false); }, [canAlign]);
   const wantsZh = transcript ? needsTranslation(transcript) : false;
   const mode = wantsZh ? settings.subtitleMode : "original";
+  const english = transcript ? looksEnglish(transcript.language, segments.slice(0, 20).map((x) => x.text).join(" ")) : false;
+  const marks = useLearnMarks(english);
+  const learning = !!marks || (english && settings.learnOn);
+  const [card, setCard] = useState<CardTarget | null>(null);
+  const [shadow, setShadow] = useState(false);
+  useShadowing(shadow && isCurrent, ep.id, segments);
+  useEffect(() => { if (!learning) setShadow(false); }, [learning]);
+  const closeCard = useCallback(() => setCard(null), []);
+  // Looking a word up pauses playback (as Language Reactor and asbplayer do), and closing the card resumes it
+  // when the card was what paused it.
+  const pausedForCard = useRef(false);
+  const cardOpen = !!card;
+  useEffect(() => {
+    const s = useStore.getState();
+    if (cardOpen) {
+      if (settings.learnPause && isCurrent && s.playing) { s.player?.toggle(); pausedForCard.current = true; }
+    } else if (pausedForCard.current) {
+      pausedForCard.current = false;
+      if (!s.playing) s.player?.toggle();
+    }
+  }, [cardOpen]);
+  // A click on a word opens its card instead of seeking (the rest of the line still seeks).
+  const onWordClick = (e: React.MouseEvent) => {
+    if (!marks || !settings.learnCard) return;
+    const el = (e.target as HTMLElement).closest<HTMLElement>(".lw");
+    if (!el) return;
+    // Selecting the word itself (a double-click, or dragging across it) also opens its card; a selection that
+    // reaches beyond the word is left to the selection tools.
+    const sel = window.getSelection();
+    const picked = !!sel?.toString().trim();
+    if (picked && !(sel!.anchorNode && el.contains(sel!.anchorNode) && sel!.focusNode && el.contains(sel!.focusNode))) return;
+    const i = Number(el.closest<HTMLElement>("[data-i]")?.dataset.i);
+    const seg = segments[i];
+    if (!seg) return;
+    e.stopPropagation();
+    if (picked) sel!.removeAllRanges();
+    // A plain click on the open word closes it; the second click of a double-click keeps it open.
+    const toggle = !picked && e.detail < 2;
+    setCard((c) => (toggle && c?.el === el ? null : c?.el === el ? c : { el, token: el.textContent ?? "", seg, zh: translation?.items[i] }));
+  };
 
   useEffect(() => { if (transcript) void loadTranslation(ep.id, transcript.segments.length); }, [transcript, ep.id]);
   useEffect(() => { void llmReady("translate").then(setCanUpgrade); }, [settings.translateProvider, settings.translateMode, settings.providers]);
@@ -159,7 +219,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const searchBtn = <>
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
-    {wantsZh && canUpgrade && <PanelMenu ep={ep} onRetranslate={() => start("llm")} />}
+    {((wantsZh && canUpgrade) || learning || canAlign) && <PanelMenu ep={ep} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, active, shadow, setShadow, canShadow: isCurrent } : undefined} onAlign={canAlign ? () => setAligning(true) : undefined} />}
   </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
 
@@ -187,10 +247,16 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
           <button className="icon-btn sm" onClick={() => { setQuery(""); setSearching(false); }} aria-label={t("关闭搜索")}><X size={14} /></button>
         </div>
       )}
-      <div className="lines" ref={list} onWheel={() => (userScrolled.current = Date.now())}>
+      {aligning && canAlign && <AlignBar onClose={() => setAligning(false)} />}
+      {shadow && isCurrent && (
+        <div className="shadow-bar"><Mic size={13} /><span>{t("跟读模式：每句说完会停一下，跟着说一遍")}</span><button className="btn ghost sm" onClick={() => setShadow(false)}>{t("退出")}</button></div>
+      )}
+      <div className={`lines${marks && settings.learnCard ? " learning" : ""}`} ref={list} onWheel={() => (userScrolled.current = Date.now())} onClickCapture={onWordClick}>
+        {english && <LearnTip />}
         {rows.map((i, k) => (
-          <Row key={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={seek} query={query} current={!!matches && k === hit} />
+          <Row key={i} i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={aligning && canAlign ? anchorHere : seek} query={query} current={!!matches && k === hit} marks={marks} />
         ))}
+        {card && <WordCard target={card} ep={ep} onClose={closeCard} />}
         {!matches && total > 0 && (
           <div className={`lines-end ${active === total - 1 ? "reached" : ""}`}>
             <FlatLineArt />
@@ -203,9 +269,13 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
 }
 
 /** "…" on the subtitle bar: the rarer tools (本集术语表, retranslating with the model). */
-function PanelMenu({ ep, onRetranslate }: { ep: Episode; onRetranslate: () => void }) {
+interface LearnMenu { segments: Segment[]; zh: (string | null | undefined)[] | undefined; active: number; shadow: boolean; setShadow: (v: boolean) => void; canShadow: boolean }
+
+function PanelMenu({ ep, onRetranslate, learn, onAlign }: { ep: Episode; onRetranslate?: () => void; learn?: LearnMenu; onAlign?: () => void }) {
   const [menu, setMenu] = useState(false);
   const [gloss, setGloss] = useState(false);
+  const [words, setWords] = useState(false);
+  const [dictation, setDictation] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!menu) return;
@@ -218,11 +288,23 @@ function PanelMenu({ ep, onRetranslate }: { ep: Episode; onRetranslate: () => vo
       <button className="icon-btn" title={t("更多")} aria-label={t("更多")} aria-expanded={menu} onClick={() => setMenu(!menu)}><Ellipsis size={15} /></button>
       {menu && (
         <div className="panel-menu-pop" role="menu">
-          <button role="menuitem" onClick={() => { setMenu(false); setGloss(true); }}><BookA size={14} /> {t("本集术语表…")}</button>
-          <button role="menuitem" onClick={() => { setMenu(false); onRetranslate(); }}><RefreshCw size={14} /> {t("用模型重新翻译")}</button>
+          {learn && <>
+            <button role="menuitem" onClick={() => { setMenu(false); setWords(true); }}><ListChecks size={14} /> {t("本期生词…")}</button>
+            <button role="menuitemcheckbox" aria-checked={learn.shadow} disabled={!learn.canShadow} title={learn.canShadow ? undefined : t("先播放这一集")} onClick={() => { setMenu(false); learn.setShadow(!learn.shadow); }}><Mic size={14} /> {learn.shadow ? t("退出跟读模式") : t("跟读模式")}</button>
+            <button role="menuitem" onClick={() => { setMenu(false); setDictation(true); }}><PenLine size={14} /> {t("听写练习…")}</button>
+          </>}
+          {learn && onRetranslate && <div className="menu-sep" role="separator" />}
+          {onRetranslate && <>
+            <button role="menuitem" onClick={() => { setMenu(false); setGloss(true); }}><BookA size={14} /> {t("本集术语表…")}</button>
+            <button role="menuitem" onClick={() => { setMenu(false); onRetranslate(); }}><RefreshCw size={14} /> {t("用模型重新翻译")}</button>
+          </>}
+          {onAlign && (learn || onRetranslate) && <div className="menu-sep" role="separator" />}
+          {onAlign && <button role="menuitem" onClick={() => { setMenu(false); onAlign(); }}><AudioLines size={14} /> {t("字幕和声音对不上…")}</button>}
         </div>
       )}
-      {gloss && <Glossary ep={ep} onRetranslate={onRetranslate} onClose={() => setGloss(false)} />}
+      {gloss && onRetranslate && <Glossary ep={ep} onRetranslate={onRetranslate} onClose={() => setGloss(false)} />}
+      {words && learn && <EpisodeWords ep={ep} segments={learn.segments} zh={learn.zh} onClose={() => setWords(false)} />}
+      {dictation && learn && <Dictation ep={ep} segments={learn.segments} from={Math.max(0, learn.active)} onClose={() => setDictation(false)} />}
     </div>
   );
 }

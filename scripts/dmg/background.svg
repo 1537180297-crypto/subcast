@@ -1,0 +1,14 @@
+<!-- DMG window background for scripts/release.sh. 660x400 points; icons sit at (170,180) and (490,180).
+     Rebuild the PNGs after editing: scripts/dmg/render.sh -->
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <rect width="660" height="400" fill="#f7f6f3"/>
+  <!-- arrow from the app to Applications -->
+  <g fill="none" stroke="#0d7a68" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M268 180 H 390" stroke-dasharray="0.1 11"/>
+    <path d="M378 168 L 392 180 L 378 192"/>
+  </g>
+  <g font-family="'PingFang SC','Noto Sans CJK SC','Helvetica Neue',sans-serif" text-anchor="middle">
+    <text x="330" y="318" font-size="16" font-weight="500" fill="#1c1b19">将 SubCast 拖到「应用程序」文件夹即可完成安装</text>
+    <text x="330" y="344" font-size="13" fill="#8a867e">Drag SubCast to the Applications folder to install</text>
+  </g>
+</svg>

@@ -31,6 +31,8 @@ export interface Settings {
   skipBack?: number;
   skipForward?: number;
   autoNext?: boolean;
+  /** Skip what only the playing audio has when the subtitles were made from another cut (ads, mostly). */
+  skipAds?: boolean;
   shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;
   /** The local agent SubCast switched in on its own (shown as such in settings). */
   autoPicked?: string;
@@ -56,9 +58,31 @@ export interface Settings {
   autoUpdate: boolean;
   /** The Discover banner for our own show was closed by the user. */
   homeBannerHidden: boolean;
+  /** List the 乔木精读 shows not yet followed under the sidebar's subscriptions. */
+  sideCurated: boolean;
+  /** English learning mode (设置 › 学英语). Off by default; everything below only applies when it is on. */
+  learnOn: boolean;
+  /** The listener's level: words above it are marked in English subtitles. */
+  learnLevel: LearnLevel;
+  learnMark: boolean;
+  learnCard: boolean;
+  /** Ask the default model what a word means in its sentence. */
+  learnAi: boolean;
+  learnSide: boolean;
+  /** New words introduced per day in review. */
+  learnDaily: number;
+  learnRemind: boolean;
+  /** Key, wrong-letter and right-word sounds in spelling review. */
+  learnSounds: boolean;
+  /** Pause playback while a word card is open (and resume when it closes). */
+  learnPause: boolean;
+  /** The one-time "想顺便学英语吗？" tip was answered. */
+  learnAsked: boolean;
   /** Upload transcripts we make to the shared library (anonymous; reading shared ones is always on). */
   shareTranscripts: boolean;
 }
+
+export type LearnLevel = "cet4" | "cet6" | "ky" | "ielts";
 
 export interface QuickPrompt { id: string; title: string; body: string; enabled: boolean }
 
@@ -181,6 +205,18 @@ export const DEFAULTS: Settings = {
   youtubePromo: true,
   autoUpdate: true,
   homeBannerHidden: false,
+  sideCurated: true,
+  learnOn: false,
+  learnLevel: "cet6",
+  learnMark: true,
+  learnCard: true,
+  learnAi: true,
+  learnSide: true,
+  learnDaily: 20,
+  learnRemind: false,
+  learnSounds: true,
+  learnPause: true,
+  learnAsked: false,
   shareTranscripts: true,
 };
 

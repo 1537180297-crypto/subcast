@@ -1,5 +1,8 @@
+mod appupdate;
 mod asr;
+mod anki;
 mod asr_context;
+mod clip;
 mod agents;
 mod cloud;
 mod db;
@@ -9,6 +12,7 @@ mod import;
 mod llm;
 mod model;
 mod net;
+mod align;
 mod offline;
 #[cfg_attr(debug_assertions, allow(dead_code))] // serving the interface is release-only
 mod ota;
@@ -17,6 +21,7 @@ mod shared;
 mod transcript;
 mod translate;
 mod youtube;
+mod ytlogin;
 
 use model::*;
 use rusqlite::Connection;
@@ -487,6 +492,48 @@ fn save_image(name: String, base64: String) -> Res<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// The speaker's own voice for one sentence (clip.rs): a small local file, made once and then reused.
+#[tauri::command]
+async fn learn_clip(state: State<'_, AppState>, episode_id: String, start: f64, end: f64) -> Res<String> {
+    let data = state.data.clone();
+    let done = clip::path_for(&data, &episode_id, start, end);
+    if done.exists() { return Ok(done.to_string_lossy().into_owned()); }
+    let ep = db::get_episode(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("节目不存在")?;
+    if let Some(saved) = offline::find(&data, &episode_id).or_else(|| offline::cached(&data, &episode_id)) {
+        // Subtitle times, moved onto this file when it is a different cut (align_audio).
+        let map = db::get_blob(&state.db.lock().unwrap(), &episode_id, "tmap").ok().flatten()
+            .and_then(|s| serde_json::from_str::<align::TimeMap>(&s).ok()).filter(|m| m.play_bytes == saved.bytes);
+        let (a, b) = map.map(|m| (m.to_play(start), m.to_play(end))).unwrap_or((start, end));
+        return clip::make(&data, clip::Source::File(saved.path.into()), &episode_id, a, b).await.map(|p| p.to_string_lossy().into_owned()).map_err(e);
+    }
+    if let Some(url) = ep.audio_url.filter(|u| !u.is_empty()) {
+        return clip::make(&data, clip::Source::Url(url), &episode_id, start, end).await.map(|p| p.to_string_lossy().into_owned()).map_err(e);
+    }
+    let vid = ep.video_id.ok_or("这一集没有音频")?;
+    asr::streams::init(&data);
+    // A saved stream address may have gone stale: one more try with a fresh one.
+    for fresh in [false, true] {
+        let v = vid.clone();
+        let url = asr::with_ytdlp(&data, |bin| { let v = v.clone(); async move { asr::youtube_stream_url(&bin, &v, false, fresh).await } }).await.map_err(e)?;
+        match clip::make(&data, clip::Source::Url(url), &episode_id, start, end).await {
+            Ok(p) => return Ok(p.to_string_lossy().into_owned()),
+            Err(err) if !fresh => { let _ = err; }
+            Err(err) => return Err(e(err)),
+        }
+    }
+    Err("没能截取原声".into())
+}
+
+/// The word book as an Anki package at `path` (chosen in the save dialog); returns how many cards have audio.
+#[tauri::command]
+async fn export_anki(path: String, deck: String, model: String, notes: Vec<anki::Note>) -> Res<usize> {
+    tokio::task::spawn_blocking(move || anki::write(std::path::Path::new(&path), &deck, &model, &notes)).await.map_err(e)?.map_err(e)
+}
+
+/// Asks where to save is the interface's job (the save dialog); this writes text there (a CSV of the word book).
+#[tauri::command]
+fn save_text(path: String, text: String) -> Res<()> { std::fs::write(path, text).map_err(e) }
+
 #[tauri::command]
 async fn list_models(provider: llm::Provider) -> Res<Vec<String>> { cloud::list_models(&provider).await.map_err(e) }
 
@@ -618,6 +665,17 @@ async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: St
     Ok(VideoStream { url, kind: if is_hls { "hls" } else { "mp4" } })
 }
 
+/// Opens a SubCast window to sign in to YouTube (ytlogin.rs); the interface hears `youtube-signed-in`.
+#[tauri::command]
+fn youtube_sign_in(app: AppHandle) -> Res<()> { ytlogin::open(&app).map_err(e) }
+
+/// Whether the listener has signed in to YouTube in SubCast.
+#[tauri::command]
+async fn youtube_signed_in() -> Res<bool> { Ok(ytlogin::signed_in().await) }
+
+#[tauri::command]
+async fn youtube_sign_out() -> Res<()> { ytlogin::sign_out().await.map_err(e) }
+
 /// Gets yt-dlp ready in the background when a video page opens, so a fallback doesn't start with a download.
 #[tauri::command]
 async fn prepare_youtube(state: State<'_, AppState>) -> Res<()> {
@@ -695,6 +753,7 @@ fn storage_info(state: State<'_, AppState>) -> serde_json::Value {
         "models": dir_bytes(&asr::models_dir(d)),
         "library": library,
         "temp": dir_bytes(&d.join("work")),
+        "audioCache": dir_bytes(&offline::cache_dir(d)),
     })
 }
 
@@ -729,8 +788,11 @@ fn clear_temp(state: State<'_, AppState>) -> Res<()> {
 async fn take_shared(state: &AppState, ep: &Episode) -> Option<Transcript> {
     let mut hit = shared::lookup(&shared::keys(ep)).await?;
     let translation = hit.translation.take();
+    // The file the shared subtitles were timed against, so a listener with another cut can line them up (align_audio).
+    let audio_ref = hit.audio.take().map(|a| align::AudioRef { bytes: a.bytes, etag: a.etag, secs: a.secs, fp: None, shared_id: Some(hit.id.clone()), has_fp: a.fp });
     let t = shared::into_transcript(&ep.id, hit);
     db::save_transcript(&state.db.lock().unwrap(), &t).ok()?;
+    if let Some(r) = audio_ref { let _ = db::set_blob(&state.db.lock().unwrap(), &ep.id, "audio-ref", &serde_json::to_string(&r).unwrap_or_default()); }
     // The shared Chinese lines become this episode's translation (engine "shared"); the subtitle view only
     // machine-translates the gaps. Saved after the transcript, which clears an episode's old blobs.
     if let Some(tr) = translation.filter(|tr| tr.items.len() == t.segments.len() && tr.lang.starts_with("zh")) {
@@ -740,6 +802,159 @@ async fn take_shared(state: &AppState, ep: &Episode) -> Option<Transcript> {
     }
     Some(t)
 }
+
+/// The audio file an episode's subtitles were timed against, with its fingerprint, when it is known here.
+fn audio_ref(state: &AppState, episode_id: &str) -> Option<align::AudioRef> {
+    db::get_blob(&state.db.lock().unwrap(), episode_id, "audio-ref").ok().flatten()
+        .and_then(|s| serde_json::from_str::<align::AudioRef>(&s).ok()).filter(|r| r.fp.is_some())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Aligned {
+    /// same: subtitles fit the file that plays | aligned: `map` converts | unknown: nothing to compare with |
+    /// failed: the files share too little
+    status: &'static str,
+    map: Option<align::TimeMap>,
+    /// The file to play, when the map is for a downloaded copy rather than the stream.
+    path: Option<String>,
+    /// Size of the local file that plays (0: the stream), which a map adjusted by hand is for.
+    local_bytes: u64,
+}
+
+/// Lines an episode's subtitles up with the audio that plays. Cheap when nothing changed (the file size is the
+/// one the subtitles were made from). Otherwise the episode's current audio is fetched into the cache and the two
+/// are compared: by fingerprint when the subtitles' file has one, else (`force`, with a local speech `model`) by
+/// transcribing a few stretches of it and finding them in the subtitles. The map comes back with the file it fits.
+#[tauri::command]
+async fn align_audio(app: AppHandle, state: State<'_, AppState>, episode_id: String, force: bool, model: Option<String>) -> Res<Aligned> {
+    let (ep, aref, saved) = {
+        let conn = state.db.lock().unwrap();
+        let ep = db::get_episode(&conn, &episode_id).map_err(e)?.ok_or("节目不存在")?;
+        let aref = db::get_blob(&conn, &episode_id, "audio-ref").ok().flatten().and_then(|s| serde_json::from_str::<align::AudioRef>(&s).ok());
+        let saved = db::get_blob(&conn, &episode_id, "tmap").ok().flatten().and_then(|s| serde_json::from_str::<align::TimeMap>(&s).ok());
+        (ep, aref, saved)
+    };
+    let local = offline::find(&state.data, &episode_id).or_else(|| offline::cached(&state.data, &episode_id));
+    let local_bytes = local.as_ref().map(|l| l.bytes).unwrap_or(0);
+    let none = |status| Ok(Aligned { status, map: None, path: None, local_bytes });
+    let (Some(url), None) = (ep.audio_url.clone(), &ep.video_id) else { return none("same") };
+    if let Some(m) = saved {
+        // A map is for one file: the local one of that size, or the stream (0) for a map set by hand while streaming.
+        let fits = m.play_bytes == local_bytes || (m.method == "same" && local.is_none());
+        if fits && m.method != "same" && !(force && m.method != "manual") {
+            return Ok(Aligned { status: "aligned", map: Some(m), path: local.map(|l| l.path), local_bytes });
+        }
+        if fits && m.method == "same" && !force { return none("same"); }
+    }
+    let has_fp = aref.as_ref().is_some_and(|a| a.fp.is_some() || a.has_fp);
+    if !has_fp && !force { return none("unknown"); }
+    let job = format!("al:{episode_id}");
+    if state.running(&job) { return none("unknown"); }
+    let cancel = state.job(&job);
+    let result: Result<Aligned, String> = async {
+        let save = |m: &align::TimeMap| { let _ = db::set_blob(&state.db.lock().unwrap(), &episode_id, "tmap", &serde_json::to_string(m).unwrap_or_default()); };
+        if let Some(a) = &aref {
+            let play_bytes = match &local { Some(l) => Some(l.bytes), None => align::remote_size(&url).await.map(|x| x.0) };
+            if play_bytes == Some(a.bytes) { save(&align::TimeMap::same(a.bytes)); return none("same"); }
+        }
+        // Another file (or one nobody recorded): fetch it, since it is also what will play (a stream with ads
+        // chosen per request could differ again next time).
+        let path = match &local {
+            Some(l) => PathBuf::from(&l.path),
+            None => {
+                let dest = offline::cache_path(&state.data, &episode_id, &url);
+                let part = dest.with_extension("part");
+                let _ = tokio::fs::create_dir_all(offline::cache_dir(&state.data)).await;
+                let (a, id) = (app.clone(), episode_id.clone());
+                asr::download(&url, &part, &cancel, move |got, total| {
+                    let _ = a.emit("align", json!({ "episodeId": id, "progress": total.map(|t| got as f64 / t.max(1) as f64) }));
+                }).await.map_err(e)?;
+                PathBuf::from(offline::keep_cached(&state.data, &episode_id, &part).map_err(e)?.path)
+            }
+        };
+        let _ = app.emit("align", json!({ "episodeId": episode_id, "progress": null }));
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let p2 = path.clone();
+        let (secs, play_fp) = tokio::task::spawn_blocking(move || align::fingerprint_file(&p2)).await.map_err(e)?.map_err(e)?;
+        let (pieces, method) = if let Some(mut a) = aref.clone().filter(|_| has_fp) {
+            let ref_fp = match a.fp.as_deref().and_then(align::decode_fp) {
+                Some(fp) => fp,
+                None => {
+                    let fp = shared::fingerprint(a.shared_id.as_deref().unwrap_or("")).await.ok_or("没有拿到字幕对应音频的指纹")?;
+                    a.fp = Some(align::encode_fp(&fp));
+                    let _ = db::set_blob(&state.db.lock().unwrap(), &episode_id, "audio-ref", &serde_json::to_string(&a).unwrap_or_default());
+                    fp
+                }
+            };
+            (align::map_fingerprints(&ref_fp, &play_fp).map_err(e)?, "fingerprint")
+        } else {
+            let t = db::get_transcript(&state.db.lock().unwrap(), &episode_id).map_err(e)?.ok_or("没有字幕")?;
+            let model = model.as_deref().ok_or("先在「语音识别」里下载一个本机模型，才能自动比对")?;
+            let mut anchors = Vec::new();
+            let mut starts = align::probe_starts(secs, 120.0);
+            for _round in 0..2 {
+                if starts.is_empty() { break; }
+                let heard = listen_probes(&state, &path, &starts, model, &t.language, cancel.clone()).await?;
+                anchors.extend(align::probe_anchors(&t.segments, &heard, &starts));
+                starts = align::refine_starts(&anchors);
+            }
+            (align::map_anchors(&anchors), "probe")
+        };
+        // Too little in common: another episode, or something these comparisons can't see through.
+        let shared_secs: f64 = pieces.iter().map(|p| p.ref_end - p.ref_start).sum();
+        if pieces.is_empty() || (method == "fingerprint" && shared_secs < secs / 3.0) { return Ok(Aligned { status: "failed", map: None, path: Some(path.to_string_lossy().into_owned()), local_bytes: bytes }); }
+        let map = align::TimeMap { play_bytes: bytes, method: method.into(), pieces };
+        save(&map);
+        Ok(Aligned { status: "aligned", map: Some(map), path: Some(path.to_string_lossy().into_owned()), local_bytes: bytes })
+    }.await;
+    state.done_with(&job, &cancel);
+    result
+}
+
+/// Transcribes short stretches of an audio file (`align::PROBE_SECS` from each start), all in one run of the local
+/// recogniser: each stretch sits in its own 30 s slot of one file.
+async fn listen_probes(state: &AppState, path: &std::path::Path, starts: &[f64], model: &str, language: &str, cancel: Arc<AtomicBool>) -> Result<Vec<Segment>, String> {
+    let spec = asr::resolve(&state.data, model).ok_or("未知模型")?;
+    if !spec.path.is_file() { return Err("先在「语音识别」里下载一个本机模型，才能自动比对".into()); }
+    let work = state.data.join("work").join(format!("align-{}", uuid::Uuid::new_v4().simple()));
+    tokio::fs::create_dir_all(&work).await.map_err(e)?;
+    let wav = work.join("probes.wav");
+    let (p, st, w) = (path.to_path_buf(), starts.to_vec(), wav.clone());
+    let made = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let ext = p.extension().and_then(|x| x.to_str()).map(str::to_string);
+        let slot = (align::SLOT_SECS * 16000.0) as usize;
+        let mut all: Vec<f32> = Vec::with_capacity(slot * st.len());
+        for s in st {
+            let mut v = clip::cut(Box::new(std::fs::File::open(&p)?), ext.as_deref(), s, s + align::PROBE_SECS).unwrap_or_default();
+            v.resize(slot, 0.0);
+            all.extend(v);
+        }
+        asr::write_wav(&w, &all)
+    }).await.map_err(e)?;
+    let heard = match made {
+        Err(err) => Err(e(err)),
+        Ok(()) if spec.engine == "qwen3" => match asr::find_crispasr(&state.data) {
+            Some(bin) => asr::run_crispasr(&bin, &spec.path, &wav, language, &asr::AsrContext::default(), cancel, |_| {}).await.map_err(e),
+            None => Err("Qwen3-ASR 识别程序还没准备好，先转写一集就会自动安装".into()),
+        },
+        Ok(()) => asr::run_worker(&wav, &spec.path, language, "", cancel, |_| {}).await.map(|r| r.segments).map_err(e),
+    };
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    heard
+}
+
+/// Saves a time map adjusted by hand ("对齐到这一句").
+#[tauri::command]
+fn save_time_map(state: State<'_, AppState>, episode_id: String, map: align::TimeMap) -> Res<()> {
+    db::set_blob(&state.db.lock().unwrap(), &episode_id, "tmap", &serde_json::to_string(&map).map_err(e)?).map_err(e)
+}
+
+#[tauri::command]
+fn list_audio_cache(state: State<'_, AppState>) -> Vec<offline::Saved> { offline::list_cached(&state.data) }
+
+#[tauri::command]
+fn clear_audio_cache(state: State<'_, AppState>) -> Res<()> { offline::clear_cache(&state.data).map_err(e) }
 
 /// Checked when an episode opens, before it is called "no subtitles", so no model is downloaded for it.
 #[tauri::command]
@@ -865,6 +1080,18 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
         let made_by = json!({ "source": if cloud.is_some() { "cloud" } else if spec.engine == "qwen3" { "qwen3" } else { "whisper" },
             "model": cloud.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| spec.id.clone()) });
         let _ = db::set_blob(&state.db.lock().unwrap(), &ep.id, "asr-meta", &made_by.to_string());
+        // Remember the file these times fit (size, length, fingerprint) and keep it to play from, so a listener whose
+        // copy has other ads, or this app streaming a re-cut later, can still line the subtitles up.
+        if ep.video_id.is_none() {
+            let src = audio.clone();
+            if let Ok(Ok((secs, fp))) = tokio::task::spawn_blocking(move || align::fingerprint_file(&src)).await {
+                let bytes = std::fs::metadata(&audio).map(|m| m.len()).unwrap_or(0);
+                let r = align::AudioRef { bytes, etag: String::new(), secs, fp: Some(align::encode_fp(&fp)), shared_id: None, has_fp: true };
+                let _ = db::set_blob(&state.db.lock().unwrap(), &ep.id, "audio-ref", &serde_json::to_string(&r).unwrap_or_default());
+                let _ = db::set_blob(&state.db.lock().unwrap(), &ep.id, "tmap", &serde_json::to_string(&align::TimeMap::same(bytes)).unwrap_or_default());
+            }
+            if audio.starts_with(&work) { let _ = offline::keep_cached(&state.data, &ep.id, &audio); }
+        }
         Ok(t)
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
@@ -895,6 +1122,7 @@ async fn transcribe(app: AppHandle, state: State<'_, AppState>, episode_id: Stri
                 language: t.language.clone(),
                 install,
                 translation,
+                audio: audio_ref(&state, &ep.id),
             };
             let segs = t.segments.clone();
             let app2 = app.clone();
@@ -944,6 +1172,7 @@ async fn share_translation(state: State<'_, AppState>, episode_id: String, engin
         duration: ep.duration.unwrap_or(0.0).max(t.segments.last().map(|s| s.end).unwrap_or(0.0)).max(1.0),
         source, model: asr_model, language: t.language.clone(), install,
         translation: Some(("zh-CN".to_string(), items)),
+        audio: audio_ref(&state, &episode_id),
     };
     shared::upload_with(&keys, meta, &t.segments, &engine, &model).await.map_err(e)
 }
@@ -1136,6 +1365,16 @@ async fn agent_models(kind: String) -> Res<Vec<agents::AgentModel>> {
     agents::models(k, &path).await.map_err(e)
 }
 
+/// In-app updates (appupdate.rs): check, download from the faster source, install and restart.
+#[tauri::command]
+async fn app_update_check(app: AppHandle) -> Res<Option<appupdate::Found>> { appupdate::check(&app).await.map_err(e) }
+
+#[tauri::command]
+async fn app_update_download(app: AppHandle) -> Res<()> { appupdate::download(&app).await.map_err(e) }
+
+#[tauri::command]
+fn app_update_install(app: AppHandle) -> Res<()> { appupdate::install(&app).map_err(e) }
+
 /// Starts an agent in the background (opening Q&A), so the first answer doesn't wait for it.
 #[tauri::command]
 async fn warm_agent(kind: String) {
@@ -1189,10 +1428,12 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            ytlogin::init(app.handle());
             let data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data)?;
             if let Ok(res) = app.path().resource_dir() { let _ = asr::VCRT_DIR.set(res.join("vcrt")); }
@@ -1256,8 +1497,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, set_menu_labels,
-            download_episode, list_downloads, delete_download, clear_downloads, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
+            app_update_check, app_update_download, app_update_install,
+            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

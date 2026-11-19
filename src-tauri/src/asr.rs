@@ -463,11 +463,22 @@ where F: Fn(Vec<String>) -> Fut, Fut: std::future::Future<Output = Result<T>> {
             let alt = vec!["--extractor-args".to_string(), "youtube:player_client=tv,web_safari,mweb".to_string()];
             match job(alt).await {
                 Err(e2) if bot_check(&e2.to_string()) => {
+                    // Signed in to YouTube in SubCast: that sign-in first, it needs no browser.
+                    if let Some(jar) = crate::ytlogin::cookie_file().await {
+                        let r = job(vec!["--cookies".into(), jar.to_string_lossy().into_owned()]).await;
+                        let _ = std::fs::remove_file(&jar);
+                        return r.map_err(|e3| if bot_check(&e3.to_string()) { anyhow!(YT_SIGN_IN_AGAIN) } else { e3 });
+                    }
                     let browser = YT_BROWSER.read().unwrap().clone();
                     if browser.is_empty() { return Err(anyhow!("YouTube 要求验证「不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 借用它的登录再试")); }
                     { let b = browser.clone(); tokio::task::spawn_blocking(move || crate::import::ensure_browser_access(&b)).await??; }
                     job(vec!["--cookies-from-browser".into(), browser.clone()]).await
-                        .map_err(|e3| if bot_check(&e3.to_string()) { anyhow!("YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试") } else { e3 })
+                        .map_err(|e3| {
+                            let m = e3.to_string();
+                            if bot_check(&m) { anyhow!("YouTube 仍然要求验证。请在 {browser} 里打开 youtube.com 确认已登录后再试") }
+                            else if browser_locked(&m) { anyhow!("YouTube 要求验证「不是机器人」。{browser} 把登录信息加密了，SubCast 读不到，请在 SubCast 里登录 YouTube") }
+                            else { e3 }
+                        })
                 }
                 other => other,
             }
@@ -493,6 +504,16 @@ fn knows_js_runtimes(ytdlp: &Path) -> bool {
     let ok = c.output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--js-runtimes")).unwrap_or(false);
     SEEN.lock().unwrap().insert(ytdlp.to_path_buf(), ok);
     ok
+}
+
+/// The sign-in made in SubCast no longer satisfies YouTube (signed out elsewhere, or expired).
+pub const YT_SIGN_IN_AGAIN: &str = "YouTube 要求验证「不是机器人」。在 SubCast 里登录的 YouTube 已失效，请重新登录"; // i18n-ignore (the interface shows its own text)
+
+/// yt-dlp could not read the browser's cookies because the browser encrypts them for itself (Chrome 127+ on
+/// Windows, yt-dlp issue 10927), or the browser holds its cookie file open.
+fn browser_locked(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("dpapi") || m.contains("failed to decrypt") || m.contains("app-bound") || m.contains("could not copy") && m.contains("cookie")
 }
 
 fn bot_check(msg: &str) -> bool { let m = msg.to_lowercase(); m.contains("confirm you") && m.contains("bot") || m.contains("sign in to confirm") }
@@ -843,6 +864,17 @@ fn emit(v: serde_json::Value) {
 
 /// Decodes any mp3/m4a/aac/wav/flac/ogg file to 16 kHz mono f32, the input whisper.cpp wants.
 pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
+    // Mixed down and resampled packet by packet: only the 16 kHz result is kept.
+    let mut resampler: Option<Resampler> = None;
+    decode_mono(path, |rate, samples| {
+        let r = resampler.get_or_insert_with(|| Resampler::new(rate, 16000));
+        for &x in samples { r.push(x); }
+    })?;
+    Ok(resampler.map(Resampler::finish).unwrap_or_default())
+}
+
+/// Decodes an audio file and hands it to `f` packet by packet, mixed down to mono at the file's own sample rate.
+pub fn decode_mono(path: &Path, mut f: impl FnMut(u32, &[f32])) -> Result<()> {
     use symphonia::core::{audio::SampleBuffer, codecs::DecoderOptions, errors::Error, formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint};
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -853,9 +885,8 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
     let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL).ok_or_else(|| anyhow!("没有音轨"))?;
     let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|e| anyhow!("不支持的音频编码：{e}"))?;
-    // Mixed down and resampled packet by packet: only the 16 kHz result is kept.
-    let mut resampler: Option<Resampler> = None;
     let mut buf: Option<SampleBuffer<f32>> = None;
+    let mut mono: Vec<f32> = Vec::new();
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
@@ -870,18 +901,17 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
             Err(e) => return Err(anyhow!("解码失败：{e}")),
         };
         let spec = *decoded.spec();
-        let r = resampler.get_or_insert_with(|| Resampler::new(spec.rate, 16000));
         let channels = spec.channels.count().max(1);
         if buf.as_ref().is_none_or(|b| b.capacity() < decoded.capacity() * channels) {
             buf = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
         }
         let b = buf.as_mut().unwrap();
         b.copy_interleaved_ref(decoded);
-        for frame in b.samples().chunks(channels) {
-            r.push(frame.iter().sum::<f32>() / channels as f32);
-        }
+        mono.clear();
+        mono.extend(b.samples().chunks(channels).map(|frame| frame.iter().sum::<f32>() / channels as f32));
+        f(spec.rate, &mono);
     }
-    Ok(resampler.map(Resampler::finish).unwrap_or_default())
+    Ok(())
 }
 
 /// Box-filtered linear resampling of a whole buffer (tests compare `Resampler` against it).

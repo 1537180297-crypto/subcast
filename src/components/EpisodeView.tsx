@@ -89,7 +89,15 @@ function AudioSubtitles({ ep }: { ep: Episode }) {
   const items = useJobs((s) => s.translations[ep.id]?.items);
   const time = useStore((s) => s.time);
   const mode = useStore((s) => s.settings.subtitleMode);
+  // Something only this audio has (an ad, most likely): say so instead of holding a line that isn't being said.
+  const gapLeft = useStore((s) => (s.current?.id === ep.id && s.gapEnd && s.rawTime != null ? Math.ceil(s.gapEnd - s.rawTime) : 0));
   if (!transcript) return null;
+  if (gapLeft > 0) return (
+    <div className="asub asub-gap" aria-live="off">
+      <p>{t("这一段只在你的音频里，多半是广告，{n} 秒后回到正文", { n: gapLeft })}</p>
+      <button className="btn ghost sm" onClick={() => { const s = useStore.getState(); if (s.gapEnd) s.player?.seekRaw?.(s.gapEnd); }}>{t("跳过")}</button>
+    </div>
+  );
   const segs = transcript.segments;
   const i = Math.max(0, activeIndex(segs, time));
   const seg = segs[i];
@@ -261,6 +269,9 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   // Feeds sometimes mark a deep-read that isn't there: then the tab goes away.
   const [noDeep, setNoDeep] = useState<string | null>(null);
   const { current, load } = useStore(useShallow((s) => ({ current: s.current, load: s.load })));
+  const go = useStore((s) => s.go);
+  // Only a subscribed show has a page to go back to; others (opened from search or Discover) stay plain text.
+  const hasShow = useStore((s) => s.shows.some((x) => x.id === ep.showId));
   const titleZh = useZh(ep.title);
   const isCurrent = current?.id === ep.id;
   const playing = useStore((s) => s.playing);
@@ -328,7 +339,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
         <section className="ep-left" ref={leftRef}>
           <div className="ep-title-block">
             <div className="ep-title">
-              <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? <span key="s">{showName(ep.showTitle)}</span> : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
+              <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? (hasShow ? <button key="s" className="show-link" title={t("查看这档节目的全部单集")} onClick={() => go({ kind: "show", id: ep.showId })}>{showName(ep.showTitle)}</button> : <span key="s">{showName(ep.showTitle)}</span>) : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
               <h1>{titleZh ?? ep.title}</h1>
               {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
             </div>

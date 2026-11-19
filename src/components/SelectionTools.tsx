@@ -30,6 +30,8 @@ export function SelectionTools() {
       const r = s.getRangeAt(0);
       const host = (r.commonAncestorContainer.nodeType === 1 ? r.commonAncestorContainer : r.commonAncestorContainer.parentElement) as HTMLElement | null;
       if (text.length < 4 || !host?.closest(ZONES) || host.closest(".sel-bar")) { setSel(null); return; }
+      // One word in subtitles with the learning card on: its word card shows instead (with 加入生词本).
+      if (/^[A-Za-z][A-Za-z'’-]*$/.test(text) && host.closest(".lines.learning")) { setSel(null); return; }
       const rect = r.getBoundingClientRect();
       const ts = (r.startContainer.parentElement?.closest(".line")?.querySelector(".line-time")?.textContent ?? undefined) || undefined;
       const below = rect.top < 70;

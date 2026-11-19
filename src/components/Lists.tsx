@@ -512,7 +512,7 @@ function PickCard({ p, selected, subscribed, onClick, onOpen, action }: { p: Pic
       <div className="tile-cover">
         <img src={p.cover} alt="" loading="lazy" />
         {p.deep ? <span className="tile-badge deep">{t("精读")}</span> : p.video && <span className="tile-badge"><Youtube size={11} /> {t("视频")}</span>}
-        {onClick ? <span className={`pick-check ${selected ? "on" : ""}`}>{selected && <Check size={13} strokeWidth={3} />}</span> : <div className="tile-action">{action}</div>}
+        {onClick ? <span className={`pick-check ${selected ? "on" : ""}`}>{selected && <Check size={13} strokeWidth={3} />}</span> : <div className="tile-action" onClick={(e) => e.stopPropagation()}>{action}</div>}
       </div>
       <p className="tile-name clamp1">{pickName(p)}</p>
       <p className="tile-sub clamp1">{pickSub(p)}</p>

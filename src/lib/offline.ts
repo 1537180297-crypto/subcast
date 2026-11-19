@@ -9,11 +9,13 @@ import { useStore } from "../store";
 
 interface OfflineState {
   saved: Record<string, Saved>;
+  /** Audio kept on its own (transcribed from, or fetched to line subtitles up), played in place of the stream. */
+  cached: Record<string, Saved>;
   /** Download progress 0–1, or null while the size is unknown (YouTube). */
   active: Record<string, number | null>;
 }
 
-export const useOffline = create<OfflineState>(() => ({ saved: {}, active: {} }));
+export const useOffline = create<OfflineState>(() => ({ saved: {}, cached: {}, active: {} }));
 
 let started = false;
 export async function startOffline() {
@@ -27,8 +29,18 @@ export async function startOffline() {
 }
 
 export async function refreshSaved() {
-  const list = await api.listDownloads().catch(() => [] as Saved[]);
-  useOffline.setState({ saved: Object.fromEntries(list.map((x) => [x.episodeId, x])) });
+  const [list, cached] = await Promise.all([api.listDownloads().catch(() => [] as Saved[]), api.listAudioCache().catch(() => [] as Saved[])]);
+  useOffline.setState({ saved: Object.fromEntries(list.map((x) => [x.episodeId, x])), cached: Object.fromEntries(cached.map((x) => [x.episodeId, x])) });
+}
+
+/** A file now cached for this episode (align_audio fetched it). */
+export function noteCached(id: string, path: string, bytes: number) {
+  useOffline.setState((s) => ({ cached: { ...s.cached, [id]: { episodeId: id, path, bytes, savedAt: Date.now() } } }));
+}
+
+export async function clearAudioCache() {
+  await api.clearAudioCache();
+  useOffline.setState({ cached: {} });
 }
 
 const drop = (map: Record<string, number | null>, id: string) => { const n = { ...map }; delete n[id]; return n; };
@@ -59,10 +71,11 @@ export async function clearDownloads() {
   useOffline.setState({ saved: {} });
 }
 
-/** Where to play an episode's audio from: the saved file when there is one. */
+/** Where to play an episode's audio from: the saved file when there is one, else the cached one. */
 export function audioSrc(ep: Episode): string | undefined {
-  const saved = useOffline.getState().saved[ep.id];
-  return saved ? convertFileSrc(saved.path) : ep.audioUrl;
+  const { saved, cached } = useOffline.getState();
+  const file = saved[ep.id] ?? cached[ep.id];
+  return file ? convertFileSrc(file.path) : ep.audioUrl;
 }
 
 export const isSaved = (id: string) => !!useOffline.getState().saved[id];

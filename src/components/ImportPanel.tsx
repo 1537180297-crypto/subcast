@@ -1,14 +1,16 @@
 // 导入订阅: from YouTube (the browser you're signed in with), from Xiaoyuzhou and other podcast apps (an OPML
 // file they export), or from backups (Google Takeout CSV, NewPipe, FreeTube). One list to review, then a single
-// "订阅" for everything picked; shows already subscribed are skipped.
+// "订阅" for everything picked; shows already subscribed are skipped. Nothing starts checked: an account can
+// follow hundreds of channels, so the list has a filter and the user picks what they want.
 import { useEffect, useRef, useState } from "react";
-import { Check, FileUp, Loader2, Youtube } from "lucide-react";
+import { Check, FileUp, Loader2, Search, X, Youtube } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { api, errorText, needsBrowserAccess, rawErrorText } from "../lib/api";
 import { BrowserAccess, browserName } from "./BrowserAccess";
 import { useStore } from "../store";
 import { t, IS_MAC } from "../lib/i18n";
 import { sameFeed } from "../lib/picks";
+import { useNameMatch } from "../lib/zh";
 
 export interface ImportItem { input: string; title: string; thumb?: string; source: "youtube" | "opml" | "csv" | "newpipe" | "freetube" }
 
@@ -70,12 +72,15 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
   const [denied, setDenied] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
   const [browser, setBrowser] = useState<Browser>("chrome");
+  const [query, setQuery] = useState("");
+  const matches = useNameMatch();
   const fileInput = useRef<HTMLInputElement>(null);
   const has = (input: string) => shows.some((s) => sameFeed(s.feedUrl, input) || (input.includes("/channel/") && s.feedUrl.includes(input.split("/channel/")[1].slice(2))));
 
   const offer = (list: ImportItem[]) => {
     setItems(list);
-    setPicked(new Set(list.filter((x) => !has(x.input)).map((x) => x.input)));
+    setPicked(new Set());
+    setQuery("");
     if (!list.length) setError(t("文件里没有找到订阅"));
   };
   const fromBrowser = async () => {
@@ -109,14 +114,36 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
 
   if (items?.length) {
     const fresh = items.filter((x) => !has(x.input));
+    const shown = items.filter((x) => matches(query, x.title));
+    // 全选 / 全不选 act on the rows the filter leaves visible; picks hidden by the filter stay picked.
+    const shownFresh = shown.filter((x) => !has(x.input));
+    const allShown = shownFresh.length > 0 && shownFresh.every((x) => picked.has(x.input));
+    const toggleShown = () => {
+      const n = new Set(picked);
+      shownFresh.forEach((x) => (allShown ? n.delete(x.input) : n.add(x.input)));
+      setPicked(n);
+    };
     return (
       <div className="import">
         <div className="import-list-head">
-          <p className="small">{t("找到 {n} 个，其中 {m} 个还没订阅", { n: items.length, m: fresh.length })}</p>
-          <button className="link-btn small" onClick={() => setPicked(picked.size === fresh.length ? new Set() : new Set(fresh.map((x) => x.input)))}>{picked.size === fresh.length ? t("全不选") : t("全选")}</button>
+          <p className="small muted">{t("找到 {n} 个，其中 {m} 个还没订阅", { n: items.length, m: fresh.length })}</p>
+          <span className="pick-side">
+            {picked.size > 0 && <span className="small pick-count">{t("已选 {n} 个", { n: picked.size })}</span>}
+            <button className="link-btn small" onClick={toggleShown} disabled={!shownFresh.length || progress != null}>{allShown ? (query ? t("取消选择这些") : t("全不选")) : query ? t("选中这 {n} 个", { n: shownFresh.length }) : t("全选")}</button>
+          </span>
         </div>
+        {items.length > 6 && (
+          <div className="pick-tools">
+            <label className={`list-filter ${query ? "on" : ""}`}>
+              <Search size={14} />
+              <input value={query} autoFocus spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder={t("按名字筛选")} aria-label={t("按名字筛选")}
+                onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && query) { e.stopPropagation(); setQuery(""); } }} />
+              {query && <button className="icon-btn sm" onClick={() => setQuery("")} aria-label={t("清除搜索")}><X size={13} /></button>}
+            </label>
+          </div>
+        )}
         <div className="import-list">
-          {items.map((x) => {
+          {shown.map((x) => {
             const done = has(x.input);
             return (
               <label key={x.input} className={`import-row ${done ? "done" : ""}`}>
@@ -127,12 +154,14 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
               </label>
             );
           })}
+          {!shown.length && <p className="muted small list-empty">{t("没有名字里带「{q}」的", { q: query.trim() })}</p>}
         </div>
         <div className="modal-foot">
-          {progress && <span className="small muted"><Loader2 size={13} className="spin" /> {t("正在订阅 {done} / {total}", { done: progress.done, total: progress.total })}</span>}
+          {progress ? <span className="small muted"><Loader2 size={13} className="spin" /> {t("正在订阅 {done} / {total}", { done: progress.done, total: progress.total })}</span>
+            : !picked.size && <span className="small muted">{(items.every((x) => x.source === "youtube") ? t("勾选想订阅的频道") : t("勾选想订阅的节目"))}</span>}
           <div className="spacer" />
           <button className="btn ghost" onClick={() => setItems(null)} disabled={progress != null}>{t("返回")}</button>
-          <button className="btn primary" onClick={() => void go()} disabled={!picked.size || progress != null}>{t("订阅 {n} 个", { n: picked.size })}</button>
+          <button className="btn primary" onClick={() => void go()} disabled={!picked.size || progress != null}>{picked.size ? t("订阅 {n} 个", { n: picked.size }) : t("订阅")}</button>
         </div>
       </div>
     );

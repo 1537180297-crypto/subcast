@@ -1,10 +1,10 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn } from "lucide-react";
+import { BookMarked, ChevronLeft, CircleArrowUp, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn, ListChecks } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { ImportPanel } from "./ImportPanel";
 import { useStore, type View } from "../store";
-import { hasUpdate, useUpdate } from "../lib/updater";
+import { installUpdate, useUpdate } from "../lib/updater";
 import { PICKS, deepPickFor, isSubscribed, pickName, showName } from "../lib/picks";
 import { isChineseUi, kbd, t, tk, tr, tx, useLang } from "../lib/i18n";
 import { useShowName } from "../lib/zh";
@@ -15,6 +15,7 @@ import { useOffline } from "../lib/offline";
 import logoUrl from "../assets/logo.png";
 import { showIcon } from "./Lists";
 import { EqBars, SearchArt, useKonami, useTaps } from "./Illustrations";
+import { useDueCount } from "./Learn";
 
 export function Sidebar() {
   const { shows, view, go, set } = useStore(useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })));
@@ -25,15 +26,18 @@ export function Sidebar() {
   useKonami(() => { const on = document.body.classList.toggle("tape-seek"); useStore.getState().notify(on ? t("磁带模式已开启") : t("磁带模式已关闭")); });
   const is = (v: View) => view.kind === v.kind && (v.kind !== "show" || (view.kind === "show" && view.id === v.id)) && (v.kind !== "channel" || (view.kind === "channel" && view.input === v.input));
   // A 精读 channel is listed once: hidden here when its show is already followed (either version).
-  const curated = PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
+  const showCurated = useStore((s) => s.settings.sideCurated);
+  const curated = !showCurated ? [] : PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
   const { sideOpen, put: putLayout } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put })));
-  const updateWaiting = useUpdate(hasUpdate);
+  const update = useUpdate(useShallow((s) => ({ phase: s.phase, version: s.version, progress: s.progress, quiet: s.quiet })));
   const rail = !sideOpen;
   const hasDownloads = useOffline((s) => Object.keys(s.saved).length + Object.keys(s.active).length > 0);
+  const wordsNav = useStore((s) => s.settings.learnOn && s.settings.learnSide);
+  const due = useDueCount();
   // A render function, not a component: defined inside Sidebar, a component would remount its button on
   // every render and swallow clicks that land mid-render.
-  const nav = (v: View, icon: React.ReactNode, label: string) => (
-    <button key={v.kind} className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)} title={rail ? label : undefined} aria-label={label}>{icon}<span className="label">{label}</span></button>
+  const nav = (v: View, icon: React.ReactNode, label: string, badge?: number) => (
+    <button key={v.kind} className={`nav ${is(v) ? "on" : ""}`} onClick={() => go(v)} title={rail ? label : undefined} aria-label={badge ? `${label} · ${badge}` : label}>{icon}<span className="label">{label}</span>{badge ? <span className="nav-badge">{badge > 99 ? "99+" : badge}</span> : null}</button>
   );
   return (
     <aside className={`sidebar ${rail ? "rail" : ""}`}>
@@ -48,9 +52,16 @@ export function Sidebar() {
         {nav({ kind: "discover" }, <Compass size={16} />, t("发现"))}
         {nav({ kind: "stats" }, <ChartColumn size={16} />, t("收听统计"))}
         {(hasDownloads || view.kind === "downloads") && nav({ kind: "downloads" }, <Download size={16} />, t("已下载"))}
+        {(wordsNav || view.kind === "words") && nav({ kind: "words" }, <BookMarked size={16} />, t("生词本"), due)}
       </nav>
       <div className="side-sep" />
-      <div className="side-head"><span className="label">{tx("sidebar", "订阅")}</span><button className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={14} /></button></div>
+      <div className="side-head">
+        <span className="label">{tx("sidebar", "订阅")}</span>
+        <span className="side-head-actions">
+          {shows.length > 1 && <button className="icon-btn sm side-manage" title={t("管理订阅")} aria-label={t("管理订阅")} onClick={() => set({ manageOpen: true })}><ListChecks size={14} /></button>}
+          <button className="icon-btn sm" title={t("添加节目")} aria-label={t("添加节目")} onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={14} /></button>
+        </span>
+      </div>
       <div className="show-list">
         {shows.map((s) => (
           <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={rail ? showName(s.title) : s.title}>
@@ -72,7 +83,8 @@ export function Sidebar() {
       </div>
       <TaskChip />
       <div className="side-foot">
-        <button className="nav settings-btn" onClick={() => useStore.getState().openSettings(updateWaiting ? "about" : undefined)} title={updateWaiting ? t("有新版本，点击更新") : rail ? t("设置") : undefined} aria-label={updateWaiting ? t("设置，有新版本") : t("设置")}><span className="cog-wrap"><Cog size={16} />{updateWaiting && <span className="update-dot" />}</span><span className="label">{t("设置")}</span>{updateWaiting && !rail && <span className="update-pill">{t("更新")}</span>}</button>
+        <button className={`nav settings-btn ${view.kind === "settings" ? "on" : ""}`} onClick={() => useStore.getState().openSettings()} title={rail ? t("设置") : undefined} aria-label={t("设置")}><span className="cog-wrap"><Cog size={16} /></span><span className="label">{t("设置")}</span></button>
+        <UpgradeButton {...update} />
         <button className="icon-btn side-toggle" onClick={() => putLayout({ sideOpen: rail })} title={rail ? t("展开侧栏（⌘B）") : t("收起为图标（⌘B）")} aria-label={rail ? t("展开侧栏") : t("收起侧栏")}>{rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
       </div>
     </aside>
@@ -185,6 +197,16 @@ export function MiniPlayer() {
       </div>
     </div>
   );
+}
+
+/** Next to Settings once a new version is downloaded (or waiting to be): one click installs it and restarts. */
+function UpgradeButton({ phase, version, progress, quiet }: { phase: string; version?: string; progress: number | null; quiet?: boolean }) {
+  if (phase === "installing" || (phase === "downloading" && !quiet)) {
+    return <span className="icon-btn upgrade-btn busy" title={phase === "installing" ? t("正在安装新版本…") : progress == null ? t("正在下载新版本…") : t("正在下载新版本 {pct}%", { pct: Math.round(progress * 100) })}><Loader2 size={16} className="spin" /></span>;
+  }
+  if (phase !== "ready" && phase !== "available") return null;
+  const label = phase === "ready" ? t("SubCast {version} 已下载好，点一下安装并重启", { version: version ?? "" }) : t("SubCast {version} 可以更新了，点一下下载、安装并重启", { version: version ?? "" });
+  return <button className="icon-btn upgrade-btn" onClick={() => void installUpdate()} title={label} aria-label={label}><CircleArrowUp size={17} /></button>;
 }
 
 export function Modal({ title, onClose, children, wide, head }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; head?: React.ReactNode }) {

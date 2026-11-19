@@ -76,11 +76,21 @@ CREATE TABLE IF NOT EXISTS guides (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-PRAGMA user_version = 1;
 `;
 
+// Schema changes after the first release: MIGRATIONS[n] takes a database from user_version n to n + 1.
+const MIGRATIONS = {
+  1: `ALTER TABLE versions ADD COLUMN audio_bytes INTEGER;
+      ALTER TABLE versions ADD COLUMN audio_etag TEXT;
+      ALTER TABLE versions ADD COLUMN audio_secs REAL;
+      ALTER TABLE versions ADD COLUMN fp_algo TEXT;
+      ALTER TABLE versions ADD COLUMN fp BLOB;`,
+};
+const SCHEMA_VERSION = 2;
+
+
 const META_COLUMNS = `id, episode_id, install_hash, source, model, duration, max_end, seg_count, quality, sketch,
-  tr_engine, tr_ratio, votes, report_weight, score, created_at`;
+  tr_engine, tr_ratio, votes, report_weight, score, created_at, fp IS NOT NULL AS has_fp`;
 
 function loadSalt(dataDir) {
   const file = join(dataDir, 'salt');
@@ -121,6 +131,7 @@ function toMeta(row) {
     reportWeight: row.report_weight,
     score: row.score,
     createdAt: row.created_at,
+    hasFp: !!row.has_fp,
   };
 }
 
@@ -132,6 +143,10 @@ export class Store {
     const db = new DatabaseSync(this.dbPath);
     db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     db.exec(SCHEMA);
+    // SCHEMA is the first release's; a new database (user_version 0) starts there too.
+    for (let v = Math.max(1, db.prepare('PRAGMA user_version').get().user_version); v < SCHEMA_VERSION; v++) {
+      db.exec(`BEGIN; ${MIGRATIONS[v]} PRAGMA user_version = ${v + 1}; COMMIT;`);
+    }
     this.db = db;
     const p = (sql) => db.prepare(sql);
     this.q = {
@@ -155,10 +170,12 @@ export class Store {
       versionMeta: p(`SELECT ${META_COLUMNS} FROM versions WHERE id = ?`),
       insertVersion: p(`INSERT INTO versions (id, episode_id, install_hash, source, model, language, duration, max_end,
         seg_count, quality, segments, sketch, tr_lang, tr_engine, tr_model, tr_ratio, translation, client_version,
-        created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+        created_at, updated_at, audio_bytes, audio_etag, audio_secs, fp_algo, fp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       replaceContent: p(`UPDATE versions SET source = ?, model = ?, language = ?, duration = ?, max_end = ?, seg_count = ?,
         quality = ?, segments = ?, sketch = ?, tr_lang = ?, tr_engine = ?, tr_model = ?, tr_ratio = ?, translation = ?,
-        updated_at = ? WHERE id = ?`),
+        updated_at = ?, audio_bytes = ?, audio_etag = ?, audio_secs = ?, fp_algo = ?, fp = ? WHERE id = ?`),
+      fingerprint: p('SELECT fp_algo, fp, audio_secs, updated_at FROM versions WHERE id = ? AND fp IS NOT NULL'),
       replaceTranslation: p(`UPDATE versions SET tr_lang = ?, tr_engine = ?, tr_model = ?, tr_ratio = ?, translation = ?,
         updated_at = ? WHERE id = ?`),
       deleteVersion: p('DELETE FROM versions WHERE id = ?'),
@@ -170,7 +187,7 @@ export class Store {
       addReport: p('INSERT OR IGNORE INTO reports (version_id, install_hash, reason, created_at) VALUES (?, ?, ?, ?)'),
       bumpReports: p('UPDATE versions SET reports = reports + 1, report_weight = report_weight + ? WHERE id = ?'),
       best: p(`SELECT v.id, v.episode_id, v.source, v.model, v.language, v.segments, v.tr_lang, v.tr_engine, v.tr_model,
-          v.translation, v.score, v.created_at, e.rev
+          v.translation, v.score, v.created_at, e.rev, v.audio_bytes, v.audio_etag, v.audio_secs, v.fp IS NOT NULL AS has_fp
         FROM versions v JOIN episodes e ON e.id = v.episode_id
         WHERE v.episode_id IN (SELECT episode_id FROM episode_keys WHERE key IN (?, ?, ?, ?)) AND v.hidden = 0
         ORDER BY v.score DESC, v.votes DESC, v.created_at DESC, v.id DESC LIMIT 1`),
@@ -225,8 +242,11 @@ export class Store {
         const translation = row.translation
           ? `{"lang":${JSON.stringify(row.tr_lang)},"engine":${JSON.stringify(row.tr_engine)},"model":${JSON.stringify(row.tr_model || '')},"items":${unz(row.translation)}}`
           : 'null';
+        const audio = row.audio_bytes
+          ? JSON.stringify({ bytes: row.audio_bytes, etag: row.audio_etag || '', secs: row.audio_secs, fp: !!row.has_fp })
+          : 'null';
         return `{"id":${JSON.stringify(row.id)},"source":${JSON.stringify(row.source)},"model":${JSON.stringify(row.model)},`
-          + `"language":${JSON.stringify(row.language)},"segments":${unz(row.segments)},"translation":${translation},`
+          + `"language":${JSON.stringify(row.language)},"segments":${unz(row.segments)},"translation":${translation},"audio":${audio},`
           + `"score":${Math.round(row.score * 1000) / 1000},"versions":${versions},"createdAt":${row.created_at}}`;
       },
     };
@@ -284,6 +304,12 @@ export class Store {
     });
   }
 
+  // The acoustic fingerprint of the audio a version was made from (raw little-endian u32 items), or null.
+  fingerprint(id) {
+    const row = this.q.fingerprint.get(id);
+    return row ? { algo: row.fp_algo, secs: row.audio_secs, fp: gunzipSync(row.fp), etag: `"fp.${id}.${row.updated_at}"` } : null;
+  }
+
   guide(keys) {
     const k = [0, 1, 2, 3].map((i) => keys[i] ?? keys[0]);
     const row = this.q.guideFor.get(...k);
@@ -315,11 +341,13 @@ export class Store {
     const segBlob = gz(JSON.stringify(p.segments));
     const trBlob = tr ? gz(JSON.stringify(tr.items)) : null;
     const sketchBlob = sketchToBuffer(sketch);
+    const au = p.audio;
+    const audioCols = [au?.bytes ?? null, au?.etag ?? null, au?.secs ?? null, au?.fpAlgo ?? null, au?.fp ? gzipSync(au.fp) : null];
 
     const insert = (episodeId) => this.q.insertVersion.run(
       cand.id, episodeId, installHash, cand.source, cand.model, cand.language, cand.duration, cand.maxEnd,
       cand.segCount, cand.quality, segBlob, sketchBlob, tr?.lang ?? null, tr?.engine ?? null, tr?.model ?? null,
-      cand.trRatio, trBlob, p.client.version, now, now,
+      cand.trRatio, trBlob, p.client.version, now, now, ...audioCols,
     );
 
     return this.tx(() => {
@@ -354,10 +382,13 @@ export class Store {
           ? scoreOf({ ...base, trRatio: cand.trRatio, trEngine: cand.trEngine }, ref).score
           : -1;
         const EPS = 0.005;
-        if (asNew > current + EPS && asNew >= withTr) {
+        // Subtitles that carry their audio's fingerprint can be lined up with any cut of the episode, so they take
+        // over a fingerprint-less version that scores the same.
+        const gainsFp = !!au?.fp && !dup.hasFp;
+        if ((asNew > current + EPS || (gainsFp && asNew >= current - EPS)) && asNew >= withTr) {
           this.q.replaceContent.run(cand.source, cand.model, cand.language, cand.duration, cand.maxEnd, cand.segCount,
             cand.quality, segBlob, sketchBlob, tr?.lang ?? null, tr?.engine ?? null, tr?.model ?? null, cand.trRatio,
-            trBlob, now, dup.id);
+            trBlob, now, ...audioCols, dup.id);
           action = 'upgraded';
         } else if (withTr > current + EPS) {
           this.q.replaceTranslation.run(tr.lang, tr.engine, tr.model, cand.trRatio, trBlob, now, dup.id);
