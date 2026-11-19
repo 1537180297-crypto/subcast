@@ -1436,7 +1436,7 @@ fn set_api_key(provider: String, key: String) -> Res<()> { llm::set_key(&provide
 fn has_api_key(provider: String) -> bool { llm::get_key(&provider).is_some_and(|k| !k.is_empty()) }
 
 #[tauri::command]
-async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String, provider: llm::Provider, system: String, messages: Vec<llm::Message>, max_tokens: Option<u32>, json_mode: Option<bool>) -> Res<String> {
+async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String, provider: llm::Provider, system: String, messages: Vec<llm::Message>, max_tokens: Option<u32>, json_mode: Option<bool>, quick: Option<bool>) -> Res<String> {
     let cancel = state.job(&request_id);
     let rid = request_id.clone();
     let r = if provider.protocol == "cli" {
@@ -1448,7 +1448,7 @@ async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String
         agents::complete(kind, &path, agents::Request { system: &system, user: &user, model: Some(provider.model.as_str()).filter(|m| !m.is_empty() && *m != "default"), json: json_mode.unwrap_or(false) },
             cancel.clone(), move |d| { let _ = app2.emit("llm", json!({"requestId": rid, "delta": d})); }).await
     } else {
-        llm::chat(&provider, &system, &messages, max_tokens.unwrap_or(8000), json_mode.unwrap_or(false), &cancel, |d| {
+        llm::chat(&provider, &system, &messages, max_tokens.unwrap_or(8000), json_mode.unwrap_or(false), quick.unwrap_or(false), &cancel, |d| {
             let _ = app.emit("llm", json!({"requestId": rid, "delta": d}));
         }).await
     };

@@ -82,11 +82,15 @@ fn api_error(status: u16, body: &str) -> anyhow::Error {
 /// (retried with `max_completion_tokens`), models without JSON mode (retried without it), replies sent as one
 /// JSON body instead of a stream, content given as an array of parts, and thinking that arrives separately or
 /// inline as <think>…</think> (never shown; reported if it was all that came).
-pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: u32, json_mode: bool, cancel: &AtomicBool, mut on_delta: impl FnMut(&str)) -> Result<String> {
+/// `quick`: a task that needs no deep thinking (extraction, formatting). Where a provider lets the caller turn
+/// thinking off or down, it is asked to, so the token budget goes to the answer; a provider that rejects the
+/// parameter gets the request again without it.
+pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: u32, json_mode: bool, quick: bool, cancel: &AtomicBool, mut on_delta: impl FnMut(&str)) -> Result<String> {
     let key = get_key(&p.id);
     let anthropic = p.protocol == "anthropic";
     if anthropic && key.is_none() { return Err(anyhow!("请先在设置里填写 API Key")); }
     let (mut completion_tokens, mut json) = (false, json_mode);
+    let mut think_off = if quick { think_off_param(p) } else { None };
     let mut tries = 0;
     let res = loop {
         tries += 1;
@@ -103,6 +107,7 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
             let mut body = json!({ "model": p.model, "messages": msgs, "stream": true });
             body[if completion_tokens { "max_completion_tokens" } else { "max_tokens" }] = json!(max_tokens);
             if json { body["response_format"] = json!({"type": "json_object"}); }
+            if let Some((k, v)) = &think_off { body[*k] = v.clone(); }
             let mut r = net::client().post(openai_url(&p.base_url)).json(&body);
             if needs_opencode_session(&p.base_url) { r = r.header("x-opencode-session", opencode_session()); }
             if let Some(k) = key.as_ref().filter(|k| !k.is_empty()) { r = r.bearer_auth(k); }
@@ -113,9 +118,10 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
         if status.is_success() { break res; }
         let body = res.text().await.unwrap_or_default();
         let l = body.to_lowercase();
-        if !anthropic && status.as_u16() == 400 && tries < 3 {
+        if !anthropic && matches!(status.as_u16(), 400 | 422) && tries < 4 {
             if !completion_tokens && l.contains("max_completion_tokens") { completion_tokens = true; continue; }
             if json && (l.contains("response_format") || l.contains("json_object") || l.contains("json mode")) { json = false; continue; }
+            if let Some((k, _)) = think_off { if l.contains(k) || l.contains("unrecognized") || l.contains("unknown") || l.contains("extra") { think_off = None; continue; } }
         }
         return Err(api_error(status.as_u16(), &body));
     };
@@ -169,6 +175,25 @@ pub async fn chat(p: &Provider, system: &str, messages: &[Message], max_tokens: 
         if !text.is_empty() { on_delta(&text); full.push_str(&text); }
     }
     finish(full, thought || think.saw, cut)
+}
+
+/// The request field that turns thinking off (or as low as it goes) for this provider and model, if it has one.
+fn think_off_param(p: &Provider) -> Option<(&'static str, Value)> {
+    let base = p.base_url.to_lowercase();
+    let model = p.model.to_lowercase();
+    if base.contains("deepseek.com") || (model.contains("deepseek") && !base.contains("openrouter")) {
+        Some(("thinking", json!({"type": "disabled"})))
+    } else if base.contains("dashscope") || model.starts_with("qwen3") || model.starts_with("qwq") {
+        Some(("enable_thinking", json!(false)))
+    } else if base.contains("bigmodel.cn") || model.starts_with("glm-4.5") || model.starts_with("glm-4.6") || model.starts_with("glm-5") {
+        Some(("thinking", json!({"type": "disabled"})))
+    } else if base.contains("volces.com") || model.starts_with("doubao-seed") {
+        Some(("thinking", json!({"type": "disabled"})))
+    } else if base.contains("api.openai.com") && (model.starts_with('o') || model.starts_with("gpt-5")) {
+        Some(("reasoning_effort", json!("low")))
+    } else {
+        None
+    }
 }
 
 /// Message content as text: a string, or an array of parts ({type:"text", text}).
@@ -264,5 +289,19 @@ mod reply_tests {
         assert_eq!(text_of(&json!([{ "type": "text", "text": "你" }, { "type": "image_url" }, { "text": "好" }])).unwrap(), "你好");
         assert!(finish(String::new(), true, false).unwrap_err().to_string().contains("思考"));
         assert_eq!(finish("  \n答".into(), false, false).unwrap(), "答");
+    }
+}
+
+#[cfg(test)]
+mod think_off_tests {
+    use super::*;
+    fn p(base: &str, model: &str) -> Provider { Provider { id: "x".into(), protocol: "openai".into(), base_url: base.into(), model: model.into() } }
+    #[test]
+    fn picks_the_switch_per_provider() {
+        assert_eq!(think_off_param(&p("https://api.deepseek.com", "deepseek-v4-flash")).unwrap().0, "thinking");
+        assert_eq!(think_off_param(&p("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus")).unwrap().0, "enable_thinking");
+        assert_eq!(think_off_param(&p("https://api.openai.com/v1", "gpt-5-mini")).unwrap().1, json!("low"));
+        assert!(think_off_param(&p("https://api.openai.com/v1", "gpt-4.1")).is_none());
+        assert!(think_off_param(&p("https://openrouter.ai/api/v1", "anthropic/claude-sonnet")).is_none());
     }
 }

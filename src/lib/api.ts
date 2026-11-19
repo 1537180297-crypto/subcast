@@ -198,6 +198,8 @@ export async function llmChat(opts: {
   messages: ChatMessage[];
   maxTokens?: number;
   jsonMode?: boolean;
+  /** Needs no deep thinking: ask the provider to turn thinking off or down, so the budget goes to the answer. */
+  quick?: boolean;
   onDelta?: (full: string) => void;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -226,6 +228,7 @@ export async function llmChat(opts: {
       messages: opts.messages,
       maxTokens: opts.maxTokens,
       jsonMode: opts.jsonMode,
+      quick: opts.quick,
     });
   } finally {
     // The last pieces go out now, before the caller sees the result (it keeps them if the reply fails).

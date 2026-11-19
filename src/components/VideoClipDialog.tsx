@@ -6,7 +6,7 @@ import { Check, Copy, FolderOpen, Image as ImageIcon, Loader2, Minus, Pause, Pla
 import { create } from "zustand";
 import { api, errorText, rawErrorText, type Episode, type RenderVideoClipResult, type Segment, type VideoClipProgress } from "../lib/api";
 import { clock } from "../lib/format";
-import { buildPlatformPost, polishClipCopy, previewEpisodeRange, type HighlightClip, type PostPlatform } from "../lib/highlights";
+import { buildPlatformPost, polishClipCopy, previewEpisodeRange, saveClipCopy, type HighlightClip, type PostPlatform } from "../lib/highlights";
 import { t, tk, tr, tx, useLang } from "../lib/i18n";
 import { showName } from "../lib/picks";
 import { buildClipCues, canvasDimensions, canvasToPngBase64, renderCueBand, renderStaticOverlay, type CardBg, type ClipLayout, type ClipVisualConfig, type SubStyleId } from "../lib/videoClipCanvas";
@@ -317,27 +317,38 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     }
   };
 
-  const runAiPolish = async () => {
+  /** `fill`: only the copy that's missing (opening a highlight that came without it), quietly. */
+  const runAiPolish = async (fill = false) => {
     if (polishing) return;
     setPolishing(true);
     setError(null);
     setNeedsSetup(false);
     try {
       const res = await polishClipCopy({ ep, segments: effectiveSegments, zh: effectiveZh, startIdx, endIdx });
-      setTitle(res.title);
-      setCoverHook(res.coverHook);
-      setCoverSub(res.coverSub);
+      if (!fill) {
+        setTitle(res.title);
+        setCoverHook(res.coverHook);
+        setCoverSub(res.coverSub);
+      }
       setShareCopy(res.shareCopy);
       setArticleCopy(res.articleCopy);
       setPostEdits({});
-      notify(t("AI 已生成封面金句与多平台文案"));
+      if (fill) void saveClipCopy(ep.id, clip.id, { shareCopy: res.shareCopy, articleCopy: res.articleCopy });
+      if (!fill) notify(t("AI 已生成封面金句与多平台文案"));
     } catch (e) {
       setNeedsSetup(Boolean((e as { setup?: boolean })?.setup) || /设置|API Key|模型/.test(rawErrorText(e)));
       setError(errorText(e));
     } finally {
       setPolishing(false);
     }
-  };
+  };  // A highlight picked by the model arrives with its title and cover lines only; the posts are written on open.
+  const autoFilled = useRef(false);
+  useEffect(() => {
+    if (autoFilled.current || clip.articleCopy || clip.id.startsWith("manual")) return;
+    autoFilled.current = true;
+    void runAiPolish(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   const copyCoverImage = async (aspectOverride?: CoverAspect) => {
     try {

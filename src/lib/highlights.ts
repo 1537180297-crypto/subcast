@@ -168,9 +168,10 @@ export function buildHighlightWindows(
   isLocal: boolean,
 ): WindowRange[] {
   if (!segments.length) return [];
-  const windowSec = isLocal ? 20 * 60 : 60 * 60;
-  const overlapSec = isLocal ? 90 : 4 * 60;
-  const maxChars = isLocal ? 12_000 : 65_000;
+  // Smaller windows read more closely and leave a thinking model room to answer; they run in parallel.
+  const windowSec = isLocal ? 20 * 60 : 30 * 60;
+  const overlapSec = isLocal ? 90 : 2 * 60;
+  const maxChars = isLocal ? 12_000 : 32_000;
 
   const formatLine = (i: number, includeZh: boolean) => {
     const s = segments[i];
@@ -235,9 +236,10 @@ function buildHighlightSystem(
 2. 独立可懂（Standalone）：观众不用看完整期节目就能听懂；如果是问答，必须从提问或铺垫那一句开始，到回答真正讲完为止。
 3. 切点干净：严禁停在半句话；不要以主持人开启下一个新话题的提问结尾；不要把寒暄、口播广告算进来。
 4. 时长控制：每段建议 ${profile.targetLo}–${profile.targetHi} 秒（最短不少于 ${profile.minSec} 秒，最长不超过 ${profile.maxSec} 秒），段落之间不要重叠。
-5. 本窗口挑选 ${profile.countLo}–${profile.countHi} 个最值得剪成视频的片段，宁缺毋滥。
+5. 本窗口挑选 ${profile.countLo}–${profile.countHi} 个最值得剪成视频的片段，宁缺毋滥；按 score 从高到低排列。
+6. score 按「开头钩子强度 + 信息密度 + 情绪/反差 + 独立可懂」综合打分（1–99），不要都给 90 分以上。
 
-返回严格 JSON，不要 Markdown 代码块以外的废话：
+不需要长篇思考，直接输出结果。只返回严格 JSON，不要任何其他文字：
 {
   "clips": [
     {
@@ -247,19 +249,44 @@ function buildHighlightSystem(
       "coverHook": "封面主视觉大字（10–18字，用【】包住1个最吸睛的关键词，如：未来三年，【会提问的人】将淘汰写代码的人）",
       "coverSub": "封面副标题（12–24字，补充悬念或反差，让人想点开看）",
       "reason": "推荐理由（15–35字，说清为什么值得发）",
-      "shareCopy": "适合发小红书/视频号/抖音/B站的短视频配文（2–3句，含1–3个话题标签）",
-      "articleCopy": "适合发公众号/即刻/知乎等视频文章的观点短文（120–200字，有信息量、口吻克制真诚）",
-      "score": 92,
+      "score": 86,
       "tags": ["标签1", "标签2"]
     }
   ]
 }
-所有 title、coverHook、coverSub、reason、shareCopy、articleCopy、tags 必须使用 ${outLang} 书写；startIdx 与 endIdx 必须是文稿中真实存在的整数行号。`;
+所有 title、coverHook、coverSub、reason、tags 必须使用 ${outLang} 书写；startIdx 与 endIdx 必须是文稿中真实存在的整数行号。`;
 }
 // i18n-ignore-end
 
 export function parseHighlightsJson(raw: string): Array<Record<string, unknown>> {
   const clean = raw.replace(/^```(?:json)?\s*|\s*```$/gm, "").trim();
+  try { return parseWhole(clean); } catch (e) {
+    // Cut off mid-answer: keep the clips that did arrive whole.
+    const salvaged = salvageClips(clean);
+    if (salvaged.length) return salvaged;
+    throw e;
+  }
+}
+
+/** Every complete `{…}` object that carries a startIdx, read one by one (braces inside strings are skipped). */
+export function salvageClips(text: string): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  const open = text.indexOf("[");
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = open >= 0 ? open + 1 : 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true;
+    else if (c === "{") { if (depth++ === 0) start = i; }
+    else if (c === "}" && depth > 0 && --depth === 0 && start >= 0) {
+      try { const o = JSON.parse(text.slice(start, i + 1)); if (o && typeof o === "object" && "startIdx" in o) out.push(o); } catch { /* skip */ }
+      start = -1;
+    }
+  }
+  return out;
+}
+
+function parseWhole(clean: string): Array<Record<string, unknown>> {
   const a = clean.indexOf("{");
   const b = clean.indexOf("[");
   const start = a >= 0 && (b < 0 || a < b) ? a : b;
@@ -306,17 +333,25 @@ export async function extractHighlights(opts: {
   const system = buildHighlightSystem(ep, profile, intent);
 
   const candidates: HighlightClip[] = [];
-  for (const w of windows) {
+  // One window: a quick (no deep thinking) request; if the answer runs out of room or isn't JSON, once more
+  // with twice the room. A window that still fails is skipped, so one bad stretch doesn't lose the episode.
+  const ask = async (w: WindowRange, maxTokens: number) => parseHighlightsJson(await llmChat({
+    provider,
+    system,
+    messages: [{ role: "user", content: w.rowsText }],
+    maxTokens,
+    jsonMode: provider.protocol === "openai",
+    quick: true,
+    signal,
+  }));
+  const runWindow = async (w: WindowRange) => {
     if (signal?.aborted) throw new Error(t("（已停止）"));
-    const answer = await llmChat({
-      provider,
-      system,
-      messages: [{ role: "user", content: w.rowsText }],
-      maxTokens: 4000,
-      jsonMode: provider.protocol === "openai",
-      signal,
-    });
-    const items = parseHighlightsJson(answer);
+    let items: Array<Record<string, unknown>>;
+    try { items = await ask(w, 6000); }
+    catch (e) {
+      if (signal?.aborted) throw e;
+      items = await ask(w, 16000);
+    }
     for (const item of items) {
       const sRaw = Number(item.startIdx ?? item.start);
       const eRaw = Number(item.endIdx ?? item.end);
@@ -351,7 +386,19 @@ export async function extractHighlights(opts: {
         tags,
       });
     }
-  }
+  };
+  // A few windows at a time: long episodes finish in about the time of one or two requests.
+  const errors: unknown[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < windows.length) {
+      const w = windows[next++];
+      try { await runWindow(w); }
+      catch (e) { if (signal?.aborted) throw e; errors.push(e); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(isLocal ? 1 : 3, windows.length) }, worker));
+  if (!candidates.length && errors.length) throw errors[0];
 
   const clips = deduplicateHighlights(candidates, profile.countHi);
   if (!clips.length) throw new Error(t("没有从文稿里挑出合适的高光片段，可以换个方向或重试"));
@@ -380,6 +427,15 @@ export const useHighlights = create<HighlightState>(() => ({
 }));
 
 const aborts = new Map<string, AbortController>();
+
+/** Keeps copy generated later (in the clip dialog) with the saved highlight, so it isn't asked for again. */
+export async function saveClipCopy(episodeId: string, clipId: string, copy: { shareCopy: string; articleCopy: string }) {
+  const bundle = useHighlights.getState().bundles[episodeId];
+  if (!bundle || !bundle.clips.some((c) => c.id === clipId)) return;
+  const next: HighlightBundle = { ...bundle, clips: bundle.clips.map((c) => (c.id === clipId ? { ...c, ...copy } : c)) };
+  useHighlights.setState((s) => ({ bundles: { ...s.bundles, [episodeId]: next } }));
+  await api.setBlob(episodeId, "highlights", JSON.stringify(next)).catch(() => {});
+}
 
 export async function loadHighlights(episodeId: string) {
   if (useHighlights.getState().bundles[episodeId] !== undefined) return;
@@ -524,14 +580,17 @@ export async function polishClipCopy(opts: {
 {"title":"...","coverHook":"...","coverSub":"...","shareCopy":"...","articleCopy":"..."}`;
   // i18n-ignore-end
 
-  const raw = await llmChat({
+  const once = (maxTokens: number) => llmChat({
     provider,
     system,
     messages: [{ role: "user", content: lines }],
-    maxTokens: 1500,
+    maxTokens,
     jsonMode: provider.protocol === "openai",
+    quick: true,
     signal,
   });
+  // A thinking model that spends the budget before answering gets one more try with room to spare.
+  const raw = await once(3000).catch((e) => { if (signal?.aborted) throw e; return once(10000); });
   const clean = raw.replace(/^```(?:json)?\s*|\s*```$/gm, "").trim();
   const a = clean.indexOf("{");
   const b = clean.lastIndexOf("}");
