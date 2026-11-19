@@ -52,12 +52,12 @@ function onLineClick(e: React.MouseEvent, seek: () => void) {
   lineClick = window.setTimeout(() => { if (!window.getSelection()?.toString().trim()) seek(); }, 260);
 }
 
-const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks, reading }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean; marks: LearnMarks | null; reading?: boolean }) {
+const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks, reading }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number, i: number) => void; query: string; current: boolean; marks: LearnMarks | null; reading?: boolean }) {
   const showZh = mode !== "original";
   // "中文" means Chinese only, learning mode or not; a line not translated yet shows its original meanwhile.
   const showOrig = mode !== "translation" || (!zh && !pending);
   return (
-    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""} ${reading ? "zh-reading" : ""}`} data-i={i} data-active={active || undefined} data-reading={reading || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
+    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""} ${reading ? "zh-reading" : ""}`} data-i={i} data-active={active || undefined} data-reading={reading || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start, i))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start, i)}>
       <span className="line-time">{clock(seg.start)}</span>
       <div className="line-text">
         {showZh && (zh ? <p className="zh">{highlight(zh, query)}</p> : pending ? <span className="skeleton" /> : null)}
@@ -183,6 +183,10 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const readIndex = useZhRead((s) => (s.epId === ep.id ? s.index : null));
   const readingHere = readIndex != null;
   const [readSetup, setReadSetup] = useState(false);
+  const zhItems = translation?.items;
+  // While reading Chinese, or in the Chinese-only view, a click on a line reads aloud from there instead of playing the original video.
+  const readFrom = useCallback((i: number) => void startZhRead(ep.id, zhItems ?? [], i, (m) => { useStore.getState().notify(tr(m)); if (isKeyError(m)) setReadSetup(true); }), [ep.id, zhItems]);
+  const readAt = useCallback((_start: number, i: number) => readFrom(i), [readFrom]);
   const readBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!readSetup) return;
@@ -237,10 +241,6 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       ))}
     </div>
   );
-  const zhItems = translation?.items;
-  // While reading, a click on a line reads from there.
-  const readAt = (start: number) => readFrom(segments.findIndex((x) => x.start === start));
-  const readFrom = (i: number) => void startZhRead(ep.id, zhItems ?? [], i, (m) => { useStore.getState().notify(tr(m)); if (isKeyError(m)) setReadSetup(true); });
   const searchBtn = <>
     {wantsZh && done > 0 && (
       <div className="read-aloud zh-read" ref={readBox}>
@@ -287,7 +287,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       <div className={`lines${marks && settings.learnCard ? " learning" : ""}`} ref={list} onWheel={() => (userScrolled.current = Date.now())} onClickCapture={onWordClick}>
         {english && <LearnTip />}
         {rows.map((i, k) => (
-          <Row key={i} i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={aligning && canAlign ? anchorHere : readingHere ? readAt : seek} query={query} current={!!matches && k === hit} marks={marks} reading={i === readIndex} />
+          <Row key={i} i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={aligning && canAlign ? anchorHere : (readingHere || (mode === "translation" && done > 0)) ? readAt : seek} query={query} current={!!matches && k === hit} marks={marks} reading={i === readIndex} />
         ))}
         {card && <WordCard target={card} ep={ep} onClose={closeCard} />}
         {!matches && total > 0 && (
