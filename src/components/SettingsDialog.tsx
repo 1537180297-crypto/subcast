@@ -35,6 +35,34 @@ export function DefaultButton({ id, isDefault }: { id: string; isDefault: boolea
     : <button className="btn primary sm" onClick={() => void saveSettings({ translateProvider: id, chatProvider: id, chatModel: "", modelChosen: true, ...(mode === "google" ? { translateMode: "auto" } : {}) })}>{t("设为默认模型")}</button>;
 }
 
+/** One DeepSeek key covers Q&A, translation, transcription and read-aloud; this switches them all over at once. */
+function DeepSeekEverywhere() {
+  const { settings, saveSettings } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })));
+  const uses = [
+    { name: tk("问答"), on: settings.chatProvider === "deepseek" },
+    { name: tk("字幕翻译"), on: settings.translateProvider === "deepseek" && settings.translateMode !== "google" },
+    { name: tk("转写"), on: settings.asrEngine === "deepseek" },
+    { name: tk("朗读"), on: settings.ttsEngine === "deepseek" },
+  ];
+  const all = uses.every((u) => u.on);
+  return (
+    <div className="ds-all">
+      <div className="ds-all-text">
+        <p className="setup-title">{t("一个 Key，全部用 DeepSeek")}</p>
+        <p className="muted small">{uses.map((u) => <span key={u.name} className={`ds-use ${u.on ? "on" : ""}`}>{u.on && <Check size={11} />}{t(u.name)}</span>)}</p>
+        <p className="muted small">{t("转写只返回文字，字幕时间是按句子估算的；需要精准时间轴时用豆包或本地模型。")}</p>
+      </div>
+      <button
+        className={`btn sm ${all ? "" : "primary"}`}
+        disabled={all}
+        onClick={() => void saveSettings({ chatProvider: "deepseek", chatModel: "", translateProvider: "deepseek", translateMode: "auto", modelChosen: true, asrEngine: "deepseek", ttsEngine: "deepseek" })}
+      >
+        {all ? t("已全部使用") : t("全部改用 DeepSeek")}
+      </button>
+    </div>
+  );
+}
+
 function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) => void }) {
   const settings = useStore((s) => s.settings);
   const [key, setKey] = useState("");
@@ -74,6 +102,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
       <div className="setup-block">
         <DefaultButton id={p.id} isDefault={forTranslate} />
       </div>
+      {p.id === "deepseek" && hasKey && <DeepSeekEverywhere />}
       <div className="row-actions">
         <button className="btn sm" onClick={test} disabled={testing === "…"}>{testing === "…" && <Loader2 size={13} className="spin" />} {t("测试连接")}</button>
         {testing && testing !== "…" && <span className={testOk ? "ok-text small" : "error-text small"}>{testing}</span>}
@@ -254,10 +283,26 @@ export function SettingsView() {
   );
 }
 
-export function KeyField({ account, placeholder }: { account: string; placeholder?: string }) {
+/** A key field. With `shared` (the AI-model key this service falls back to), a missing own key shows as
+ *  already covered by that one instead of as an empty field. */
+export function KeyField({ account, placeholder, shared }: { account: string; placeholder?: string; shared?: { account: string; name: string } }) {
   const [key, setKey] = useState("");
   const [has, setHas] = useState(false);
-  useEffect(() => { setKey(""); api.hasApiKey(account).then(setHas); }, [account]);
+  const [hasShared, setHasShared] = useState(false);
+  const [own, setOwn] = useState(false);
+  useEffect(() => {
+    setKey(""); setOwn(false); setHasShared(false);
+    void api.hasApiKey(account).then(setHas);
+    if (shared) void api.hasApiKey(shared.account).then(setHasShared);
+  }, [account, shared?.account]);
+  if (shared && hasShared && !has && !own) {
+    return (
+      <div className="key-row key-saved">
+        <span className="key-state"><Check size={14} /><span>{t("使用「AI 模型」里的 {name} Key", { name: tr(shared.name) })}</span></span>
+        <button className="btn sm" onClick={() => setOwn(true)}>{t("单独设置")}</button>
+      </div>
+    );
+  }
   return <KeyRow key={account} has={has} value={key} onValue={setKey} placeholder={placeholder}
     onSave={async () => { await api.setApiKey(account, key); setHas(!!key.trim()); setKey(""); }}
     onDelete={async () => { await api.setApiKey(account, ""); setHas(false); }} />;
@@ -295,8 +340,7 @@ function CloudAsrEditor({ a, onChange }: { a: CloudAsr; onChange: (a: CloudAsr) 
         <datalist id={`asr-${a.id}`}>{a.models.map((m) => <option key={m} value={m} />)}</datalist>
       </label>
       {a.models.length > 1 && <div className="model-chips">{a.models.map((m) => <button key={m} className={`chip sm ${a.model === m ? "on" : ""}`} onClick={() => onChange({ ...a, model: m })}>{m}</button>)}</div>}
-      {a.needsKey && <label><span>API Key</span><KeyField account={`asr.${a.id}`} /></label>}
-      {a.protocol === "deepseek" && <p className="muted small">{t("已在「AI 模型」里填过 DeepSeek Key 的话，这里可以留空。")}</p>}
+      {a.needsKey && <label><span>API Key</span><KeyField account={`asr.${a.id}`} shared={a.protocol === "deepseek" ? { account: "deepseek", name: "DeepSeek" } : undefined} /></label>}
       <div className="row-actions">
         <span className="spacer" />
         {a.keyUrl && <button className="btn ghost sm" onClick={() => openUrl(a.keyUrl!)}><ExternalLink size={13} /> {t("获取 Key")}</button>}

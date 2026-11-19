@@ -812,7 +812,6 @@ const dict: Record<string, string> = {
   "需要登录": "ログインが必要",
   "待确认": "未確認",
   "和问答共用同一个 DeepSeek Key": "Q&A と同じ DeepSeek キーを使います",
-  "已在「AI 模型」里填过 DeepSeek Key 的话，这里可以留空。": "「AI モデル」で DeepSeek のキーを入力済みなら、ここは空欄で構いません。",
   "Hugging Face 缓存": "Hugging Face キャッシュ",
   "本机": "このコンピュータ",
   "DeepSeek 返回了无法解析的结果": "DeepSeek から読み取れない結果が返されました",
@@ -1466,6 +1465,13 @@ const dict: Record<string, string> = {
   "Stella（女声）": "Stella（女性）",
   "Tide（男声）": "Tide（男性）",
   "DeepSeek 拒绝朗读这段文字（内容审核未通过）": "DeepSeek がこのテキストの読み上げを拒否しました（内容審査）",
+  "转写": "文字起こし",
+  "一个 Key，全部用 DeepSeek": "1 つのキーで全部 DeepSeek に",
+  "转写只返回文字，字幕时间是按句子估算的；需要精准时间轴时用豆包或本地模型。": "文字起こしはテキストのみのため、字幕の時間は文ごとの推定です。正確なタイミングが必要なら Doubao かローカルモデルを使ってください。",
+  "已全部使用": "すべて使用中",
+  "全部改用 DeepSeek": "すべて DeepSeek にする",
+  "使用「AI 模型」里的 {name} Key": "「AI モデル」の {name} キーを使用中",
+  "单独设置": "個別に設定",
 };
 
 export default dict;

@@ -2185,3 +2185,11 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .line.zh-reading { background: var(--accent-soft); }
 .line.zh-reading .zh { color: var(--accent-text); }
 .zh-read .icon-btn.on { color: var(--accent-text); background: var(--accent-soft); }
+
+/* AI 模型 › DeepSeek: one key for Q&A, translation, transcription and read-aloud */
+.ds-all { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--soft); }
+.ds-all-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ds-all-text .muted { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.ds-use { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); }
+.ds-use.on { color: var(--ok); font-weight: 600; }
+.ds-all .btn { flex: none; }

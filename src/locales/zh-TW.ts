@@ -872,7 +872,6 @@ const dict: Record<string, string> = {
   "需要登录": "需要登入",
   "待确认": "待確認",
   "和问答共用同一个 DeepSeek Key": "和問答共用同一個 DeepSeek Key",
-  "已在「AI 模型」里填过 DeepSeek Key 的话，这里可以留空。": "已在「AI 模型」裡填過 DeepSeek Key 的話，這裡可以留空。",
   "Hugging Face 缓存": "Hugging Face 快取",
   "本机": "本機",
   "DeepSeek 返回了无法解析的结果": "DeepSeek 回傳了無法解析的結果",
@@ -1526,6 +1525,13 @@ const dict: Record<string, string> = {
   "Stella（女声）": "Stella（女聲）",
   "Tide（男声）": "Tide（男聲）",
   "DeepSeek 拒绝朗读这段文字（内容审核未通过）": "DeepSeek 拒絕朗讀這段文字（內容審核未通過）",
+  "转写": "轉寫",
+  "一个 Key，全部用 DeepSeek": "一個 Key，全部用 DeepSeek",
+  "转写只返回文字，字幕时间是按句子估算的；需要精准时间轴时用豆包或本地模型。": "轉寫只回傳文字，字幕時間是按句子估算的；需要精準時間軸時用豆包或本地模型。",
+  "已全部使用": "已全部使用",
+  "全部改用 DeepSeek": "全部改用 DeepSeek",
+  "使用「AI 模型」里的 {name} Key": "使用「AI 模型」裡的 {name} Key",
+  "单独设置": "單獨設定",
 };
 
 export default dict;

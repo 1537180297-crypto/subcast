@@ -812,7 +812,6 @@ const dict: Record<string, string> = {
   "需要登录": "Needs sign-in",
   "待确认": "Unconfirmed",
   "和问答共用同一个 DeepSeek Key": "Shares the DeepSeek key used for Q&A",
-  "已在「AI 模型」里填过 DeepSeek Key 的话，这里可以留空。": "If you already entered a DeepSeek key under AI models, leave this empty.",
   "Hugging Face 缓存": "Hugging Face cache",
   "本机": "this computer",
   "DeepSeek 返回了无法解析的结果": "DeepSeek returned a result that couldn't be read",
@@ -1466,6 +1465,13 @@ const dict: Record<string, string> = {
   "Stella（女声）": "Stella (female)",
   "Tide（男声）": "Tide (male)",
   "DeepSeek 拒绝朗读这段文字（内容审核未通过）": "DeepSeek declined to read this text (content review)",
+  "转写": "Transcription",
+  "一个 Key，全部用 DeepSeek": "One key: use DeepSeek for everything",
+  "转写只返回文字，字幕时间是按句子估算的；需要精准时间轴时用豆包或本地模型。": "Transcription returns text only, so subtitle timing is estimated per sentence; use Doubao or a local model for exact timing.",
+  "已全部使用": "All in use",
+  "全部改用 DeepSeek": "Use DeepSeek for all",
+  "使用「AI 模型」里的 {name} Key": "Using the {name} key from AI models",
+  "单独设置": "Set separately",
 };
 
 export default dict;
