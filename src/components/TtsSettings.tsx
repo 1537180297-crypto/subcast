@@ -62,7 +62,7 @@ export function useSystemVoices(enabled: boolean): SystemVoice[] {
 }
 
 /** The AI-model key each service falls back to when it has none of its own (mirrors speech.rs resolve_key). */
-const SHARED_KEY: Record<string, { account: string; name: string }> = {
+export const SHARED_KEY: Record<string, { account: string; name: string }> = {
   deepseek: { account: "deepseek", name: "DeepSeek" },
   mimo: { account: "mimo", name: tk("小米 MiMo") },
   qwen: { account: "qwen-cn", name: tk("通义千问（百炼）") },
