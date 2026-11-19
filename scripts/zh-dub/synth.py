@@ -101,6 +101,17 @@ def synth(name, voice, text, speed):
                                      "audio": {"format": "wav", "voice": voice}}))
         x, sr = sf.read(io.BytesIO(base64.b64decode(body["choices"][0]["message"]["audio"]["data"])), dtype="float32")
         return resample(x if x.ndim == 1 else x.mean(axis=1), sr)
+    if name == "qwen3":
+        # Local Qwen3-TTS behind CrispASR's OpenAI-compatible server (`crispasr --server --backend qwen3-tts-customvoice`);
+        # it takes the preset speaker as `voice` and a native `speed`.
+        import io, urllib.request
+        base = os.environ.get("COMPAT_BASE", "http://127.0.0.1:18791/v1")
+        req = urllib.request.Request(base + "/audio/speech", headers={"Content-Type": "application/json"},
+                                     data=json.dumps({"model": "qwen3-tts", "input": text, "voice": voice, "speed": round(speed, 2),
+                                                      "response_format": "wav"}).encode())
+        with urllib.request.urlopen(req, timeout=300) as r:
+            x, sr = sf.read(io.BytesIO(r.read()), dtype="float32")
+        return resample(x if x.ndim == 1 else x.mean(axis=1), sr)
     if name == "edge":
         # Microsoft's Read Aloud service through rany2/edge-tts (no key). Rate is a native SSML prosody percent.
         uv = os.environ.get("UV_BIN", "uv")

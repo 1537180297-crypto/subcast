@@ -30,7 +30,7 @@ def main():
     speeds = {}
     for row in Path(sys.argv[2]).read_text().splitlines():
         e, v, s = row.split("\t")
-        speeds[e] = s
+        speeds[e] = s.replace(" chars/s", " 字/秒")
     body = []
     for ep, (title, note) in EPISODES.items():
         body.append(f'<section><h2>{html.escape(title)}</h2><p class="muted">{note} · 前 4 分钟</p>')
