@@ -350,6 +350,16 @@ fn remove_show(state: State<'_, AppState>, id: String) -> Res<()> { db::delete_s
 fn set_progress(state: State<'_, AppState>, id: String, seconds: f64) -> Res<()> { db::set_progress(&state.db.lock().unwrap(), &id, seconds).map_err(e) }
 
 #[tauri::command]
+fn set_watched(state: State<'_, AppState>, id: String, watched: Option<String>) -> Res<()> {
+    db::set_watched(&state.db.lock().unwrap(), &id, watched.as_deref()).map_err(e)
+}
+
+#[tauri::command]
+fn mark_show_watched(state: State<'_, AppState>, show_id: String) -> Res<usize> {
+    db::mark_show_watched(&state.db.lock().unwrap(), &show_id).map_err(e)
+}
+
+#[tauri::command]
 async fn search_podcasts(term: String, country: Option<String>) -> Res<Vec<feeds::SearchResult>> {
     feeds::search_podcasts(&term, country.as_deref().unwrap_or("US")).await.map_err(e)
 }
@@ -1565,7 +1575,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
-            set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
+            set_progress, set_watched, mark_show_watched, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
             download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             app_update_check, app_update_download, app_update_install,
             shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,

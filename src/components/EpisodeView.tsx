@@ -14,7 +14,7 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { ArrowDownToLine, BookOpen, Captions, ChevronDown, ScrollText, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, FolderOpen, Trash2, Youtube, Bookmark, Pause } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Captions, Check, ChevronDown, ScrollText, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, FolderOpen, Trash2, Youtube, Bookmark, Pause } from "lucide-react";
 import { BookArt, DoneCheck, EmptyState } from "./Illustrations";
 import { Splitter } from "./Splitter";
 import { DeepRead } from "./DeepRead";
@@ -33,6 +33,7 @@ import { VideoSlot } from "./VideoDock";
 import { bytes, cancelDownload, downloadEpisode, isSaved, removeDownload, useOffline } from "../lib/offline";
 import { showLinks } from "../lib/showLinks";
 import { toggleFavorite, useLibrary } from "../lib/library";
+import { markWatched, useEpisodeWatch } from "../lib/watched";
 import { YtVideoStrip } from "./YtPromo";
 import { SubtitleTune } from "./SubtitleTune";
 import { pieceAt, pieces } from "../lib/pieces";
@@ -277,6 +278,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   const isCurrent = current?.id === ep.id;
   const playing = useStore((s) => s.playing);
   const fav = useLibrary((s) => s.favorites.some((f) => f.id === ep.id));
+  const watched = useEpisodeWatch(ep).status === "watched";
   // Translate foreign-language subtitles whichever tab is open: the video's subtitles need the Chinese too.
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const mode = useStore((s) => s.settings.subtitleMode);
@@ -345,6 +347,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
               {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
             </div>
             {!panelOpen && <button className="round-btn" title={t("显示字幕栏（⌘\\）")} onClick={() => put({ panelOpen: true })}><PanelRightOpen size={15} /></button>}
+            <button className={`round-btn watch-btn ${watched ? "on" : ""}`} aria-pressed={watched} title={watched ? t("标为未看") : t("标为已看")} onClick={() => void markWatched(ep, !watched)}><Check size={15} strokeWidth={watched ? 2.6 : 2} /></button>
             <button className={`round-btn fav-btn ${fav ? "on" : ""}`} aria-pressed={fav} title={fav ? t("取消收藏") : t("收藏这一集")} onClick={() => toggleFavorite(ep)}><Bookmark size={15} fill={fav ? "currentColor" : "none"} /></button>
             <DownloadButton ep={ep} />
             {ep.videoId

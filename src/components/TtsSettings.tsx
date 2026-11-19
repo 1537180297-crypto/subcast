@@ -4,9 +4,9 @@ import { ChevronDown, Cloud, ExternalLink, Globe, Laptop, Square, Trash2, Volume
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type SystemVoice } from "../lib/api";
 import { TTS_CLOUD_MAIN, TTS_SERVICES, type TtsService } from "../lib/settings";
-import { currentTtsService, previewVoice, stopSpeaking, useTtsPreview } from "../lib/tts";
+import { currentTtsService, listWebSystemVoices, previewVoice, stopSpeaking, useTtsPreview } from "../lib/tts";
 import { useStore } from "../store";
-import { IS_MAC, t, tk, tr } from "../lib/i18n";
+import { t, tk, tr } from "../lib/i18n";
 import { bytes } from "../lib/offline";
 import { ask } from "../lib/confirm";
 import {
@@ -33,14 +33,30 @@ export function PreviewButton({ engine, voice }: { engine: string; voice: string
   );
 }
 
-/** Shared hook to load installed OS voices once per mount. */
+/** Shared hook to load installed OS voices (preferring Web Speech so macOS Premium / Enhanced / Siri voices appear). */
 export function useSystemVoices(enabled: boolean): SystemVoice[] {
   const [voices, setVoices] = useState<SystemVoice[]>([]);
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
-    void api.ttsSystemVoices().then((v) => { if (alive) setVoices(v); }).catch(() => {});
-    return () => { alive = false; };
+    const load = () => {
+      const web = listWebSystemVoices();
+      if (web.length) {
+        if (alive) setVoices(web);
+        return true;
+      }
+      return false;
+    };
+    if (!load()) {
+      void api.ttsSystemVoices().then((v) => { if (alive && !listWebSystemVoices().length) setVoices(v); }).catch(() => {});
+    }
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
+    const onChange = () => { load(); };
+    synth?.addEventListener?.("voiceschanged", onChange);
+    return () => {
+      alive = false;
+      synth?.removeEventListener?.("voiceschanged", onChange);
+    };
   }, [enabled]);
   return voices;
 }
@@ -224,7 +240,6 @@ function LocalTtsEditor({ onPick }: { onPick: (engine: "local" | "system", model
   const setSystemVoice = (voice: string) =>
     void saveSettings({ ttsServices: { ...settings.ttsServices, system: { ...settings.ttsServices.system, voice } } });
 
-  const hasTingting = sysVoices.some((v) => v.id === "Tingting");
   const zhSysVoices = sysVoices.filter((v) => v.lang.toLowerCase().startsWith("zh"));
   const otherSysVoices = sysVoices.filter((v) => !v.lang.toLowerCase().startsWith("zh"));
   const shownSysVoices = moreSysVoices || zhSysVoices.length === 0 ? sysVoices : zhSysVoices;
@@ -245,6 +260,9 @@ function LocalTtsEditor({ onPick }: { onPick: (engine: "local" | "system", model
         <PreviewButton engine={active.id} voice={active.voice} />
       </div>
       <div className="model-chips">
+        <button className={`chip sm ${onSystem ? "on" : ""}`} onClick={() => onPick("system")}>
+          {t("系统增强语音")}
+        </button>
         {supported && LOCAL_MODELS.map((m) => (
           <button
             key={m.id}
@@ -254,9 +272,6 @@ function LocalTtsEditor({ onPick }: { onPick: (engine: "local" | "system", model
             {m.name}
           </button>
         ))}
-        <button className={`chip sm ${onSystem ? "on" : ""}`} onClick={() => onPick("system")}>
-          {IS_MAC ? t("婷婷（系统自带）") : t("系统语音")}
-        </button>
       </div>
 
       {active.id === "local" && (
@@ -307,11 +322,7 @@ function LocalTtsEditor({ onPick }: { onPick: (engine: "local" | "system", model
         </>
       )}
 
-      {onSystem && IS_MAC && !hasTingting && sysVoices.length > 0 && (
-        <p className="muted small">{t("这台 Mac 还没有婷婷的声音：到 系统设置 › 辅助功能 › 朗读内容 › 系统声音 › 管理声音 里下载「中文（中国大陆）› 婷婷」。")}</p>
-      )}
-
-      {onSystem && !IS_MAC && (
+      {onSystem && (
         <>
           <div className="model-chips">
             <button className={`chip sm ${!active.voice ? "on" : ""}`} onClick={() => setSystemVoice("")}>
@@ -383,18 +394,8 @@ export function TtsSettings() {
     <>
       <section className="setup-block">
         <p className="setup-title">{t("朗读引擎")}</p>
-        <p className="muted small">{t("用于精读、导读和字幕面板里的中文朗读。")}</p>
+        <p className="muted small">{t("用于精读和字幕中文翻译的朗读。")}</p>
         <div className="engine-switch tts-engine-switch">
-          <button
-            className={`engine ${active.id === "edge" ? "on" : ""}`}
-            onClick={() => void saveSettings({ ttsEngine: "edge" })}
-          >
-            <Globe size={18} />
-            <div>
-              <p>{t("免费在线")}</p>
-              <p className="muted small">{t("Edge 语音，免 Key，中文自然")}</p>
-            </div>
-          </button>
           <button
             className={`engine ${localOn ? "on" : ""}`}
             onClick={() => void saveSettings({ ttsEngine: localOn ? active.id : lastLocal })}
@@ -402,7 +403,7 @@ export function TtsSettings() {
             <Laptop size={18} />
             <div>
               <p>{t("本地语音")}</p>
-              <p className="muted small">{IS_MAC ? t("Melo、Kokoro、婷婷，不联网") : t("Melo、Kokoro，不联网")}</p>
+              <p className="muted small">{t("优先系统增强，也支持 Melo / Kokoro")}</p>
             </div>
           </button>
           <button
@@ -413,6 +414,16 @@ export function TtsSettings() {
             <div>
               <p>{t("云端服务")}</p>
               <p className="muted small">{t("豆包、MiMo、通义等，需 Key")}</p>
+            </div>
+          </button>
+          <button
+            className={`engine ${active.id === "edge" ? "on" : ""}`}
+            onClick={() => void saveSettings({ ttsEngine: "edge" })}
+          >
+            <Globe size={18} />
+            <div>
+              <p>{t("Edge 在线")}</p>
+              <p className="muted small">{t("免 Key，高峰期可能限流")}</p>
             </div>
           </button>
         </div>

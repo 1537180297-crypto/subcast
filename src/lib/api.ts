@@ -41,6 +41,8 @@ export interface Episode {
   showTitle?: string;
   /** Has a 乔木精读 article. */
   deep?: boolean;
+  /** User/ended override: "done" | "unseen" | null (auto from progress). */
+  watchedOverride?: "done" | "unseen" | null;
 }
 
 export interface Segment { start: number; end: number; text: string }
@@ -81,6 +83,8 @@ export const api = {
   getEpisode: (id: string) => invoke<Episode | null>("get_episode", { id }),
   removeShow: (id: string) => invoke<void>("remove_show", { id }),
   setProgress: (id: string, seconds: number) => invoke<void>("set_progress", { id, seconds }),
+  setWatched: (id: string, watched: "done" | "unseen" | null) => invoke<void>("set_watched", { id, watched }),
+  markShowWatched: (showId: string) => invoke<number>("mark_show_watched", { showId }),
   searchShow: (showId: string, query: string) => invoke<ShowHit[]>("search_show", { showId, query }),
   searchPodcasts: (term: string, country?: string) => invoke<SearchResult[]>("search_podcasts", { term, country }),
   loadTranscript: (episodeId: string) => invoke<Transcript | null>("load_transcript", { episodeId }),

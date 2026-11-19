@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-watched"
+description = "Enables the set_watched command without any pre-configured scope."
+commands.allow = ["set_watched"]
+
+[[permission]]
+identifier = "deny-set-watched"
+description = "Denies the set_watched command without any pre-configured scope."
+commands.deny = ["set_watched"]

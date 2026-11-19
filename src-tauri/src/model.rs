@@ -42,6 +42,9 @@ pub struct Episode {
     /// Has a 乔木精读 / 乔木改写 article.
     #[serde(default)]
     pub deep: bool,
+    /// User/ended override for watched state: "done" | "unseen" | None (auto from progress).
+    #[serde(default)]
+    pub watched_override: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

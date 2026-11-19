@@ -4,6 +4,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { api } from "./api";
+import { speakWord } from "./tts";
 import { useStore } from "../store";
 
 /** The sentence being played (its key) and whether its clip is still being cut, for the button that asked:
@@ -99,15 +100,7 @@ export async function playClip(ep: { id: string }, start: number, end: number): 
   return true;
 }
 
-/** Reads English text aloud with the system voice (a word, or a sentence when there is no audio). */
-export function speak(text: string, rate = 0.9) {
-  const synth = window.speechSynthesis;
-  if (!synth) return;
-  synth.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "en-US";
-  u.rate = rate;
-  const voice = synth.getVoices().find((v) => v.lang === "en-US" && /Samantha|Alex|Ava|Allison/.test(v.name)) ?? synth.getVoices().find((v) => v.lang.startsWith("en"));
-  if (voice) u.voice = voice;
-  synth.speak(u);
+/** Reads English text aloud with the default TTS engine, falling back to the best system Enhanced voice. */
+export function speak(text: string, rate = 0.9): Promise<void> {
+  return speakWord(text, rate);
 }

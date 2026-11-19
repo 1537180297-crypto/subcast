@@ -3,7 +3,7 @@ import { ask } from "../lib/confirm";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Search, Trash2, X, Youtube } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X, Youtube } from "lucide-react";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
@@ -18,6 +18,7 @@ import { EmptyState, FlatLineArt, HeadphonesArt, NightNote, TrayArt } from "./Il
 import { MonthFilter, useMonthFilter } from "./MonthFilter";
 import { clearQueue, playAll, useLibrary } from "../lib/library";
 import { recommend, type Recommendation } from "../lib/recommend";
+import { isInProgress, isWatched, markShowAllWatched, markWatched, useEpisodeWatch, useWatched } from "../lib/watched";
 
 // ---- episode rows -------------------------------------------------------------------------------
 
@@ -47,30 +48,56 @@ function openAt(ep: Episode, time: number) {
   playSoon(ep.id);
 }
 
-// Memoised, and watching only whether this row is the one playing: a show page can list hundreds.
+function ProgressRing({ pct }: { pct: number }) {
+  const r = 4.5, c = 2 * Math.PI * r;
+  const fill = Math.max(8, Math.min(100, pct));
+  return (
+    <svg className="prog-ring" viewBox="0 0 12 12" width="12" height="12" aria-hidden>
+      <circle cx="6" cy="6" r={r} className="prog-ring-track" />
+      <circle cx="6" cy="6" r={r} className="prog-ring-fill" strokeDasharray={c} strokeDashoffset={c * (1 - fill / 100)} />
+    </svg>
+  );
+}
+
+// Memoised, and watching only whether this row is the one playing and its own watch patch: a show page can list hundreds.
 const EpisodeRow = memo(function EpisodeRow({ ep, showShow, hit, query }: { ep: Episode; showShow: boolean; hit?: ShowHit; query?: string }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const open = () => (hit?.time != null ? openAt(ep, hit.time) : openEpisode(ep));
   const isPlaying = useStore((s) => s.current?.id === ep.id);
   useLang((s) => s.lang); // memoised: follow a language change itself
   const zh = useZh(ep.title);
-  const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
+  const { status, pct, leftMin, progress } = useEpisodeWatch(ep);
   const deep = !!ep.deep;
   const saved = useOffline((s) => !!s.saved[ep.id]);
   const loading = useOffline((s) => s.active[ep.id]);
+  const showBar = status === "in-progress" && pct > 0;
+  const toggleWatch = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    void markWatched(ep, status !== "watched");
+  };
   return (
-    <div className={`ep-item ${isPlaying ? "playing" : ""} ${pct >= 97 ? "played" : ""}`} role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
+    <div className={`ep-item ${isPlaying ? "playing" : ""} state-${status} ${status === "watched" ? "played" : ""}`} role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
       <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>
         {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" onError={(e) => {
           const i = e.currentTarget;
           if (ep.videoId && !i.dataset.f) { i.dataset.f = "1"; i.src = `https://i.ytimg.com/vi/${ep.videoId}/mqdefault.jpg`; } else i.style.visibility = "hidden";
         }} /> : <div className="cover-fallback" />}
-        {ep.videoId && ep.duration ? <span className="thumb-dur">{clockShort(ep.duration)}</span> : null}
-        {pct > 0 && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
+        {status === "watched" && <span className="thumb-done" aria-label={t("已看")}><Check size={11} strokeWidth={3} /></span>}
+        {ep.videoId && ep.duration ? <span className={`thumb-dur ${showBar ? "lifted" : ""}`}>{clockShort(ep.duration)}</span> : null}
+        {showBar && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
       </div>
       <div className="ep-body-col">
         <p className="ep-kicker">
+          {status === "unseen" && <span className="unseen-dot" aria-hidden />}
+          {status === "in-progress" && (
+            <span className="kicker-prog">
+              <ProgressRing pct={pct || 25} />
+              {pct > 0
+                ? (leftMin > 0 ? t("看到 {pct}% · 剩 {n} 分钟", { pct, n: leftMin }) : t("看到 {pct}%", { pct }))
+                : t("看到 {at}", { at: clockShort(progress) })}
+            </span>
+          )}
           {showShow && ep.showId !== "single" && <ShowName title={ep.showTitle} />}
           <span>{date(ep.published)}</span>
           {ep.duration ? <span>{duration(ep.duration)}</span> : null}
@@ -83,18 +110,25 @@ const EpisodeRow = memo(function EpisodeRow({ ep, showShow, hit, query }: { ep: 
             <span className="ep-hit-text"><Marked text={hit.snippet} query={query ?? ""} /></span>
           </p>
         )}
-        {(deep || ep.hasTranscript || ep.videoId || pct > 0 || saved || loading !== undefined) && (
+        {(deep || ep.hasTranscript || ep.videoId || saved || loading !== undefined) && (
           <p className="ep-tags">
             {saved && <span className="tag saved"><ArrowDownToLine size={11} />{t("已下载")}</span>}
             {loading !== undefined && <span className="tag saved">{loading == null ? t("下载中") : t("下载中 {pct}%", { pct: Math.round(loading * 100) })}</span>}
             {deep && <span className="tag deep">{t("精读")}</span>}
             {ep.hasTranscript && <span className="tag">{t("字幕")}</span>}
             {ep.videoId && <span className="tag">{t("视频")}</span>}
-            {pct > 0 && pct < 97 && <span className="tag progress"><span className="mini-bar"><span style={{ width: `${pct}%` }} /></span>{t("剩 {n} 分钟", { n: Math.max(1, Math.round(((ep.duration ?? 0) - ep.progress) / 60)) })}</span>}
-            {pct >= 97 && <span className="tag">{t("已听完")}</span>}
           </p>
         )}
       </div>
+      <button
+        type="button"
+        className="icon-btn sm row-watch-btn"
+        title={status === "watched" ? t("标为未看") : t("标为已看")}
+        aria-label={status === "watched" ? t("标为未看") : t("标为已看")}
+        onClick={toggleWatch}
+      >
+        {status === "watched" ? <RotateCcw size={14} /> : <Check size={15} />}
+      </button>
     </div>
   );
 });
@@ -140,8 +174,7 @@ function EpisodeList({ episodes, showShow, grouped = true }: { episodes: Episode
 function ContinueHero({ ep }: { ep: Episode }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const zh = useZh(ep.title);
-  const pct = ep.duration ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
-  const left = ep.duration ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
+  const { pct, leftMin: left } = useEpisodeWatch(ep);
   // The whole card resumes: open the episode and start playing where it stopped.
   const resume = () => { openEpisode(ep); playSoon(ep.id); };
   return (
@@ -195,20 +228,25 @@ function checkShared(eps: Episode[]) {
 function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
   const openEpisode = useStore((s) => s.openEpisode);
   const zh = useZh(ep.title);
-  const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
+  const { status, pct, leftMin } = useEpisodeWatch(ep);
   const shared = useSharedHits((s) => !!s.ids[ep.id]);
-  const left = ep.duration && pct > 0 ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
+  const showBar = status === "in-progress" && pct > 0;
   const play = (e: React.MouseEvent) => { e.stopPropagation(); playAll([ep]); };
   return (
-    <div className={`ep-card ${wide ? "wide" : ""}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
+    <div className={`ep-card ${wide ? "wide" : ""} state-${status}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
       <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>
         {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" /> : <div className="cover-fallback" />}
-        {pct > 0 && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
+        {status === "watched" && <span className="thumb-done" aria-label={t("已看")}><Check size={11} strokeWidth={3} /></span>}
+        {showBar && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
         {(ownSubs(ep) || shared) && <span className="thumb-subs">{t("有字幕")}</span>}
         <button type="button" className="card-play" title={t("播放")} aria-label={t("播放")} onClick={play}><Play size={16} fill="currentColor" /></button>
       </div>
-      <p className="ep-kicker">{ep.showId !== "single" && <ShowName title={ep.showTitle} />}<span>{left ? t("剩 {n} 分钟", { n: left }) : date(ep.published)}</span></p>
+      <p className="ep-kicker">
+        {status === "unseen" && <span className="unseen-dot" aria-hidden />}
+        {ep.showId !== "single" && <ShowName title={ep.showTitle} />}
+        <span>{status === "in-progress" && leftMin ? t("看到 {pct}% · 剩 {n} 分钟", { pct, n: leftMin }) : date(ep.published)}</span>
+      </p>
       <p className="card-title">{zh ?? ep.title}</p>
     </div>
   );
@@ -239,21 +277,25 @@ export function LatestView() {
   const [favEps, setFavEps] = useState<Episode[]>([]);
   const [dlEps, setDlEps] = useState<Episode[]>([]);
   const [all, setAll] = useState(false);
+  const [hideWatched, setHideWatched] = useState(false);
   const [limit, setLimit] = useState(40);
   const [adding, setAdding] = useState<string | null>(null);
+  const patches = useWatched((s) => s.patches);
   useEffect(() => {
     api.listEpisodes(undefined, 200).then(setEps);
     api.recentEpisodes().then(setRecent);
   }, [shows]);
   useEffect(() => { void Promise.all(favorites.slice(0, 30).map((f) => api.getEpisode(f.id).catch(() => null))).then((r) => setFavEps(r.filter((x): x is Episode => !!x))); }, [favorites]);
   useEffect(() => { const ids = savedIds ? savedIds.split(",") : []; void Promise.all(ids.slice(0, 30).map((id) => api.getEpisode(id).catch(() => null))).then((r) => setDlEps(r.filter((x): x is Episode => !!x))); }, [savedIds]);
-  const unfinished = (e: Episode) => e.progress > 5 && (!e.duration || e.progress < e.duration * 0.97);
+  const unfinished = (e: Episode) => isInProgress(e, patches[e.id]);
+  const unwatched = (e: Episode) => !isWatched(e, patches[e.id]);
   const hero = recent.find(unfinished) ?? null;
-  // Up next: other unfinished episodes, then saved ones not started yet.
-  const upNext = [...recent.filter((e) => unfinished(e) && e.id !== hero?.id), ...favEps.filter((e) => !unfinished(e) && !(e.duration && e.progress >= e.duration * 0.97))]
+  // Up next: other unfinished episodes, then saved ones not finished yet.
+  const upNext = [...recent.filter((e) => unfinished(e) && e.id !== hero?.id), ...favEps.filter((e) => !unfinished(e) && unwatched(e))]
     .filter((e, i, a) => a.findIndex((x) => x.id === e.id) === i).slice(0, 12);
   // Latest first, but in the top grid episodes that open with subtitles come before ones that need transcribing.
-  const unheard = (eps ?? []).filter((e) => !(e.duration && e.progress >= e.duration * 0.97));
+  const unheard = (eps ?? []).filter(unwatched);
+  const allList = hideWatched ? unheard : (eps ?? []);
   const shared = useSharedHits((s) => s.ids);
   useEffect(() => { checkShared(unheard.slice(0, 18)); }, [eps]);
   const fresh = [...unheard.slice(0, 18).filter((e) => hasSubs(e, shared)), ...unheard.slice(0, 18).filter((e) => !hasSubs(e, shared)), ...unheard.slice(18)];
@@ -282,13 +324,20 @@ export function LatestView() {
         <section className="home-main">
           <div className="module-head">
             <h2 className="module-title">{t("最新单集")}</h2>
-            {fresh.length > 9 && <button className="link-btn" onClick={() => setAll(!all)}>{all ? t("收起") : t("查看全部")}</button>}
+            <div className="module-head-actions">
+              {all && (
+                <button className={`chip sm ${hideWatched ? "on" : ""}`} aria-pressed={hideWatched} onClick={() => setHideWatched(!hideWatched)}>
+                  {t("隐藏已看")}
+                </button>
+              )}
+              {(fresh.length > 9 || (eps?.length ?? 0) > 9) && <button className="link-btn" onClick={() => setAll(!all)}>{all ? t("收起") : t("查看全部")}</button>}
+            </div>
           </div>
           {!shows.length && settingUp ? <SkeletonFeed /> : !shows.length ? <EmptyState art={<HeadphonesArt />} title={t("还没有订阅节目")} note={t("从精选里挑几档好节目，字幕会自动准备好")}><button className="btn primary" onClick={() => go({ kind: "discover" })}>{t("去发现节目")}</button></EmptyState>
             : eps == null ? <SkeletonFeed />
             : all ? <>
-                <EpisodeList episodes={eps.slice(0, limit)} showShow />
-                {eps.length > limit && <div className="center"><button className="btn" onClick={() => setLimit(limit + 40)}>{t("加载更多")}</button></div>}
+                <EpisodeList episodes={allList.slice(0, limit)} showShow />
+                {allList.length > limit && <div className="center"><button className="btn" onClick={() => setLimit(limit + 40)}>{t("加载更多")}</button></div>}
               </>
             : <div className="card-grid">{fresh.slice(0, 9).map((e) => <EpisodeCard key={e.id} ep={e} wide />)}</div>}
         </section>
@@ -327,8 +376,9 @@ export function RecentView() {
     void Promise.all(favorites.map((f) => api.getEpisode(f.id).catch(() => null))).then((r) => live && setSaved(r.filter((x): x is Episode => !!x)));
     return () => { live = false; };
   }, [favorites]);
+  const patches = useWatched((s) => s.patches);
   // "Play all" skips what's already finished.
-  const playable = (saved ?? []).filter((e) => !e.duration || e.progress < e.duration * 0.97);
+  const playable = (saved ?? []).filter((e) => !isWatched(e, patches[e.id]));
   return (
     <div className="page">
       <div className="page-head">
@@ -385,11 +435,12 @@ export function DownloadsView() {
 
 // ---- show page ----------------------------------------------------------------------------------
 
-type Filter = "all" | "unplayed" | "subs";
+type Filter = "all" | "unwatched" | "watched" | "subs";
 
 export function ShowView({ id }: { id: string }) {
   const { shows, reloadShows, notify, go } = useStore(useShallow((s) => ({ shows: s.shows, reloadShows: s.reloadShows, notify: s.notify, go: s.go })));
   const ytPromo = useStore((s) => s.settings.youtubePromo);
+  const patches = useWatched((s) => s.patches);
   const show = shows.find((s) => s.id === id);
   const [eps, setEps] = useState<Episode[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -417,14 +468,34 @@ export function ShowView({ id }: { id: string }) {
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, []);
-  const byFilter = useMemo(() => eps?.filter((e) => filter === "all" || (filter === "unplayed" ? e.progress < 5 : e.hasTranscript || e.transcriptUrl)) ?? null, [eps, filter]);
+  const byFilter = useMemo(
+    () =>
+      eps?.filter((e) => {
+        if (filter === "all") return true;
+        if (filter === "unwatched") return !isWatched(e, patches[e.id]);
+        if (filter === "watched") return isWatched(e, patches[e.id]);
+        return !!(e.hasTranscript || e.transcriptUrl || e.deep);
+      }) ?? null,
+    [eps, filter, patches],
+  );
+  const unwatchedCount = useMemo(() => (eps ?? []).filter((e) => !isWatched(e, patches[e.id])).length, [eps, patches]);
   const { month, setMonth, filtered: shown } = useMonthFilter(byFilter);
   // "Play all" follows the list as filtered, newest first, skipping finished and unplayable episodes.
-  const playable = (shown ?? []).filter((e) => (e.audioUrl || e.videoId) && !(e.duration && e.progress >= e.duration * 0.97));
+  const playable = (shown ?? []).filter((e) => (e.audioUrl || e.videoId) && !isWatched(e, patches[e.id]));
   if (!show) return <div className="page" />;
   const refresh = async () => {
     setBusy(true);
     try { await api.refreshShow(id); setEps(await api.listEpisodes(id)); await reloadShows(); } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
+  };
+  const markAll = async () => {
+    setMenu(false);
+    if (!unwatchedCount) return;
+    if (!(await ask({ title: t("把这档节目的 {n} 期全部标为已看？", { n: unwatchedCount }), message: t("之后仍可以随时把单集改回未看。"), ok: t("全部标为已看") }))) return;
+    try {
+      const n = await markShowAllWatched(id, eps ?? []);
+      setEps(await api.listEpisodes(id));
+      notify(t("已将 {n} 期标为已看", { n }));
+    } catch (e) { notify(errorText(e)); }
   };
   const remove = async () => {
     setMenu(false);
@@ -456,7 +527,12 @@ export function ShowView({ id }: { id: string }) {
             {playable.length > 1 && <button className="btn sm" title={t("按列表顺序连着播放没听完的 {n} 集", { n: playable.length })} onClick={() => playAll(playable)}><ListVideo size={14} /> {t("播放全部")}</button>}
             <div className="menu-wrap">
               <button className="btn ghost sm" onClick={() => setMenu(!menu)} aria-haspopup="menu" aria-expanded={menu}><MoreHorizontal size={14} /> {t("更多")}</button>
-              {menu && <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}><button role="menuitem" className="danger" onClick={remove}>{t("取消订阅")}</button></div>}
+              {menu && (
+                <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
+                  <button role="menuitem" disabled={unwatchedCount === 0} onClick={markAll}><CheckCircle2 size={14} /> {t("全部标为已看")}</button>
+                  <button role="menuitem" className="danger" onClick={remove}>{t("取消订阅")}</button>
+                </div>
+              )}
             </div>
             {ytPromo && links.youtube && <AlsoOn feedUrl={show.feedUrl} />}
           </div>
@@ -479,7 +555,7 @@ export function ShowView({ id }: { id: string }) {
         </label>
         {!hits && (
           <div className="seg-control">
-            {([["all", t("全部")], ["unplayed", t("未听")], ["subs", t("有字幕")]] as [Filter, string][]).map(([k, label]) => (
+            {([["all", t("全部")], ["unwatched", t("未看完")], ["watched", t("已看")], ["subs", t("有字幕")]] as [Filter, string][]).map(([k, label]) => (
               <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{label}</button>
             ))}
           </div>

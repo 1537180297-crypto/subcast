@@ -6,7 +6,7 @@ import { ChevronDown, ExternalLink, Settings, Square, Volume2 } from "lucide-rea
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { currentTtsService, isKeyError, speak, stopSpeaking } from "../lib/tts";
 import { useStore } from "../store";
-import { IS_MAC, t, tr } from "../lib/i18n";
+import { t, tr } from "../lib/i18n";
 import { localInstalled, refreshLocalTts, useLocalTts } from "../lib/localTts";
 import { KeyField, NO_AUTO } from "./SettingsDialog";
 import { PreviewButton, isLocalEngine, useSystemVoices } from "./TtsSettings";
@@ -42,7 +42,7 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
   );
   const svc = currentTtsService(settings);
   const [custom, setCustom] = useState(false);
-  const sysVoices = useSystemVoices(svc.id === "system" && !IS_MAC);
+  const sysVoices = useSystemVoices(svc.id === "system");
   const localStatus = useLocalTts((s) => s.status);
   useEffect(() => { void refreshLocalTts(); }, []);
 
@@ -50,9 +50,9 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
     setCustom(svc.group === "cloud" && svc.voices.length > 0 && !svc.voices.some((v) => v.id === svc.voice));
   }, [svc.id]);
 
-  // Quick-switch row: free engines + Doubao + currently selected cloud engine (if another one).
-  const quickIds = ["edge", "local", "doubao"];
-  if (!quickIds.includes(svc.id)) quickIds.push(svc.id);
+  // Quick-switch row: offline (System Enhanced / Melo / Kokoro) + Doubao + Edge + currently selected cloud engine.
+  const quickIds = ["local", "doubao", "edge"];
+  if (!quickIds.includes(svc.id) && svc.id !== "system") quickIds.push(svc.id);
 
   const setVoice = (voice: string, extra?: Partial<typeof svc>, quiet = false) => {
     const next = { ...svc, voice, ...extra };
@@ -89,7 +89,7 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
             <button
               key={id}
               className={`chip sm ${on ? "on" : ""}`}
-              onClick={() => void saveSettings({ ttsEngine: id === "local" && isLocalEngine(svc.id) ? svc.id : id })}
+              onClick={() => void saveSettings({ ttsEngine: id === "local" ? (isLocalEngine(svc.id) ? svc.id : "system") : id })}
             >
               {t(item.name)}
             </button>
@@ -102,9 +102,12 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
         <PreviewButton engine={svc.id} voice={svc.voice} />
       </div>
 
-      {isLocalEngine(svc.id) && (IS_MAC || svc.id === "local") ? (
+      {isLocalEngine(svc.id) ? (
         <>
           <div className="model-chips">
+            <button className={`chip sm ${svc.id === "system" ? "on" : ""}`} onClick={() => void saveSettings({ ttsEngine: "system" })}>
+              {t("系统增强语音")}
+            </button>
             {(["melo", "kokoro"] as const).map((m) => {
               const ready = localInstalled(localStatus, m);
               return (
@@ -121,12 +124,19 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
                 </button>
               );
             })}
-            {IS_MAC && (
-              <button className={`chip sm ${svc.id === "system" ? "on" : ""}`} onClick={() => void saveSettings({ ttsEngine: "system" })}>
-                {t("婷婷（系统自带）")}
-              </button>
-            )}
           </div>
+          {svc.id === "system" && (
+            <div className="model-chips">
+              <button className={`chip sm ${!svc.voice ? "on" : ""}`} onClick={() => setVoice("")}>
+                {t("系统默认")}
+              </button>
+              {popSysVoices.map((v) => (
+                <button key={v.id} className={`chip sm ${svc.voice === v.id ? "on" : ""}`} onClick={() => setVoice(v.id)}>
+                  {v.name}
+                </button>
+              ))}
+            </div>
+          )}
           {svc.id === "local" && svc.model === "kokoro" && (
             <div className="model-chips">
               {svc.voices.map((v) => (
@@ -137,17 +147,6 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
             </div>
           )}
         </>
-      ) : svc.id === "system" ? (
-        <div className="model-chips">
-          <button className={`chip sm ${!svc.voice ? "on" : ""}`} onClick={() => setVoice("")}>
-            {t("系统默认")}
-          </button>
-          {popSysVoices.map((v) => (
-            <button key={v.id} className={`chip sm ${svc.voice === v.id ? "on" : ""}`} onClick={() => setVoice(v.id)}>
-              {v.name}
-            </button>
-          ))}
-        </div>
       ) : svc.voices.length > 0 ? (
         <div className="model-chips">
           {svc.voices.map((v) => (
