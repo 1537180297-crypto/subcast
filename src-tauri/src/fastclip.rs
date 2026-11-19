@@ -224,7 +224,7 @@ pub async fn fetch_section(
         crate::videoclip::encode_exact(ffmpeg, &vp, start - v0, &ap, start - a0, end - start, dest, &cancel).await
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
-    if res.is_err() {
+    if res.is_err() && !cancel.load(Ordering::Relaxed) {
         // A stale address (or any odd failure) shouldn't stick: the next try resolves afresh.
         asr::streams::forget(&format!("{video_id}|dash1080"));
     }

@@ -61,7 +61,7 @@ export function fromOldLayout(l: ClipLayout | undefined): { aspect: ClipAspect; 
 }
 
 /** Canvas size and picture box for an aspect, a fit and the source's size. */
-export function clipGeometry(aspect: ClipAspect, fit: ClipFit, srcW = 1920, srcH = 1080, cardCrop: CardCrop = "none"): ClipGeometry {
+export function clipGeometry(aspect: ClipAspect, fit: ClipFit, srcW = 1920, srcH = 1080, cardCrop: CardCrop = "none", subsBelow = true): ClipGeometry {
   const sw = srcW > 0 ? srcW : 1920, sh = srcH > 0 ? srcH : 1080;
   let W: number, H: number;
   if (aspect === "source") {
@@ -78,9 +78,10 @@ export function clipGeometry(aspect: ClipAspect, fit: ClipFit, srcW = 1920, srcH
   let vw = W, vh = even(W / ratio);
   const maxH = H * (vertical ? 0.62 : 0.72);
   if (vh > maxH) { vh = even(maxH); vw = even(vh * ratio); }
-  // A little more room above (the title) than below (the subtitles).
+  // Room above for the title and below for subtitles; with no subtitles of ours, title and picture are
+  // centred together instead of leaving an empty band at the bottom.
   const free = H - vh;
-  const y = even(free * (vertical ? 0.5 : 0.56));
+  const y = even(free * (subsBelow ? (vertical ? 0.5 : 0.56) : vertical ? 0.62 : 0.66));
   return { W, H, fit: "card", video: { x: even((W - vw) / 2), y, w: vw, h: vh }, vertical, cropBox };
 }
 

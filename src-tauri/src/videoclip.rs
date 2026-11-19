@@ -1366,6 +1366,24 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
 #[cfg(test)]
 mod render_live {
     use super::*;
+    /// Montage from two stretches inside the cached clip (run with --ignored; no network: both come from the cache).
+    #[tokio::test]
+    #[ignore]
+    async fn montage_from_cache() {
+        let data = dirs::data_dir().unwrap().join("ai.qiaomu.subcast");
+        let t = std::time::Instant::now();
+        let p = prepare_montage(&data, "xgAJkGC89rM", &[(545.0, 560.0), (600.0, 615.0)], Arc::new(AtomicBool::new(false)), |s, p, m| eprintln!("{s} {p:.2} {m}")).await.unwrap();
+        eprintln!("montage took {:?}: {}x{} {:.2}s burned={} frames={}", t.elapsed(), p.width, p.height, p.duration, p.has_burned_subtitles, p.frames.len());
+        assert!((p.duration - 30.0).abs() < 0.3, "{}", p.duration);
+        assert_eq!((p.width, p.height), (1920, 1080));
+        // The second part starts at 15 s: its first frame is the source at 600 s.
+        let ff = find_ffmpeg(&data).unwrap();
+        let src = data.join("work/clips/xgAJkGC89rM/541390-646520.mp4");
+        for (file, at, name) in [(p.path.clone(), 15.2, "m15"), (src.to_string_lossy().into_owned(), 600.0 - 541.39 + 0.2, "s600")] {
+            std::process::Command::new(&ff).args(["-v", "error", "-y", "-ss", &format!("{at:.2}"), "-i", &file, "-frames:v", "1", "-vf", "scale=320:-1", &format!("/tmp/claude-501/{name}.png")]).status().unwrap();
+        }
+    }
+
     /// Real render of the cached 105 s clip (run with --ignored): 9:16 card cropped to 4:3, blurred background,
     /// a static layer and 20 subtitle bands. Prints the time and checks the output's size and length.
     #[tokio::test]

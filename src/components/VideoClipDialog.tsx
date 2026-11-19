@@ -248,7 +248,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const addSubs = addSubsPick ?? !(prepared?.hasBurnedSubtitles && fit === "card");
   // Short subtitle lines: split here at once, then the model's punctuated breaks replace them when they arrive.
   // The picture's size is known once the stretch is fetched; YouTube is 16:9 until then.
-  const geo = useMemo(() => clipGeometry(aspect, fit, prepared?.width || 1920, prepared?.height || 1080, cardCrop), [aspect, fit, cardCrop, prepared?.width, prepared?.height]);
+  const geo = useMemo(() => clipGeometry(aspect, fit, prepared?.width || 1920, prepared?.height || 1080, cardCrop, addSubs), [aspect, fit, cardCrop, prepared?.width, prepared?.height, addSubs]);
   useEffect(() => {
     const src = prepared?.frames[prepared.bestFrame];
     if (!src || cropTouched.current) return;
@@ -528,12 +528,13 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     const jobId = `vclip-render-${Date.now()}`;
     setBusyJob({ id: jobId, stage: "render", progress: 0.05, message: t("正在生成封面与双语字幕图层…") });
     try {
-      const staticCanvas = renderStaticOverlay({ ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop) });
+      const subsOn = addSubsPick ?? !(prep.hasBurnedSubtitles && fit === "card");
+      const staticCanvas = renderStaticOverlay({ ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop, subsOn) });
       const staticOverlayPng = staticCanvas ? canvasToPngBase64(staticCanvas) : null;
       // Decided again from what preparing found: an export started before any preview still skips doubled subtitles.
-      const exportCues = (addSubsPick ?? !(prep.hasBurnedSubtitles && fit === "card")) ? (cues.length ? cues : buildAllCues()) : [];
+      const exportCues = subsOn ? (cues.length ? cues : buildAllCues()) : [];
       // The fetched picture's real size decides the layout (an export can start before any preview).
-      const exportConfig: ClipVisualConfig = { ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop) };
+      const exportConfig: ClipVisualConfig = { ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop, subsOn) };
       const eg = exportConfig.geo;
       const renderedCues = exportCues.map((cue) => {
         const band = renderCueBand(cue, exportConfig);
