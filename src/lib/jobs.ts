@@ -5,6 +5,7 @@ import { api, rawErrorText, type AsrEvent, type Episode, type Provider, type Seg
 import { batches, batchShape, makeEpisodeContext, translateBatch, type Batch, type EpisodeContext } from "./ai";
 import { isChinese } from "./format";
 import { providerFor, useStore } from "../store";
+import { refreshSaved } from "./offline";
 
 // Messages and errors are kept as the backend wrote them (so they can be matched) and translated with tr() where shown.
 export interface AsrJob { stage: "download" | "transcribe" | "done" | "error"; progress: number; message?: string; live: Segment[] }
@@ -75,6 +76,8 @@ export async function generateTranscript(ep: Episode, model: string, language: s
     patch("transcripts", ep.id, t);
     patch("translations", ep.id, { items: [], running: false, failed: 0 });
     void useStore.getState().reloadShows();
+    // The audio it was made from is kept to play from (its times fit it exactly).
+    void refreshSaved();
   } catch (e) {
     const job = useJobs.getState().asr[ep.id];
     patch("asr", ep.id, { ...(job ?? { live: [], progress: 0 }), stage: "error", message: rawErrorText(e) });

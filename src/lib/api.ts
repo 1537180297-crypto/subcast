@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
+import type { Aligned, TimeMap } from "./timemap";
 
 /** A match inside one show: which part of the episode matched, a few words around it, and for subtitles the time. */
 /** One day-hour of listening to one episode (from the player; seeks don't count). */
@@ -122,7 +123,11 @@ export const api = {
   listDownloads: () => invoke<Saved[]>("list_downloads"),
   deleteDownload: (episodeId: string) => invoke<void>("delete_download", { episodeId }),
   clearDownloads: () => invoke<void>("clear_downloads"),
-  storageInfo: () => invoke<{ downloads: number; models: number; library: number; temp: number }>("storage_info"),
+  storageInfo: () => invoke<{ downloads: number; models: number; library: number; temp: number; audioCache: number }>("storage_info"),
+  alignAudio: (episodeId: string, force: boolean, model?: string) => invoke<Aligned>("align_audio", { episodeId, force, model }),
+  saveTimeMap: (episodeId: string, map: TimeMap) => invoke<void>("save_time_map", { episodeId, map }),
+  listAudioCache: () => invoke<Saved[]>("list_audio_cache"),
+  clearAudioCache: () => invoke<void>("clear_audio_cache"),
   openDataFolder: (kind: "downloads" | "models" | "data") => invoke<void>("open_data_folder", { kind }),
   revealDownload: (episodeId: string) => invoke<void>("reveal_download", { episodeId }),
   clearTemp: () => invoke<void>("clear_temp"),

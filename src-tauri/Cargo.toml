@@ -44,6 +44,7 @@ dirs = "5"
 flate2 = "1"
 tar = "0.4"
 base64 = "0.22"
+rusty-chromaprint = "0.3"
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-process = "2"

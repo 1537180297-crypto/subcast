@@ -864,6 +864,17 @@ fn emit(v: serde_json::Value) {
 
 /// Decodes any mp3/m4a/aac/wav/flac/ogg file to 16 kHz mono f32, the input whisper.cpp wants.
 pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
+    // Mixed down and resampled packet by packet: only the 16 kHz result is kept.
+    let mut resampler: Option<Resampler> = None;
+    decode_mono(path, |rate, samples| {
+        let r = resampler.get_or_insert_with(|| Resampler::new(rate, 16000));
+        for &x in samples { r.push(x); }
+    })?;
+    Ok(resampler.map(Resampler::finish).unwrap_or_default())
+}
+
+/// Decodes an audio file and hands it to `f` packet by packet, mixed down to mono at the file's own sample rate.
+pub fn decode_mono(path: &Path, mut f: impl FnMut(u32, &[f32])) -> Result<()> {
     use symphonia::core::{audio::SampleBuffer, codecs::DecoderOptions, errors::Error, formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint};
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -874,9 +885,8 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
     let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL).ok_or_else(|| anyhow!("没有音轨"))?;
     let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|e| anyhow!("不支持的音频编码：{e}"))?;
-    // Mixed down and resampled packet by packet: only the 16 kHz result is kept.
-    let mut resampler: Option<Resampler> = None;
     let mut buf: Option<SampleBuffer<f32>> = None;
+    let mut mono: Vec<f32> = Vec::new();
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
@@ -891,18 +901,17 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
             Err(e) => return Err(anyhow!("解码失败：{e}")),
         };
         let spec = *decoded.spec();
-        let r = resampler.get_or_insert_with(|| Resampler::new(spec.rate, 16000));
         let channels = spec.channels.count().max(1);
         if buf.as_ref().is_none_or(|b| b.capacity() < decoded.capacity() * channels) {
             buf = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
         }
         let b = buf.as_mut().unwrap();
         b.copy_interleaved_ref(decoded);
-        for frame in b.samples().chunks(channels) {
-            r.push(frame.iter().sum::<f32>() / channels as f32);
-        }
+        mono.clear();
+        mono.extend(b.samples().chunks(channels).map(|frame| frame.iter().sum::<f32>() / channels as f32));
+        f(spec.rate, &mono);
     }
-    Ok(resampler.map(Resampler::finish).unwrap_or_default())
+    Ok(())
 }
 
 /// Box-filtered linear resampling of a whole buffer (tests compare `Resampler` against it).

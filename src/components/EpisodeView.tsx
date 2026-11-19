@@ -89,7 +89,15 @@ function AudioSubtitles({ ep }: { ep: Episode }) {
   const items = useJobs((s) => s.translations[ep.id]?.items);
   const time = useStore((s) => s.time);
   const mode = useStore((s) => s.settings.subtitleMode);
+  // Something only this audio has (an ad, most likely): say so instead of holding a line that isn't being said.
+  const gapLeft = useStore((s) => (s.current?.id === ep.id && s.gapEnd && s.rawTime != null ? Math.ceil(s.gapEnd - s.rawTime) : 0));
   if (!transcript) return null;
+  if (gapLeft > 0) return (
+    <div className="asub asub-gap" aria-live="off">
+      <p>{t("这一段只在你的音频里，多半是广告，{n} 秒后回到正文", { n: gapLeft })}</p>
+      <button className="btn ghost sm" onClick={() => { const s = useStore.getState(); if (s.gapEnd) s.player?.seekRaw?.(s.gapEnd); }}>{t("跳过")}</button>
+    </div>
+  );
   const segs = transcript.segments;
   const i = Math.max(0, activeIndex(segs, time));
   const seg = segs[i];

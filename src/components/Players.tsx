@@ -12,7 +12,10 @@ import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
 import { offerPlayer, useStore, withdrawPlayer } from "../store";
 import { IS_MAC, t, tr } from "../lib/i18n";
-import { audioSrc, useOffline } from "../lib/offline";
+import { audioSrc, noteCached, useOffline } from "../lib/offline";
+import { alignCurrent, toContent, toPlay } from "../lib/timemap";
+import { useJobs } from "../lib/jobs";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { playNext } from "../lib/library";
 
 const SAVE_EVERY = 10;
@@ -68,12 +71,19 @@ export function noteListening(ep: Episode, playing: boolean) {
   if (heard.secs >= 20 || (!playing && heard.secs > 0)) flushHeard();
 }
 
-function track(ep: Episode, time: number, length?: number) {
+/** The current episode's time map, when its subtitles were made from another cut of the audio. */
+const mapOf = (id: string) => { const a = useStore.getState().align; return a?.id === id ? a.map : null; };
+
+/** `raw` is the audio element's clock; the store keeps subtitle time (src/lib/timemap.ts). Returns where the stretch
+ *  only this audio has ends, while inside one. */
+function track(ep: Episode, raw: number, length?: number): number | undefined {
   const s = useStore.getState();
   if (s.current?.id !== ep.id) return;
   noteListening(ep, s.playing);
-  s.set({ time, ...(length ? { length } : {}) });
+  const { at: time, gapEnd } = toContent(mapOf(ep.id), raw);
+  s.set({ time, rawTime: raw, gapEnd: gapEnd ?? null, ...(length ? { length } : {}) });
   if (Math.abs(time - lastSaved) > SAVE_EVERY) { lastSaved = time; void api.setProgress(ep.id, time); }
+  return gapEnd;
 }
 
 /** The audio element lives at the app root so playback continues while browsing. */
@@ -82,19 +92,37 @@ export function AudioEngine() {
   const rate = useStore((s) => s.settings.playbackRate);
   const ref = useRef<HTMLAudioElement>(null);
   const audio = current && !current.videoId ? current : null;
-  const saved = useOffline((s) => (audio ? s.saved[audio.id]?.path : undefined));
+  const saved = useOffline((s) => (audio ? (s.saved[audio.id] ?? s.cached[audio.id])?.path : undefined));
   // The address is fixed per episode so a download finishing mid-episode does not cut in; it takes over at the next pause.
   const [chosen, setChosen] = useState<{ id: string; src?: string } | null>(null);
   const src = audio ? (chosen?.id === audio.id ? chosen.src : audioSrc(audio)) : undefined;
   const setSrc = (s?: string) => audio && setChosen({ id: audio.id, src: s });
   useEffect(() => { if (audio && chosen?.id !== audio.id) setSrc(src); }, [audio?.id]);
   useEffect(() => { if (audio && saved && ref.current?.paused !== false) setSrc(audioSrc(audio)); }, [saved]);
+  // Subtitles made from another cut of the episode (other ads, a re-edit): line them up with what plays.
+  const hasSubtitles = useJobs((s) => !!(audio && s.transcripts[audio.id]?.segments.length));
+  useEffect(() => { if (audio && hasSubtitles) void alignCurrent(); }, [audio?.id, hasSubtitles]);
+  // The map fits a downloaded copy: play that one now, from the same line.
+  const alignPath = useStore((s) => (audio && s.align?.id === audio.id ? s.align.path : null));
+  const resume = useRef(false);
+  /** Subtitle time to carry over to the new file (its first time updates say 0 before it has loaded). */
+  const carry = useRef<number | null>(null);
+  useEffect(() => {
+    if (!audio || !alignPath) return;
+    const file = convertFileSrc(alignPath);
+    if (file === src) return;
+    if (!useOffline.getState().saved[audio.id]) noteCached(audio.id, alignPath, useStore.getState().align?.localBytes ?? 0);
+    resume.current = !!ref.current && !ref.current.paused;
+    carry.current = useStore.getState().time;
+    setSrc(file);
+  }, [alignPath]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el || !audio) return;
     const handle = {
-      seek: (t: number) => { el.currentTime = t; el.play().catch(() => {}); },
+      seek: (t: number) => { el.currentTime = toPlay(mapOf(audio.id), t); el.play().catch(() => {}); },
+      seekRaw: (t: number) => { el.currentTime = t; el.play().catch(() => {}); },
       toggle: () => (el.paused ? void el.play().catch(() => {}) : el.pause()),
       play: () => void el.play().catch(() => {}),
       setRate: (r: number) => { el.playbackRate = r; },
@@ -118,21 +146,30 @@ export function AudioEngine() {
         const el = e.currentTarget;
         el.playbackRate = rate;
         const s = useStore.getState();
-        const start = s.current?.id === audio.id ? s.time : audio.progress;
+        const start = toPlay(mapOf(audio.id), carry.current ?? (s.current?.id === audio.id ? s.time : audio.progress));
+        carry.current = null;
         if (start > 5 && start < el.duration - 10) el.currentTime = start;
         track(audio, el.currentTime, el.duration);
+        if (resume.current) { resume.current = false; el.play().catch(() => {}); }
       }}
-      onTimeUpdate={(e) => track(audio, e.currentTarget.currentTime)}
+      onTimeUpdate={(e) => {
+        const el = e.currentTarget;
+        // A new address has nothing loaded yet: its 0 is not where we are.
+        if (el.readyState === 0 || carry.current != null) return;
+        const gapEnd = track(audio, el.currentTime);
+        if (gapEnd && useStore.getState().settings.skipAds && !el.paused) el.currentTime = gapEnd;
+      }}
       onPlay={() => { useStore.getState().set({ playing: true }); if (ref.current && ref.current.readyState < 3) waiting(true); }}
       onWaiting={() => waiting(true)}
       onPlaying={() => waiting(false)}
       onPause={(e) => {
         waiting(false);
         useStore.getState().set({ playing: false });
-        void api.setProgress(audio.id, e.currentTarget.currentTime);
+        // Progress is kept in subtitle time, like everything outside the player.
+        void api.setProgress(audio.id, toContent(mapOf(audio.id), e.currentTarget.currentTime).at);
         if (saved && src !== audioSrc(audio)) setSrc(audioSrc(audio));
       }}
-      onEnded={(e) => { void api.setProgress(audio.id, e.currentTarget.duration || e.currentTarget.currentTime); playNext(); }}
+      onEnded={(e) => { void api.setProgress(audio.id, toContent(mapOf(audio.id), e.currentTarget.duration || e.currentTarget.currentTime).at); playNext(); }}
       onError={() => { waiting(false); useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效")); }}
     />
   );
@@ -454,18 +491,21 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
 
 export function Controls({ compact = false }: { compact?: boolean }) {
   // Whole seconds: the clock and bar move once a second instead of re-rendering on every time update.
-  const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: Math.floor(s.time), length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
+  // The bar and clock follow the player's own clock (`rawTime`), which can differ from subtitle time.
+  const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: Math.floor(s.rawTime ?? s.time), length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
+  const sub = () => useStore.getState().time;
+  const seekBar = (at: number) => (player?.seekRaw ? player.seekRaw(at) : player?.seek(at));
   const [drag, setDrag] = useState<number | null>(null);
 
   const shown = drag ?? time;
   const nextRate = cycleRate;
   return (
     <div className={`controls ${compact ? "compact" : ""}`}>
-      <button className="icon-btn" title={t("后退 {n} 秒（←）", { n: settings.skipBack ?? 15 })} onClick={() => player?.seek(Math.max(0, time - (settings.skipBack ?? 15)))} disabled={!player}><RotateCcw size={18} /></button>
+      <button className="icon-btn" title={t("后退 {n} 秒（←）", { n: settings.skipBack ?? 15 })} onClick={() => player?.seek(Math.max(0, sub() - (settings.skipBack ?? 15)))} disabled={!player}><RotateCcw size={18} /></button>
       <button className={`play-btn ${loadingSince ? "loading" : ""}`} title={loadingSince ? t("正在加载…") : playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loadingSince}>
         {loadingSince ? <Loader2 size={20} className="spin" /> : playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
-      <button className="icon-btn" title={t("前进 {n} 秒（→）", { n: settings.skipForward ?? 30 })} onClick={() => player?.seek(time + (settings.skipForward ?? 30))} disabled={!player}><RotateCw size={18} /></button>
+      <button className="icon-btn" title={t("前进 {n} 秒（→）", { n: settings.skipForward ?? 30 })} onClick={() => player?.seek(sub() + (settings.skipForward ?? 30))} disabled={!player}><RotateCw size={18} /></button>
       <span className="time">{clock(shown)}</span>
       <input
         className="seek"
@@ -475,8 +515,8 @@ export function Controls({ compact = false }: { compact?: boolean }) {
         step={1}
         value={Math.min(shown, length || shown)}
         onChange={(e) => setDrag(Number(e.target.value))}
-        onPointerUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
-        onKeyUp={() => { if (drag != null) { player?.seek(drag); setDrag(null); } }}
+        onPointerUp={() => { if (drag != null) { seekBar(drag); setDrag(null); } }}
+        onKeyUp={() => { if (drag != null) { seekBar(drag); setDrag(null); } }}
         style={{ "--fill": `${length ? (shown / length) * 100 : 0}%` } as React.CSSProperties}
         aria-label={t("播放进度")}
       />

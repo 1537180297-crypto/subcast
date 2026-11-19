@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, type Episode, type Show } from "./lib/api";
 import { DEFAULTS, loadSettings, type Settings } from "./lib/settings";
 import { setLang, t } from "./lib/i18n";
+import type { Aligned, AlignStatus } from "./lib/timemap";
 
 export type View =
   | { kind: "latest" }
@@ -16,7 +17,10 @@ export type View =
   | { kind: "settings" };
 
 export interface PlayerHandle {
+  /** To a subtitle time. */
   seek(seconds: number): void;
+  /** To a time on the player's own clock (the progress bar), when it differs from subtitle time. */
+  seekRaw?(seconds: number): void;
   toggle(): void;
   play(): void;
   setRate(rate: number): void;
@@ -38,6 +42,13 @@ interface State {
   /** The episode loaded in the player (may differ from the one being viewed). */
   current: Episode | null;
   time: number;
+  /** The audio element's own clock; differs from `time` (subtitle time) when the subtitles were made from another
+   *  cut of the episode (src/lib/timemap.ts). */
+  rawTime?: number;
+  /** How the current episode's subtitles line up with its audio. */
+  align?: (Omit<Aligned, "status"> & { id: string; status: AlignStatus | "working" }) | null;
+  /** Playing something only this audio file has (an ad, most likely) until this time on its clock. */
+  gapEnd?: number | null;
   length: number;
   playing: boolean;
   player: PlayerHandle | null;
@@ -149,7 +160,7 @@ export const useStore = create<State>((set, get) => ({
   },
   load(ep) {
     // Keep a player that already belongs to this episode (a video ready before "play" was pressed).
-    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : standby.get(ep.id) ?? null }); }
+    if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, rawTime: undefined, align: null, gapEnd: null, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : standby.get(ep.id) ?? null }); }
   },
   notify(text) {
     set({ toast: text });
