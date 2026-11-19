@@ -99,11 +99,17 @@ export const pickSub = (p: Pick) => (isChineseUi() && p.zh !== p.title ? p.title
 const norm = (u: string) => u.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
 export const sameFeed = (a: string, b: string) => norm(a) === norm(b);
 
-/** Whether the user already follows a pick. 精读 channels match only their own site, so subscribing to a show's
- *  original feed doesn't hide its 精读 channel. */
+/** The library show that counts as following this pick, if any. 精读 channels match only their own site, so
+ *  subscribing to a show's original feed doesn't hide its 精读 channel. Other picks also match by title, because
+ *  subscribing a YouTube channel stores the Atom feed, not the @handle the card was opened with. */
+export function subscribedShow<T extends { feedUrl: string; title: string }>(p: Pick, shows: T[]): T | undefined {
+  if (p.deep) return shows.find((s) => sameFeed(s.feedUrl, p.input));
+  return shows.find((s) => sameFeed(s.feedUrl, p.input) || s.title === p.title || shortName(s.title) === shortName(p.title) || (!!p.channel && s.title === p.channel));
+}
+
+/** Whether the user already follows a pick. */
 export function isSubscribed(p: Pick, shows: { feedUrl: string; title: string }[]): boolean {
-  if (p.deep) return shows.some((s) => sameFeed(s.feedUrl, p.input));
-  return shows.some((s) => sameFeed(s.feedUrl, p.input) || s.title === p.title || shortName(s.title) === shortName(p.title) || (!!p.channel && s.title === p.channel));
+  return subscribedShow(p, shows) != null;
 }
 
 /** The 精读 channel for a show the user follows through its original feed (e.g. No Priors on Megaphone). */
