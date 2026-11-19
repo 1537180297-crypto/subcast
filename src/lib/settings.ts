@@ -86,6 +86,8 @@ export interface Settings {
   uiLang: LangSetting;
   /** Show the "subscribe on YouTube" links for shows that have an official channel. */
   youtubePromo: boolean;
+  /** Show subscribed shows under their Chinese names (curated or machine-translated) in a Chinese interface. */
+  translateShowNames: boolean;
   /** Download new versions in the background; they install on the next restart. */
   autoUpdate: boolean;
   /** The Discover banner for our own show was closed by the user. */
@@ -135,7 +137,7 @@ export const BUILTIN_PROMPTS: QuickPrompt[] = ([
 
 export const PROMPT_HINTS = [tk("先给结论，再展开"), tk("简洁，不说套话"), tk("多用列表和表格"), tk("术语保留英文原文"), tk("讲给外行听，多打比方")];
 
-export const quickPrompts = (s: Settings) => s.quickPrompts ?? BUILTIN_PROMPTS.map((p) => ({ ...p, title: t(p.title), body: t(p.body) }));
+export const quickPrompts = (s: Pick<Settings, "quickPrompts">) => s.quickPrompts ?? BUILTIN_PROMPTS.map((p) => ({ ...p, title: t(p.title), body: t(p.body) }));
 
 // The model catalogue, ported from Capwise. Model names are suggestions; every field stays editable because providers
 // rename models often, and 「获取模型列表」 reads the live list from the provider.
@@ -412,6 +414,7 @@ export const DEFAULTS: Settings = {
   quickPrompts: null,
   uiLang: "auto",
   youtubePromo: true,
+  translateShowNames: true,
   autoUpdate: true,
   homeBannerHidden: false,
   sideCurated: true,

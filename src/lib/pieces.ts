@@ -2,7 +2,24 @@
 
 /** Splits a subtitle block into reading-sized pieces: at the end of each sentence, at a comma once a piece is
  *  long enough, and between words only when a sentence runs on too long. */
+const PIECES_CACHE_MAX = 300;
+const piecesCache = new Map<string, string[]>();
+
+/** Splits a subtitle block into reading-sized pieces (cached: subtitles ask for the same block many times a second). */
 export function pieces(text: string, cjk: boolean): string[] {
+  const key = `${cjk ? 1 : 0}|${text}`;
+  const cached = piecesCache.get(key);
+  if (cached) { piecesCache.delete(key); piecesCache.set(key, cached); return cached; }
+  const res = split(text, cjk);
+  piecesCache.set(key, res);
+  if (piecesCache.size > PIECES_CACHE_MAX) {
+    const oldest = piecesCache.keys().next().value;
+    if (oldest !== undefined) piecesCache.delete(oldest);
+  }
+  return res;
+}
+
+function split(text: string, cjk: boolean): string[] {
   const soft = cjk ? 14 : 38, hard = cjk ? 30 : 80;
   // A "." inside a number ("1.5") doesn't end anything.
   const units = cjk ? text.split(/(?<=[，。！？；：、,!?;]|\.(?!\d))/) : text.split(/(?<=\s)/);

@@ -8,7 +8,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type Provider } from "../lib/api";
 import { AGENTS, agentOf, agentProvider, agentProviderId, detectAgents, useAgents, type AgentKind, type FoundAgent } from "../lib/agents";
 import { GROUPS } from "../lib/settings";
-import { DefaultButton } from "./SettingsDialog";
+import { DefaultButton } from "./KeyField";
 import { Seg } from "./ReadingSettings";
 import { providerIcon } from "../lib/providerIcons";
 import { useStore } from "../store";

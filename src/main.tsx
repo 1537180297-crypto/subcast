@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles.css";
+import "./polish.css";
 import { IS_MAC } from "./lib/i18n";
 
 // Only macOS draws its window buttons inside the page (overlay title bar); Windows and Linux have a native title bar.

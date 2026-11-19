@@ -1,12 +1,12 @@
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useRef, useState } from "react";
-import { BookMarked, ChevronLeft, CircleArrowUp, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn, ListChecks } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BookMarked, ChevronLeft, ChevronRight, CircleArrowUp, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, RotateCcw, RotateCw, Search, Settings as Cog, X, ChartColumn, ListChecks } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
-import { ImportPanel } from "./ImportPanel";
 import { useStore, type View } from "../store";
 import { installUpdate, useUpdate } from "../lib/updater";
-import { PICKS, deepPickFor, isSubscribed, pickName, showName } from "../lib/picks";
+import { PICKS, deepPickFor, isSubscribed, pickName, sameFeed, showName } from "../lib/picks";
 import { isChineseUi, kbd, t, tk, tr, tx, useLang } from "../lib/i18n";
+import { clock } from "../lib/format";
 import { useShowName } from "../lib/zh";
 import { useJobs } from "../lib/jobs";
 import { BiTitle, ZhText } from "./Bi";
@@ -15,7 +15,7 @@ import { useOffline } from "../lib/offline";
 import logoUrl from "../assets/logo.png";
 import { showIcon } from "./Lists";
 import { EqBars, SearchArt, useKonami, useTaps } from "./Illustrations";
-import { useDueCount } from "./Learn";
+import { useDueCount } from "../lib/words";
 
 export function Sidebar() {
   const { shows, view, go, set } = useStore(useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })));
@@ -27,7 +27,10 @@ export function Sidebar() {
   const is = (v: View) => view.kind === v.kind && (v.kind !== "show" || (view.kind === "show" && view.id === v.id)) && (v.kind !== "channel" || (view.kind === "channel" && view.input === v.input));
   // A 精读 channel is listed once: hidden here when its show is already followed (either version).
   const showCurated = useStore((s) => s.settings.sideCurated);
-  const curated = !showCurated ? [] : PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id));
+  const curated = useMemo(
+    () => (!showCurated ? [] : PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id))),
+    [showCurated, shows],
+  );
   const { sideOpen, put: putLayout } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put })));
   const update = useUpdate(useShallow((s) => ({ phase: s.phase, version: s.version, progress: s.progress, quiet: s.quiet })));
   const rail = !sideOpen;
@@ -93,60 +96,101 @@ export function Sidebar() {
 
 const PLACEHOLDERS = [tk("粘贴 YouTube / 小宇宙 / 播客链接，或搜索节目名"), tk("试试搜 Lex Fridman"), tk("粘贴一个 YouTube 视频链接，直接看双语字幕")];
 const placeholder = PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)];
-const looksLikeLink = (t: string) => /^(https?:\/\/|@)|youtube\.com|youtu\.be|xiaoyuzhoufm\.com|feed\.xyzfm\.space|podcasts\.apple\.com|\.(xml|rss)\b/i.test(t.trim());
+export const looksLikeLink = (t: string) => /^(https?:\/\/|@)|youtube\.com|youtu\.be|xiaoyuzhoufm\.com|feed\.xyzfm\.space|podcasts\.apple\.com|\.(xml|rss)\b/i.test(t.trim());
 
-/** The bar above every page: back, one search box that subscribes to pasted links or searches by name, settings. */
+/** One search hit: the row opens the show's page (latest episodes, subscribe there); the button subscribes at once. */
+export function SearchRow({ r, done, adding, onOpen, onSubscribe, active, onHover }: { r: SearchResult; done: boolean; adding: string | null; onOpen: () => void; onSubscribe: () => void; active?: boolean; onHover?: () => void }) {
+  return (
+    <div className={`drop-row clickable ${active ? "is-active" : ""}`} role="button" tabIndex={0} onMouseEnter={onHover} onMouseDown={(e) => e.preventDefault()} onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}>
+      {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
+      <div className="drop-meta">
+        <BiTitle text={r.title} className="ep-name" subClassName="clamp1" />
+        <p className="meta-line clamp1">{r.source === "youtube" && <span className="src-badge">YouTube</span>}{r.source === "youtube" && r.author === "YouTube" ? null : r.author}</p>
+      </div>
+      {done ? <span className="sub-done">{t("已订阅")}</span> : <button type="button" className="btn sm" onClick={(e) => { e.stopPropagation(); onSubscribe(); }} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}</button>}
+    </div>
+  );
+}
+
+/** The bar above every page: back/forward history, search box that subscribes to pasted links or searches by name. */
 export function TopBar() {
-  const { history, back, reloadShows, go, openEpisode, notify, shows } = useStore(useShallow((s) => ({ history: s.history, back: s.back, reloadShows: s.reloadShows, go: s.go, openEpisode: s.openEpisode, notify: s.notify, shows: s.shows })));
+  const { history, future, back, forward, reloadShows, go, openEpisode, notify, shows } = useStore(useShallow((s) => ({
+    history: s.history,
+    future: s.future,
+    back: s.back,
+    forward: s.forward,
+    reloadShows: s.reloadShows,
+    go: s.go,
+    openEpisode: s.openEpisode,
+    notify: s.notify,
+    shows: s.shows,
+  })));
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [adding, setAdding] = useState<string | null>(null);
+  const [activeIdx, setActiveIdx] = useState(-1);
   const timer = useRef<number | undefined>(undefined);
+  const dropRef = useRef<HTMLDivElement>(null);
   const link = looksLikeLink(q);
   useEffect(() => {
     window.clearTimeout(timer.current);
+    setActiveIdx(-1);
     if (!q.trim() || link) { setResults(null); return; }
     timer.current = window.setTimeout(async () => {
       setBusy(true);
       try { setResults((await api.searchPodcasts(q.trim(), /[\u4e00-\u9fff]/.test(q) ? "CN" : "US")).slice(0, 8)); } catch { setResults([]); } finally { setBusy(false); }
     }, 300);
-  }, [q]);
+  }, [q, link]);
+  useEffect(() => {
+    if (activeIdx >= 0) dropRef.current?.querySelector(".drop-row.is-active")?.scrollIntoView({ block: "nearest" });
+  }, [activeIdx]);
   const subscribe = async (input: string) => {
     setAdding(input);
     try {
       const r = await api.addSubscription(input);
-      setQ(""); setOpen(false); setResults(null);
+      setQ(""); setOpen(false); setResults(null); setActiveIdx(-1);
       if (r.show) { await reloadShows(); notify(t("已订阅「{name}」", { name: r.show.title })); go({ kind: "show", id: r.show.id }); }
       else if (r.episode) openEpisode(r.episode);
     } catch (e) { notify(errorText(e)); } finally { setAdding(null); }
   };
-  const submit = () => { if (link) void subscribe(q.trim()); else if (results?.[0]) void subscribe(results[0].feedUrl); };
+  const openShow = (input: string) => {
+    setQ(""); setOpen(false); setResults(null); setActiveIdx(-1);
+    const existing = shows.find((s) => sameFeed(s.feedUrl, input));
+    go(existing ? { kind: "show", id: existing.id } : { kind: "channel", input });
+  };
+  // Enter opens the highlighted (or first) result's page; a pasted link is subscribed at once.
+  const submit = () => {
+    if (link) { void subscribe(q.trim()); return; }
+    const pick = results?.[activeIdx >= 0 ? activeIdx : 0];
+    if (pick) openShow(pick.feedUrl);
+  };
   return (
     <div className="topbar" data-tauri-drag-region>
-      <button className="round-btn" onClick={back} disabled={!history.length} aria-label={t("返回")}><ChevronLeft size={18} /></button>
+      <div className="nav-history">
+        <button className="round-btn" onClick={back} disabled={!history.length} title={t("返回（⌘[）")} aria-label={t("返回")}><ChevronLeft size={17} /></button>
+        <button className="round-btn" onClick={forward} disabled={!future.length} title={t("前进（⌘]）")} aria-label={t("前进")}><ChevronRight size={17} /></button>
+      </div>
       <div className="search-wrap">
         <div className={`top-search ${open ? "focus" : ""}`}>
           {link ? <Link2 size={16} /> : <Search size={16} />}
           <input value={q} placeholder={t(placeholder)} spellCheck={false} autoCapitalize="off" autoCorrect="off"
             onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
             onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
-          {busy || adding ? <Loader2 size={14} className="spin" /> : link ? <span className="kbd-hint">{t("回车订阅")}</span> : !open && !q && <kbd className="kbd-hint" title={t("按 ⌘L 搜索")}>{kbd("⌘L")}</kbd>}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown" && open && results?.length) { e.preventDefault(); setActiveIdx((i) => (i + 1) % results.length); return; }
+              if (e.key === "ArrowUp" && open && results?.length) { e.preventDefault(); setActiveIdx((i) => (i <= 0 ? results.length - 1 : i - 1)); return; }
+              if (e.key === "Enter") submit();
+              if (e.key === "Escape") { setQ(""); setResults(null); setActiveIdx(-1); (e.target as HTMLInputElement).blur(); }
+            }} />
+          {busy || adding ? <Loader2 size={14} className="spin" /> : link ? <span className="kbd-hint">{t("回车订阅")}</span> : q ? <button type="button" className="icon-btn sm search-clear" title={t("清除")} aria-label={t("清除")} onMouseDown={(e) => e.preventDefault()} onClick={() => { setQ(""); setResults(null); setActiveIdx(-1); }}><X size={13} /></button> : !open && <kbd className="kbd-hint" title={t("按 ⌘L 搜索")}>{kbd("⌘L")}</kbd>}
         </div>
         {open && results && (
-          <div className="search-drop">
-            {results.length === 0 ? <div className="drop-empty"><SearchArt /><p className="muted small">{t("没有找到，换个关键词试试")}</p></div> : results.map((r) => {
-              const done = shows.some((s) => s.feedUrl === r.feedUrl);
-              return (
-                <div key={r.feedUrl} className="drop-row" onMouseDown={(e) => e.preventDefault()}>
-                  {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
-                  <div className="drop-meta"><BiTitle text={r.title} className="ep-name" subClassName="clamp1" /><p className="meta-line clamp1">{r.author}</p></div>
-                  {done ? <span className="sub-done">{t("已订阅")}</span> : <button className="btn sm" onClick={() => subscribe(r.feedUrl)} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}</button>}
-                </div>
-              );
-            })}
+          <div className="search-drop" ref={dropRef}>
+            {results.length === 0 ? <div className="drop-empty"><SearchArt /><p className="muted small">{t("没有找到，换个关键词试试")}</p></div> : results.map((r, i) => (
+              <SearchRow key={r.feedUrl} r={r} active={i === activeIdx} onHover={() => setActiveIdx(i)} done={shows.some((s) => sameFeed(s.feedUrl, r.feedUrl))} adding={adding} onOpen={() => openShow(r.feedUrl)} onSubscribe={() => void subscribe(r.feedUrl)} />
+            ))}
           </div>
         )}
       </div>
@@ -181,19 +225,56 @@ function TaskChip() {
 
 export function MiniPlayer() {
   const loading = useStore((s) => s.loadingSince);
-  const { current, view, playing, player, time, length, openEpisode } = useStore(useShallow((s) => ({ current: s.current, view: s.view, playing: s.playing, player: s.player, time: Math.floor(s.time), length: s.length, openEpisode: s.openEpisode })));
+  const { current, view, playing, player, time, length, openEpisode, skipBack, skipForward } = useStore(useShallow((s) => ({
+    current: s.current,
+    view: s.view,
+    playing: s.playing,
+    player: s.player,
+    time: Math.floor(s.time),
+    length: s.length,
+    openEpisode: s.openEpisode,
+    skipBack: s.settings.skipBack ?? 15,
+    skipForward: s.settings.skipForward ?? 30,
+  })));
   const { panel, panelOpen } = useLayout(useShallow((l) => ({ panel: l.panel, panelOpen: l.panelOpen })));
   if (!current || current.videoId || (view.kind === "episode" && view.id === current.id)) return null;
   // Left-aligned with the page content; on an episode page it stays within the middle column.
   const right = view.kind === "episode" && panelOpen ? panel + 24 : 24;
+  const onSeekBar = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    if (!player || !length) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / Math.max(1, rect.width)));
+    player.seek(ratio * length);
+  };
   return (
     <div className="mini" style={{ "--mini-right": `${right}px` } as React.CSSProperties}>
-      <button className="play-btn sm" onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loading}>{loading ? <Loader2 size={16} className="spin" /> : playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button>
+      <button className="play-btn sm" onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loading} aria-label={playing ? t("暂停") : t("播放")}>
+        {loading ? <Loader2 size={16} className="spin" /> : playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+      </button>
       {current.cover && <img className="mini-cover" src={current.cover} alt="" />}
-      <div className="mini-meta" role="button" tabIndex={0} onClick={() => openEpisode(current)}>
+      <div className="mini-meta" role="button" tabIndex={0} onClick={() => openEpisode(current)} onKeyDown={(e) => e.key === "Enter" && openEpisode(current)}>
         <p className="ep-name"><ZhText text={current.title} /></p>
-        {current.showTitle && current.showId !== "single" && <p className="meta-line">{showName(current.showTitle)}</p>}
-        <div className="bar"><div style={{ width: `${length ? (time / length) * 100 : 0}%` }} /></div>
+        <div className="mini-sub">
+          {current.showTitle && current.showId !== "single" && <span className="meta-line clamp1">{showName(current.showTitle)}</span>}
+          <span className="mini-time">{clock(time)}{length ? ` / ${clock(length)}` : ""}</span>
+        </div>
+        <div
+          className="mini-seek"
+          role="slider"
+          aria-label={t("播放进度")}
+          aria-valuemin={0}
+          aria-valuemax={Math.max(1, Math.round(length))}
+          aria-valuenow={time}
+          title={t("点击跳转进度")}
+          onClick={onSeekBar}
+        >
+          <div className="bar"><div style={{ width: `${length ? Math.min(100, (time / length) * 100) : 0}%` }} /></div>
+        </div>
+      </div>
+      <div className="mini-skips">
+        <button className="icon-btn sm" disabled={!player} title={t("后退 {n} 秒（←）", { n: skipBack })} aria-label={t("后退 {n} 秒", { n: skipBack })} onClick={() => player?.seek(Math.max(0, time - skipBack))}><RotateCcw size={14} /></button>
+        <button className="icon-btn sm" disabled={!player} title={t("前进 {n} 秒（→）", { n: skipForward })} aria-label={t("前进 {n} 秒", { n: skipForward })} onClick={() => player?.seek(time + skipForward)}><RotateCw size={14} /></button>
       </div>
     </div>
   );
@@ -222,96 +303,6 @@ export function Modal({ title, onClose, children, wide, head }: { title: string;
         <div className="modal-body">{children}</div>
       </div>
     </div>
-  );
-}
-
-export function AddDialog() {
-  const { set, reloadShows, go, openEpisode, notify, shows } = useStore(useShallow((s) => ({ set: s.set, reloadShows: s.reloadShows, go: s.go, openEpisode: s.openEpisode, notify: s.notify, shows: s.shows })));
-  const [tab, setTab] = useState<"search" | "link" | "import">(useStore.getState().addTab ?? "search");
-  const [q, setQ] = useState("");
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<SearchResult[] | null>(null);
-  const [adding, setAdding] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const timer = useRef<number | undefined>(undefined);
-  const close = () => set({ addOpen: false });
-  // Split around the placeholder so "RSS" can stay bold wherever the translation puts it.
-  const rss = t("任意播客 {rss} 地址", { rss: "\u0000" }).split("\u0000");
-  const add = async (value: string) => {
-    setError(null); setAdding(value); setBusy(true);
-    try {
-      const r = await api.addSubscription(value);
-      close();
-      if (r.show) { await reloadShows(); notify(t("已订阅「{name}」", { name: r.show.title })); go({ kind: "show", id: r.show.id }); }
-      else if (r.episode) openEpisode(r.episode);
-    } catch (err) { setError(errorText(err)); } finally { setBusy(false); setAdding(null); }
-  };
-  // A link pasted into the search box is simply added.
-  const pastedLink = looksLikeLink(q);
-  useEffect(() => {
-    window.clearTimeout(timer.current);
-    if (!q.trim() || pastedLink) { setResults(null); return; }
-    timer.current = window.setTimeout(async () => {
-      setSearching(true);
-      try { setResults((await api.searchPodcasts(q.trim(), /[\u4e00-\u9fff]/.test(q) ? "CN" : "US")).slice(0, 12)); } catch { setResults([]); } finally { setSearching(false); }
-    }, 300);
-  }, [q]);
-  const head = (
-    <div className="add-tabs" role="tablist">
-      <button role="tab" aria-selected={tab === "search"} className={tab === "search" ? "on" : ""} onClick={() => { setTab("search"); setError(null); }}><Search size={15} /> {t("搜索节目")}</button>
-      <button role="tab" aria-selected={tab === "link"} className={tab === "link" ? "on" : ""} onClick={() => { setTab("link"); setError(null); }}><Link2 size={15} /> {t("链接或 RSS")}</button>
-      <button role="tab" aria-selected={tab === "import"} className={tab === "import" ? "on" : ""} onClick={() => { setTab("import"); setError(null); }}><Import size={15} /> {t("导入订阅")}</button>
-    </div>
-  );
-  return (
-    <Modal title={t("添加节目")} onClose={close} head={head}>
-      {tab === "import" ? <ImportPanel onDone={close} /> : tab === "search" ? (
-        <form className="add-form" onSubmit={(e) => { e.preventDefault(); if (pastedLink) void add(q.trim()); else if (results?.[0] && !shows.some((s) => s.feedUrl === results[0].feedUrl)) void add(results[0].feedUrl); }}>
-          <div className="add-search">
-            {pastedLink ? <Link2 size={16} /> : <Search size={16} />}
-            <input autoFocus autoCapitalize="off" autoCorrect="off" spellCheck={false} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("输入节目名，比如 Lex Fridman、张小珺")} />
-            {(searching || busy) && <Loader2 size={14} className="spin muted" />}
-          </div>
-          {error && <p className="error-text">{error}</p>}
-          <div className="add-results">
-            {pastedLink ? (
-              <div className="add-empty"><p className="muted small">{t("这是一个链接，回车直接添加")}</p><button type="submit" className="btn primary sm" disabled={busy}>{t("添加")}</button></div>
-            ) : !q.trim() ? (
-              <div className="add-empty"><p className="muted small">{t("搜索 Apple Podcasts 上的节目，中英文名都可以。YouTube 频道或小宇宙请用「链接或 RSS」。")}</p></div>
-            ) : results && !results.length ? (
-              <div className="add-empty"><SearchArt /><p className="muted small">{t("没有找到，换个关键词，或者用「链接或 RSS」添加")}</p></div>
-            ) : results?.map((r) => {
-              const done = shows.some((s) => s.feedUrl === r.feedUrl);
-              return (
-                <div key={r.feedUrl} className="drop-row">
-                  {r.cover ? <img src={r.cover} alt="" /> : <div className="cover-fallback">{r.title.slice(0, 1)}</div>}
-                  <div className="drop-meta"><BiTitle text={r.title} className="ep-name" subClassName="clamp1" /><p className="meta-line clamp1">{r.author}</p></div>
-                  {done ? <span className="sub-done">{t("已订阅")}</span> : <button type="button" className="btn sm" onClick={() => void add(r.feedUrl)} disabled={adding != null}>{adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}</button>}
-                </div>
-              );
-            })}
-          </div>
-        </form>
-      ) : (
-        <form onSubmit={(e) => { e.preventDefault(); if (input.trim()) void add(input.trim()); }} className="add-form">
-          <input autoFocus autoCapitalize="off" autoCorrect="off" spellCheck={false} value={input} onChange={(e) => setInput(e.target.value)} placeholder={t("粘贴 YouTube / Apple Podcasts / 小宇宙 / RSS 链接")} />
-          {error && <p className="error-text">{error}</p>}
-          <ul className="hints muted small">
-            <li><b>YouTube</b> {t("频道（@名字 / 频道链接 / 播放列表），或单个视频链接")}</li>
-            <li><b>Apple Podcasts</b> {t("节目链接")}</li>
-            <li><b>{t("小宇宙")}</b> {t("节目或单集链接")}</li>
-            <li>{rss[0]}<b>RSS</b>{rss[1]}</li>
-          </ul>
-          <div className="modal-foot">
-            <div className="spacer" />
-            <button type="button" className="btn ghost" onClick={close}>{t("取消")}</button>
-            <button type="submit" className="btn primary" disabled={busy || !input.trim()}>{busy ? <><Loader2 size={14} className="spin" /> {t("正在读取…")}</> : t("添加")}</button>
-          </div>
-        </form>
-      )}
-    </Modal>
   );
 }
 

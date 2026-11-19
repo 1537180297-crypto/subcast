@@ -12,7 +12,7 @@ import { ask } from "../lib/confirm";
 import {
   cancelLocalTts, deleteLocalTts, installLocalTts, localInstalled, refreshLocalTts, useLocalTts, type LocalModelId,
 } from "../lib/localTts";
-import { KeyField, NO_AUTO } from "./SettingsDialog";
+import { KeyField, NO_AUTO } from "./KeyField";
 import { RateControl } from "./RatePicker";
 
 

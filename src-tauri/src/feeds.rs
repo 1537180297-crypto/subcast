@@ -18,6 +18,9 @@ pub enum Source {
 
 fn re(p: &str) -> Regex { Regex::new(p).unwrap() }
 
+/// A feed hosted by 小宇宙 (feed.xyzfm.space), which turns away readers outside its whitelist.
+fn is_xyzfm_feed(url: &str) -> bool { url.contains("xyzfm.space/") }
+
 /// A channel's long-form uploads (the "UULF" playlist), so Shorts do not crowd out real episodes.
 pub fn channel_feed(channel_id: &str) -> String {
     format!("https://www.youtube.com/feeds/videos.xml?playlist_id=UULF{}", &channel_id[2..])
@@ -73,6 +76,14 @@ pub async fn resolve(input: &str) -> Result<Source> {
             .json()
             .await?;
         let feed = v["results"][0]["feedUrl"].as_str().ok_or_else(|| anyhow!("这档节目没有公开 RSS（可能是 Apple 独家）"))?;
+        // 小宇宙-hosted feeds only answer whitelisted readers (403 for everyone else); the Apple page names the show's 小宇宙 page.
+        if is_xyzfm_feed(feed) {
+            if let Ok(html) = net::get_text(&format!("https://podcasts.apple.com/podcast/id{id}")).await {
+                if let Some(c) = re(r"xiaoyuzhoufm\.com/podcast/([0-9a-f]{24})").captures(&html) {
+                    return Ok(Source::Xiaoyuzhou(format!("https://www.xiaoyuzhoufm.com/podcast/{}", &c[1])));
+                }
+            }
+        }
         return Ok(Source::Feed(feed.to_string()));
     }
     if url.contains("xiaoyuzhoufm.com/podcast/") {
@@ -81,8 +92,15 @@ pub async fn resolve(input: &str) -> Result<Source> {
     if url.contains("xiaoyuzhoufm.com/episode/") {
         return Ok(Source::XiaoyuzhouEpisode(url));
     }
+    // A direct feed is downloaded again by fetch_show. Probing it here made Discover's + wait twice.
+    if is_direct_feed(&url) {
+        return Ok(Source::Feed(url));
+    }
     // Anything else: a feed, or a page that links one.
     let body = net::get_text(&url).await?;
+    if is_xyzfm_feed(&url) && body.contains("403 Forbidden") {
+        return Err(anyhow!("小宇宙的 RSS 不对外开放，请粘贴小宇宙 App 里分享的节目链接"));
+    }
     let head = body.trim_start().get(..800).unwrap_or(body.trim_start());
     if head.starts_with("<?xml") || head.contains("<rss") || head.contains("<feed") {
         return Ok(Source::Feed(url));
@@ -93,6 +111,18 @@ pub async fn resolve(input: &str) -> Result<Source> {
         return Ok(Source::Feed(abs.to_string()));
     }
     Err(anyhow!("没有识别出订阅源。支持 YouTube 频道/视频、Apple Podcasts、小宇宙和 RSS 链接"))
+}
+
+/// True when `url` is the feed itself (RSS/Atom), not an HTML page that merely links one.
+/// YouTube `@handle` pages are not feeds: those still need the channel page to find the id.
+pub fn is_direct_feed(url: &str) -> bool {
+    let u = url.trim().to_ascii_lowercase();
+    let rest = u.split_once("://").map(|(_, r)| r).unwrap_or(&u);
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    host.starts_with("feeds.") || host.starts_with("rss.")
+        || path.ends_with(".xml") || path.ends_with(".rss")
+        || path.split('/').any(|s| s == "rss" || s == "feed" || s == "atom")
 }
 
 // ---- RSS / Atom ---------------------------------------------------------------------------------
@@ -316,9 +346,65 @@ pub struct SearchResult {
     pub feed_url: String,
     pub genre: Option<String>,
     pub episodes: Option<i64>,
+    /// "youtube" for a YouTube channel; absent for a podcast from Apple's directory.
+    pub source: Option<String>,
 }
 
+/// Channels first (they carry video), then podcasts. Either search may fail on its own (YouTube is
+/// unreachable without a proxy in mainland China); only when both fail is it an error.
 pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<SearchResult>> {
+    let (yt, pods) = tokio::join!(search_youtube_channels(term), search_apple(term, country));
+    let mut out = yt.unwrap_or_default();
+    match pods {
+        Ok(p) => out.extend(p),
+        Err(e) if out.is_empty() => return Err(e),
+        Err(_) => {}
+    }
+    Ok(out)
+}
+
+/// The top few channels from YouTube's own search page (channel filter), read from its embedded ytInitialData.
+async fn search_youtube_channels(term: &str) -> Result<Vec<SearchResult>> {
+    const MAX: usize = 3;
+    let html = net::get_text(&format!("https://www.youtube.com/results?search_query={}&sp=EgIQAg%253D%253D", urlencoding::encode(term))).await?;
+    let json = re(r"var ytInitialData = (\{.*?\});</script>").captures(&html).ok_or_else(|| anyhow!("YouTube 搜索页没有结果数据"))?; // i18n-ignore (never shown: a failed YouTube search just drops its results)
+    let data: serde_json::Value = serde_json::from_str(&json[1])?;
+    let mut found = Vec::new();
+    collect_channels(&data, &mut found, MAX);
+    Ok(found)
+}
+
+fn collect_channels(v: &serde_json::Value, out: &mut Vec<SearchResult>, max: usize) {
+    if out.len() >= max { return; }
+    match v {
+        serde_json::Value::Object(m) => {
+            if let Some(c) = m.get("channelRenderer") {
+                if let (Some(id), Some(title)) = (c["channelId"].as_str(), c["title"]["simpleText"].as_str()) {
+                    if id.starts_with("UC") && id.len() == 24 {
+                        let cover = c["thumbnail"]["thumbnails"].as_array().and_then(|t| t.last()).and_then(|t| t["url"].as_str())
+                            .map(|u| if u.starts_with("//") { format!("https:{u}") } else { u.to_string() });
+                        out.push(SearchResult {
+                            title: title.into(),
+                            // The handle (@name); YouTube puts it in subscriberCountText in the current layout.
+                            author: c["subscriberCountText"]["simpleText"].as_str().filter(|h| h.starts_with('@')).unwrap_or("YouTube").into(),
+                            cover,
+                            feed_url: channel_feed(id),
+                            genre: None,
+                            episodes: None,
+                            source: Some("youtube".into()),
+                        });
+                    }
+                }
+                return;
+            }
+            for x in m.values() { collect_channels(x, out, max); }
+        }
+        serde_json::Value::Array(a) => for x in a { collect_channels(x, out, max); },
+        _ => {}
+    }
+}
+
+async fn search_apple(term: &str, country: &str) -> Result<Vec<SearchResult>> {
     let url = format!(
         "https://itunes.apple.com/search?media=podcast&entity=podcast&limit=25&country={}&term={}",
         country,
@@ -334,9 +420,14 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<SearchResu
                 title: r["collectionName"].as_str()?.into(),
                 author: r["artistName"].as_str().unwrap_or("").into(),
                 cover: r["artworkUrl600"].as_str().or_else(|| r["artworkUrl100"].as_str()).map(String::from),
-                feed_url: r["feedUrl"].as_str()?.into(),
+                // A 小宇宙-hosted feed can't be read directly; subscribing through the Apple link finds its 小宇宙 page.
+                feed_url: match (r["feedUrl"].as_str()?, r["collectionId"].as_i64()) {
+                    (f, Some(id)) if is_xyzfm_feed(f) => format!("https://podcasts.apple.com/podcast/id{id}"),
+                    (f, _) => f.into(),
+                },
                 genre: r["primaryGenreName"].as_str().map(String::from),
                 episodes: r["trackCount"].as_i64(),
+                source: None,
             })
         })
         .collect())
@@ -356,6 +447,42 @@ mod tests {
         assert_eq!(e[0].duration, Some(3723.0));
         assert_eq!(e[0].transcript_url.as_deref(), Some("https://x/1.vtt"));
         assert!(e[0].published.is_some());
+    }
+    #[test]
+    fn youtube_channel_results() {
+        let data: serde_json::Value = serde_json::from_str(r#"{"contents":[{"itemSectionRenderer":{"contents":[
+            {"channelRenderer":{"channelId":"UC33VP_gIBzCVcEvaGKBocZA","title":{"simpleText":"罗永浩的十字路口"},"subscriberCountText":{"simpleText":"@罗永浩的十字路口"},"thumbnail":{"thumbnails":[{"url":"//yt3.ggpht.com/a=s88"},{"url":"//yt3.ggpht.com/a=s176"}]}}},
+            {"channelRenderer":{"channelId":"UC3Ilesza14SKQBwCTCmhj4w","title":{"simpleText":"二号"},"thumbnail":{"thumbnails":[]}}},
+            {"channelRenderer":{"channelId":"UCvtFgYy1WF1sJvgcAAj1VIw","title":{"simpleText":"三号"}}},
+            {"channelRenderer":{"channelId":"UCA6enTYxSFdTtUsHFZOFmZg","title":{"simpleText":"四号"}}}]}}]}"#).unwrap();
+        let mut out = Vec::new();
+        collect_channels(&data, &mut out, 3);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].feed_url, "https://www.youtube.com/feeds/videos.xml?playlist_id=UULF33VP_gIBzCVcEvaGKBocZA");
+        assert_eq!(out[0].author, "@罗永浩的十字路口");
+        assert_eq!(out[0].cover.as_deref(), Some("https://yt3.ggpht.com/a=s176"));
+        assert_eq!(out[1].author, "YouTube");
+    }
+    /// Network: a Chinese name finds the YouTube channel first, and a 小宇宙-hosted show resolves to its 小宇宙 page.
+    #[tokio::test]
+    #[ignore]
+    async fn live_search_and_xyzfm() {
+        let r = search_podcasts("罗永浩的十字路口", "CN").await.unwrap();
+        assert_eq!(r[0].source.as_deref(), Some("youtube"), "{:?}", r.iter().map(|x| &x.title).collect::<Vec<_>>());
+        let apple = r.iter().find(|x| x.source.is_none() && x.feed_url.contains("podcasts.apple.com")).expect("小宇宙 show via Apple");
+        match resolve(&apple.feed_url).await.unwrap() {
+            Source::Xiaoyuzhou(u) => assert_eq!(u, "https://www.xiaoyuzhoufm.com/podcast/68981df29e7bcd326eb91d88"),
+            _ => panic!("expected the 小宇宙 page"),
+        }
+    }
+    #[test]
+    fn direct_feeds_skip_the_probe() {
+        assert!(is_direct_feed("https://feeds.simplecast.com/JGE3yC0V"));
+        assert!(is_direct_feed("https://rss.libsyn.com/shows/61840/destinations/240976.xml"));
+        assert!(is_direct_feed("https://anchor.fm/s/f7cac464/podcast/rss"));
+        assert!(is_direct_feed("https://api.substack.com/feed/podcast/10845.rss"));
+        assert!(!is_direct_feed("https://www.youtube.com/@ycombinator"));
+        assert!(!is_direct_feed("https://podcasts.apple.com/us/podcast/example/id123"));
     }
     #[test]
     fn video_ids() {

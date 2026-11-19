@@ -7,7 +7,7 @@ import { ArrowDownToLine, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRig
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
-import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, subscribedShow, type Pick, type Topic } from "../lib/picks";
+import { PICKS, TOPICS, deepPickFor, isSubscribed, pickName, pickSub, sameFeed, showName, subscribedShow, subscriptionVisible, type Pick, type Topic } from "../lib/picks";
 import { isChineseUi, t, useLang } from "../lib/i18n";
 import { HOME_SHOW_FEED, showLinks } from "../lib/showLinks";
 import { AlsoOn, HomeShowBanner, YtButton, usePromo } from "./YtPromo";
@@ -19,6 +19,41 @@ import { MonthFilter, useMonthFilter } from "./MonthFilter";
 import { clearQueue, playAll, useLibrary } from "../lib/library";
 import { recommend, type Recommendation } from "../lib/recommend";
 import { isInProgress, isWatched, markShowAllWatched, markWatched, useEpisodeWatch, useWatched } from "../lib/watched";
+import {
+  getEpisodesCached,
+  getHomeEpisodes,
+  getRecentEpisodes,
+  getShowEpisodes,
+  invalidateEpisodes,
+  readScroll,
+  saveScroll,
+  setHomeEpisodes,
+  setRecentEpisodes,
+  setShowEpisodes,
+} from "../lib/cache";
+
+function useScrollRestore(key: string, ready: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  const restored = useRef(false);
+  useEffect(() => {
+    restored.current = false;
+    const el = ref.current;
+    if (!el) return;
+    const onScroll = () => saveScroll(key, el.scrollTop);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      saveScroll(key, el.scrollTop);
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [key]);
+  useEffect(() => {
+    if (!ready || restored.current) return;
+    restored.current = true;
+    const top = readScroll(key);
+    if (top > 0 && ref.current) ref.current.scrollTop = top;
+  }, [key, ready]);
+  return ref;
+}
 
 // ---- episode rows -------------------------------------------------------------------------------
 
@@ -78,11 +113,21 @@ const EpisodeRow = memo(function EpisodeRow({ ep, showShow, hit, query }: { ep: 
   return (
     <div className={`ep-item ${isPlaying ? "playing" : ""} state-${status} ${status === "watched" ? "played" : ""}`} role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
       <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>
-        {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
-        {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" onError={(e) => {
+        {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" decoding="async" onError={(e) => {
           const i = e.currentTarget;
           if (ep.videoId && !i.dataset.f) { i.dataset.f = "1"; i.src = `https://i.ytimg.com/vi/${ep.videoId}/mqdefault.jpg`; } else i.style.visibility = "hidden";
         }} /> : <div className="cover-fallback" />}
+        {(ep.audioUrl || ep.videoId) && (
+          <button
+            type="button"
+            className="row-play"
+            title={t("播放")}
+            aria-label={t("播放")}
+            onClick={(e) => { e.stopPropagation(); if (hit?.time != null) openAt(ep, hit.time); else playAll([ep]); }}
+          >
+            <Play size={14} fill="currentColor" />
+          </button>
+        )}
         {status === "watched" && <span className="thumb-done" aria-label={t("已看")}><Check size={11} strokeWidth={3} /></span>}
         {ep.videoId && ep.duration ? <span className={`thumb-dur ${showBar ? "lifted" : ""}`}>{clockShort(ep.duration)}</span> : null}
         {showBar && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
@@ -201,7 +246,7 @@ function ShowTile({ show }: { show: Show }) {
   const { zh, orig } = useShowName(show.title);
   return (
     <div className="show-tile" role="button" tabIndex={0} onClick={() => go({ kind: "show", id: show.id })} onKeyDown={(e) => e.key === "Enter" && go({ kind: "show", id: show.id })}>
-      <div className="tile-cover">{show.cover ? <img src={show.cover} alt="" loading="lazy" /> : <div className="cover-fallback">{orig.slice(0, 1)}</div>}</div>
+      <div className="tile-cover">{show.cover ? <img src={show.cover} alt="" loading="lazy" decoding="async" /> : <div className="cover-fallback">{orig.slice(0, 1)}</div>}</div>
       <p className="tile-name clamp1">{zh ?? orig}</p>
       {zh && <p className="tile-sub clamp1">{orig}</p>}
     </div>
@@ -235,8 +280,7 @@ function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
   return (
     <div className={`ep-card ${wide ? "wide" : ""} state-${status}`} role="button" tabIndex={0} onClick={() => openEpisode(ep)} onKeyDown={(e) => e.key === "Enter" && openEpisode(ep)}>
       <div className={`ep-thumb ${ep.videoId ? "video" : "square"}`}>
-        {ep.cover && !ep.videoId && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
-        {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" /> : <div className="cover-fallback" />}
+        {ep.cover ? <img className="thumb-img" src={ep.cover} alt="" loading="lazy" decoding="async" /> : <div className="cover-fallback" />}
         {status === "watched" && <span className="thumb-done" aria-label={t("已看")}><Check size={11} strokeWidth={3} /></span>}
         {showBar && <span className="thumb-bar"><span style={{ width: `${pct}%` }} /></span>}
         {(ownSubs(ep) || shared) && <span className="thumb-subs">{t("有字幕")}</span>}
@@ -257,7 +301,7 @@ function RecRow({ r, onAdd, adding, done }: { r: Recommendation; onAdd: () => vo
   const go = useStore((s) => s.go);
   return (
     <div className="rec-row" role="button" tabIndex={0} onClick={() => go({ kind: "channel", input: r.pick.input })} onKeyDown={(e) => e.key === "Enter" && go({ kind: "channel", input: r.pick.input })}>
-      <img src={r.pick.cover} alt="" loading="lazy" />
+      <img src={r.pick.cover} alt="" loading="lazy" decoding="async" />
       <div className="rec-text">
         <p className="rec-name clamp1">{pickName(r.pick)}</p>
         <p className="muted small clamp1">{r.because ? t("因为你在听「{name}」", { name: showName(r.because) }) : t(r.pick.intro)}</p>
@@ -272,8 +316,8 @@ export function LatestView() {
   const { shows, set, go, reloadShows, notify } = useStore(useShallow((s) => ({ shows: s.shows, set: s.set, go: s.go, reloadShows: s.reloadShows, notify: s.notify })));
   const favorites = useLibrary((s) => s.favorites);
   const savedIds = useOffline((s) => Object.keys(s.saved).join());
-  const [eps, setEps] = useState<Episode[] | null>(null);
-  const [recent, setRecent] = useState<Episode[]>([]);
+  const [eps, setEps] = useState<Episode[] | null>(() => getHomeEpisodes());
+  const [recent, setRecent] = useState<Episode[]>(() => getRecentEpisodes() ?? []);
   const [favEps, setFavEps] = useState<Episode[]>([]);
   const [dlEps, setDlEps] = useState<Episode[]>([]);
   const [all, setAll] = useState(false);
@@ -281,12 +325,24 @@ export function LatestView() {
   const [limit, setLimit] = useState(40);
   const [adding, setAdding] = useState<string | null>(null);
   const patches = useWatched((s) => s.patches);
+  const pageRef = useScrollRestore("latest", eps != null);
   useEffect(() => {
-    api.listEpisodes(undefined, 200).then(setEps);
-    api.recentEpisodes().then(setRecent);
+    let live = true;
+    api.listEpisodes(undefined, 200).then((list) => { if (live) { setHomeEpisodes(list); setEps(list); } });
+    api.recentEpisodes().then((list) => { if (live) { setRecentEpisodes(list); setRecent(list); } });
+    return () => { live = false; };
   }, [shows]);
-  useEffect(() => { void Promise.all(favorites.slice(0, 30).map((f) => api.getEpisode(f.id).catch(() => null))).then((r) => setFavEps(r.filter((x): x is Episode => !!x))); }, [favorites]);
-  useEffect(() => { const ids = savedIds ? savedIds.split(",") : []; void Promise.all(ids.slice(0, 30).map((id) => api.getEpisode(id).catch(() => null))).then((r) => setDlEps(r.filter((x): x is Episode => !!x))); }, [savedIds]);
+  useEffect(() => {
+    let live = true;
+    void getEpisodesCached(favorites.slice(0, 30).map((f) => f.id)).then((r) => live && setFavEps(r));
+    return () => { live = false; };
+  }, [favorites]);
+  useEffect(() => {
+    let live = true;
+    const ids = savedIds ? savedIds.split(",") : [];
+    void getEpisodesCached(ids.slice(0, 30)).then((r) => live && setDlEps(r));
+    return () => { live = false; };
+  }, [savedIds]);
   const unfinished = (e: Episode) => isInProgress(e, patches[e.id]);
   const unwatched = (e: Episode) => !isWatched(e, patches[e.id]);
   const hero = recent.find(unfinished) ?? null;
@@ -302,13 +358,18 @@ export function LatestView() {
   const recs = useMemo(() => recommend({ shows, recent, favorites: favEps, downloads: dlEps }, 6), [shows, recent, favEps, dlEps]);
   const subscribe = async (input: string, name: string) => {
     setAdding(input);
-    try { const r = await api.addSubscription(input); await reloadShows(); if (r.show) notify(t("已订阅「{name}」", { name })); }
+    try {
+      const r = await api.addSubscription(input);
+      await reloadShows();
+      if (!subscriptionVisible(input, r.show, useStore.getState().shows)) { notify(t("没有订上，再试一次")); return; }
+      notify(t("已订阅「{name}」", { name }));
+    }
     catch (err) { notify(errorText(err)); } finally { setAdding(null); }
   };
   const welcome = useStore((s) => s.welcome);
   const settingUp = useStore((s) => s.settingUp);
   return (
-    <div className="page home">
+    <div className="page home" ref={pageRef}>
       {welcome && <WelcomeCard />}
       {hero && <ContinueHero ep={hero} />}
       {(upNext.length > 0 || hero || favorites.length > 0) && (
@@ -368,19 +429,24 @@ export function RecentView() {
   const [tab, setTab] = useState<"recent" | "saved">(() => (useLibrary.getState().favorites.length && !useStore.getState().current ? "saved" : "recent"));
   const favorites = useLibrary((s) => s.favorites);
   const queued = useLibrary((s) => s.queue.length);
-  const [eps, setEps] = useState<Episode[] | null>(null);
+  const [eps, setEps] = useState<Episode[] | null>(() => getRecentEpisodes());
   const [saved, setSaved] = useState<Episode[] | null>(null);
-  useEffect(() => { api.recentEpisodes().then(setEps); }, []);
+  const pageRef = useScrollRestore(`recent:${tab}`, (tab === "recent" ? eps : saved) != null);
   useEffect(() => {
     let live = true;
-    void Promise.all(favorites.map((f) => api.getEpisode(f.id).catch(() => null))).then((r) => live && setSaved(r.filter((x): x is Episode => !!x)));
+    api.recentEpisodes().then((list) => { if (live) { setRecentEpisodes(list); setEps(list); } });
+    return () => { live = false; };
+  }, []);
+  useEffect(() => {
+    let live = true;
+    void getEpisodesCached(favorites.map((f) => f.id)).then((r) => live && setSaved(r));
     return () => { live = false; };
   }, [favorites]);
   const patches = useWatched((s) => s.patches);
   // "Play all" skips what's already finished.
   const playable = (saved ?? []).filter((e) => !isWatched(e, patches[e.id]));
   return (
-    <div className="page">
+    <div className="page" ref={pageRef}>
       <div className="page-head">
         <h1 className="page-title">{t("接下来听")}</h1>
         <div className="seg-control" role="tablist">
@@ -407,9 +473,10 @@ export function DownloadsView() {
   const active = useOffline((s) => s.active);
   const ids = [...new Set([...Object.keys(active), ...Object.values(saved).sort((a, b) => b.savedAt - a.savedAt).map((x) => x.episodeId)])];
   const [eps, setEps] = useState<Episode[] | null>(null);
+  const pageRef = useScrollRestore("downloads", !ids.length || eps != null);
   useEffect(() => {
     let live = true;
-    void Promise.all(ids.map((id) => api.getEpisode(id).catch(() => null))).then((r) => live && setEps(r.filter((x): x is Episode => !!x)));
+    void getEpisodesCached(ids).then((r) => live && setEps(r));
     return () => { live = false; };
   }, [ids.join()]);
   const total = Object.values(saved).reduce((n, x) => n + x.bytes, 0);
@@ -419,7 +486,7 @@ export function DownloadsView() {
     await clearDownloads();
   };
   return (
-    <div className="page">
+    <div className="page" ref={pageRef}>
       <div className="page-head">
         <h1 className="page-title">{t("已下载")}</h1>
         <div className="row-actions">
@@ -442,7 +509,8 @@ export function ShowView({ id }: { id: string }) {
   const ytPromo = useStore((s) => s.settings.youtubePromo);
   const patches = useWatched((s) => s.patches);
   const show = shows.find((s) => s.id === id);
-  const [eps, setEps] = useState<Episode[] | null>(null);
+  const [eps, setEps] = useState<Episode[] | null>(() => getShowEpisodes(id));
+  const pageRef = useScrollRestore(`show:${id}`, eps != null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [expanded, setExpanded] = useState(false);
@@ -451,7 +519,12 @@ export function ShowView({ id }: { id: string }) {
   const names = useShowName(show?.title ?? "");
   const desc = (show?.description ?? "").replace(/<[^>]+>/g, "").trim().slice(0, 1500);
   const descZh = useZh(desc);
-  useEffect(() => { setEps(null); api.listEpisodes(id).then(setEps); }, [id]);
+  useEffect(() => {
+    let live = true;
+    setEps(getShowEpisodes(id));
+    api.listEpisodes(id).then((list) => { if (live) { setShowEpisodes(id, list); setEps(list); } });
+    return () => { live = false; };
+  }, [id]);
   // Search inside this show: titles (with their Chinese), show notes and subtitles, done by the backend.
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<ShowHit[] | null>(null);
@@ -485,7 +558,13 @@ export function ShowView({ id }: { id: string }) {
   if (!show) return <div className="page" />;
   const refresh = async () => {
     setBusy(true);
-    try { await api.refreshShow(id); setEps(await api.listEpisodes(id)); await reloadShows(); } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
+    try {
+      await api.refreshShow(id);
+      const list = await api.listEpisodes(id);
+      setShowEpisodes(id, list);
+      setEps(list);
+      await reloadShows();
+    } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
   };
   const markAll = async () => {
     setMenu(false);
@@ -500,12 +579,15 @@ export function ShowView({ id }: { id: string }) {
   const remove = async () => {
     setMenu(false);
     if (!(await ask({ title: t("取消订阅「{name}」？", { name: show.title }), message: t("已生成的字幕、精读和收听进度会保留。"), ok: t("取消订阅"), danger: true }))) return;
-    await api.removeShow(id); await reloadShows(); go({ kind: "latest" });
+    await api.removeShow(id);
+    invalidateEpisodes(id);
+    await reloadShows();
+    go({ kind: "latest" });
   };
   const descText = showOrig || !descZh ? desc : descZh;
   const links = showLinks(show.feedUrl);
   return (
-    <div className="page">
+    <div className="page" ref={pageRef}>
       <div className="show-head">
         {show.cover ? <img src={show.cover} alt="" /> : <div className="cover-fallback" />}
         <div className="show-info">
@@ -586,7 +668,7 @@ function PickCard({ p, selected, subscribed, onClick, onOpen, action }: { p: Pic
     <div className={`pick-tile ${selected ? "selected" : ""} ${subscribed ? "done" : ""}`} role={press ? "button" : undefined} tabIndex={press ? 0 : undefined} aria-pressed={onClick ? selected : undefined}
       onClick={press} onKeyDown={(e) => press && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), press())}>
       <div className="tile-cover">
-        <img src={p.cover} alt="" loading="lazy" />
+        <img src={p.cover} alt="" loading="lazy" decoding="async" />
         {p.deep ? <span className="tile-badge deep">{t("精读")}</span> : p.video && <span className="tile-badge"><Youtube size={11} /> {t("视频")}</span>}
         {onClick ? <span className={`pick-check ${selected ? "on" : ""}`}>{selected && <Check size={13} strokeWidth={3} />}</span> : <div className="tile-action" onClick={(e) => e.stopPropagation()}>{action}</div>}
       </div>
@@ -643,6 +725,9 @@ function WelcomeCard() {
   );
 }
 
+const addInput = (prev: ReadonlySet<string>, input: string) => { const next = new Set(prev); next.add(input); return next; };
+const dropInput = (prev: ReadonlySet<string>, input: string) => { const next = new Set(prev); next.delete(input); return next; };
+
 export function DiscoverView() {
   const { shows, reloadShows, notify, go } = useStore(useShallow((s) => ({ shows: s.shows, reloadShows: s.reloadShows, notify: s.notify, go: s.go })));
   const [adding, setAdding] = useState<string | null>(null);
@@ -650,19 +735,47 @@ export function DiscoverView() {
   const promo = usePromo();
   const bannerHidden = useStore((s) => s.settings.homeBannerHidden);
   const showBanner = promo && !bannerHidden;
-  const subscribed = (p: Pick) => isSubscribed(p, shows);
+  // The check appears before the feed finishes. It comes off again if the library does not actually have the show.
+  const [optimistic, setOptimistic] = useState<ReadonlySet<string>>(new Set());
+  const inflight = useRef(new Set<string>());
+  const subscribed = (p: Pick) => optimistic.has(p.input) || isSubscribed(p, shows);
   const home = PICKS.find((p) => p.input === HOME_SHOW_FEED);
   const add = async (input: string, title: string) => {
+    if (inflight.current.has(input)) return;
+    inflight.current.add(input);
+    setOptimistic((prev) => addInput(prev, input));
     setAdding(input);
     try {
-      await api.addSubscription(input);
+      const r = await api.addSubscription(input);
       await reloadShows();
+      const showsNow = useStore.getState().shows;
+      if (!subscriptionVisible(input, r.show, showsNow)) {
+        setOptimistic((prev) => dropInput(prev, input));
+        notify(t("没有订上，再试一次"));
+        return;
+      }
+      setOptimistic((prev) => dropInput(prev, input));
       notify(t("已订阅「{name}」", { name: title }));
+    } catch (err) {
+      setOptimistic((prev) => dropInput(prev, input));
+      notify(errorText(err));
+    } finally { inflight.current.delete(input); setAdding(null); }
+  };
+  const drop = async (p: Pick) => {
+    const sub = subscribedShow(p, useStore.getState().shows);
+    if (!sub?.id) { setOptimistic((prev) => dropInput(prev, p.input)); return; }
+    if (!(await ask({ title: t("取消订阅「{name}」？", { name: pickName(p) }), message: t("已生成的字幕、精读和收听进度会保留。"), ok: t("取消订阅"), danger: true }))) return;
+    setAdding(p.input);
+    try {
+      await api.removeShow(sub.id);
+      await reloadShows();
+      setOptimistic((prev) => dropInput(prev, p.input));
+      notify(t("已取消订阅「{name}」", { name: pickName(p) }));
     } catch (err) { notify(errorText(err)); } finally { setAdding(null); }
   };
-  const subBtn = (input: string, title: string, done: boolean) => done
-    ? <span className="tile-done" title={t("已订阅")}><Check size={16} /></span>
-    : <button className="tile-add" title={t("订阅")} onClick={(e) => { e.stopPropagation(); void add(input, title); }} disabled={adding != null}>{adding === input ? <Loader2 size={16} className="spin" /> : <Plus size={18} />}</button>;
+  const subBtn = (p: Pick, done: boolean) => done
+    ? <button type="button" className="tile-done" title={t("再点一次，取消订阅")} aria-label={t("再点一次，取消订阅")} onClick={(e) => { e.stopPropagation(); void drop(p); }} disabled={adding != null}><Check size={16} className="when-idle" /><X size={16} className="when-hover" /></button>
+    : <button className="tile-add" title={t("订阅")} onClick={(e) => { e.stopPropagation(); void add(p.input, pickName(p)); }} disabled={adding != null}>{adding === p.input ? <Loader2 size={16} className="spin" /> : <Plus size={18} />}</button>;
   return (
     <div className="page">
       <h1 className="page-title">{t("发现")}</h1>
@@ -670,7 +783,7 @@ export function DiscoverView() {
       {showBanner && home && !topics.length && <HomeShowBanner onHide={() => { void useStore.getState().saveSettings({ homeBannerHidden: true }); notify(t("好的，不再显示。可以在设置 › 通用里重新打开")); }} subscribed={subscribed(home)} busy={adding === home.input} onSubscribe={() => void add(home.input, pickName(home))} onOpen={() => go({ kind: "channel", input: home.input })} />}
       <TopicChips topics={topics} setTopics={setTopics} />
       <div className="tile-grid">
-        {visible(topics).filter((p) => !(showBanner && p === home && !topics.length)).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} onOpen={() => go({ kind: "channel", input: p.input })} action={subBtn(p.input, pickName(p), subscribed(p))} />)}
+        {visible(topics).filter((p) => !(showBanner && p === home && !topics.length)).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} onOpen={() => go({ kind: "channel", input: p.input })} action={subBtn(p, subscribed(p))} />)}
       </div>
     </div>
   );
@@ -706,7 +819,9 @@ export function ChannelView({ input }: { input: string }) {
     try {
       const r = await api.addSubscription(input);
       await reloadShows();
-      if (r.show) { notify(t("已订阅「{name}」", { name: pick ? pickName(pick) : r.show.title })); go({ kind: "show", id: r.show.id }); }
+      if (!r.show || !subscriptionVisible(input, r.show, useStore.getState().shows)) { notify(t("没有订上，再试一次")); return; }
+      notify(t("已订阅「{name}」", { name: pick ? pickName(pick) : r.show.title }));
+      go({ kind: "show", id: r.show.id });
     } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
   };
   const cover = pick?.cover ?? data?.show.cover;
@@ -741,5 +856,5 @@ export function ChannelView({ input }: { input: string }) {
 }
 
 export function showIcon(show: Show) {
-  return show.cover ? <img src={show.cover} alt="" loading="lazy" /> : <div className="cover-fallback">{show.title.slice(0, 1)}</div>;
+  return show.cover ? <img src={show.cover} alt="" loading="lazy" decoding="async" /> : <div className="cover-fallback">{show.title.slice(0, 1)}</div>;
 }

@@ -2,19 +2,22 @@ import { ConfirmHost } from "./components/ConfirmHost";
 import { useShallow } from "zustand/react/shallow";
 import { Splitter } from "./components/Splitter";
 import { SelectionTools } from "./components/SelectionTools";
+import { VideoClipDialog } from "./components/VideoClipDialog";
 import { SIDEBAR, useLayout } from "./lib/layout";
 import { lazy, memo, Suspense, useEffect } from "react";
 // Loaded when first opened, not with the app.
 const StatsView = lazy(() => import("./components/StatsView").then((m) => ({ default: m.StatsView })));
+const SettingsView = lazy(() => import("./components/SettingsDialog").then((m) => ({ default: m.SettingsView })));
+const AddDialog = lazy(() => import("./components/AddDialog").then((m) => ({ default: m.AddDialog })));
 import type { View } from "./store";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
 import { detectAgents } from "./lib/agents";
 import { stepSubScale, useReadingSettings } from "./lib/reading";
 import { useRevealOnExpand } from "./lib/reveal";
-import { startJobListeners } from "./lib/jobs";
+import { startJobListeners, useJobs } from "./lib/jobs";
 import { useStore } from "./store";
-import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
+import { MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
 import { ManageSubs } from "./components/ManageSubs";
 import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelView, firstRunSetup } from "./components/Lists";
 import { startOffline } from "./lib/offline";
@@ -25,13 +28,12 @@ import { EpisodeView } from "./components/EpisodeView";
 import { VideoDock } from "./components/VideoDock";
 import { AudioEngine, cycleMode, noteListening, stepRate, toggleTheater } from "./components/Players";
 import { actionFor, comboOf, isPlain, useKeysHelp, type ActionId } from "./lib/shortcuts";
-import { useJobs } from "./lib/jobs";
 import { activeIndex } from "./components/TranscriptPanel";
-import { SettingsView } from "./components/SettingsDialog";
-import { WordsView, remindReview } from "./components/Learn";
+import { WordsView } from "./components/Learn";
+import { remindReview } from "./lib/words";
 import { stepVolume, toggleMute } from "./lib/volume";
 import { KeysHelp } from "./components/ShortcutSettings";
-import { t, useLang } from "./lib/i18n";
+import { IS_MAC, t, useLang } from "./lib/i18n";
 import { EqBars } from "./components/Illustrations";
 
 export default function App() {
@@ -53,12 +55,22 @@ export default function App() {
     void api.uiReady().then((info) => useStore.setState({ uiBuild: info.build })).catch(() => {});
     // Shortcuts come from one registry (lib/shortcuts.ts), so Settings › 快捷键 can change them.
     const onKey = (e: KeyboardEvent) => {
+      const typing = (e.target as HTMLElement).closest?.("input, textarea, select, [contenteditable], [role=separator], .shortcut-recorder");
+      if (!typing) {
+        const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+        if ((mod && !e.shiftKey && !e.altKey && (e.key === "[" || e.key === "]")) || (!IS_MAC && e.altKey && !e.metaKey && !e.ctrlKey && (e.key === "ArrowLeft" || e.key === "ArrowRight"))) {
+          e.preventDefault();
+          const st = useStore.getState();
+          if (e.key === "[" || e.key === "ArrowLeft") st.back();
+          else st.forward();
+          return;
+        }
+      }
       const combo = comboOf(e);
       if (!combo) return;
       const { settings } = useStore.getState();
       const action = actionFor(combo, settings.shortcuts);
       if (!action) return;
-      const typing = (e.target as HTMLElement).closest?.("input, textarea, select, [contenteditable], [role=separator], .shortcut-recorder");
       // Text boxes keep their own keys: plain ones, and arrows with modifiers (⌘↑ jumps to the top).
       if (typing && (isPlain(combo) || combo.includes("Arrow"))) return;
       if (document.querySelector(".shortcut-recorder.recording")) return;
@@ -98,10 +110,14 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     const scrollTimers = new WeakMap<Element, number>();
+    const scrollLast = new WeakMap<Element, number>();
     const onScroll = (e: Event) => {
       const el = e.target;
       if (!(el instanceof HTMLElement)) return;
-      el.classList.add("is-scrolling");
+      if (!el.classList.contains("is-scrolling")) el.classList.add("is-scrolling");
+      const now = performance.now();
+      if (now - (scrollLast.get(el) ?? 0) < 150) return;
+      scrollLast.set(el, now);
       window.clearTimeout(scrollTimers.get(el));
       scrollTimers.set(el, window.setTimeout(() => el.classList.remove("is-scrolling"), 900));
     };
@@ -129,9 +145,10 @@ export default function App() {
       <AudioEngine />
       <VideoDock />
       {keysHelp && <KeysHelp />}
-      {addOpen && <AddDialog />}
+      {addOpen && <Suspense fallback={null}><AddDialog /></Suspense>}
       {manageOpen && <ManageSubs />}
       <SelectionTools />
+      <VideoClipDialog />
       <UpdateBanner />
       <ConfirmHost />
       <Toast />
@@ -153,7 +170,7 @@ const Main = memo(function Main({ view }: { view: View; lang: string }) {
       {view.kind === "show" && <ShowView key={view.id} id={view.id} />}
       {view.kind === "channel" && <ChannelView key={view.input} input={view.input} />}
       {view.kind === "episode" && <EpisodeView key={view.id} id={view.id} />}
-      {view.kind === "settings" && <SettingsView />}
+      {view.kind === "settings" && <Suspense fallback={null}><SettingsView /></Suspense>}
       {view.kind === "words" && <WordsView />}
     </main>
   );

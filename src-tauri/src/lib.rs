@@ -24,6 +24,7 @@ mod shared;
 mod speech;
 mod transcript;
 mod translate;
+mod videoclip;
 mod youtube;
 mod ytlogin;
 
@@ -181,7 +182,7 @@ fn known_show_id(input: &str) -> Option<String> {
 }
 
 /// A channel page from what was saved last time, so it opens instantly; the page then refreshes it in the background.
-#[tauri::command]
+#[tauri::command(async)]
 fn cached_show(state: State<'_, AppState>, input: String) -> Res<Option<Preview>> {
     let Some(id) = known_show_id(&input) else { return Ok(None) };
     let conn = state.db.lock().unwrap();
@@ -248,7 +249,8 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
                 let Ok(Ok((fresh, eps))) = r else { continue };
                 let known = {
                     let conn = state.db.lock().unwrap();
-                    eps.iter().filter(|x| conn.query_row("SELECT 1 FROM episodes WHERE id=?1", [&x.id], |_| Ok(())).is_ok()).count()
+                    let ids = db::list_show_episode_ids(&conn, &s.id).unwrap_or_default();
+                    eps.iter().filter(|x| ids.contains(&x.id)).count()
                 };
                 let fresh = Show { id: s.id.clone(), kind: s.kind.clone(), ..fresh };
                 if store(&state, &fresh, &eps).is_ok() { ok += 1; fresh_eps += eps.len() - known; }
@@ -311,10 +313,19 @@ fn search_episodes(conn: &Connection, show_id: &str, query: &str) -> anyhow::Res
         let notes = all_notes.get(&ep.id).map(|n| tags.replace_all(n, " ").to_string()).unwrap_or_default();
         if has(&notes) { hits.push(ShowHit { snippet: snippet(&notes, &words[0]), field: "notes", time: None, episode: ep }); continue; }
         if !ep.has_transcript { continue; }
-        let Some(t) = db::get_transcript(conn, &ep.id).ok().flatten() else { continue };
-        let zh: Vec<Option<String>> = db::get_blob(conn, &ep.id, "zh").ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let Some((raw_segs, raw_zh)) = db::raw_transcript_and_zh(conn, &ep.id).ok().flatten() else { continue };
+        // Pre-filter on raw JSON strings before expensive serde deserialization when words contain no JSON-escaped chars.
+        if words.iter().all(|w| !w.contains('"') && !w.contains('\\')) {
+            let segs_lower = raw_segs.to_lowercase();
+            let zh_lower = raw_zh.as_deref().map(str::to_lowercase);
+            if !words.iter().all(|w| segs_lower.contains(w) || zh_lower.as_deref().is_some_and(|z| z.contains(w))) {
+                continue;
+            }
+        }
+        let Ok(segs) = serde_json::from_str::<Vec<Segment>>(&raw_segs) else { continue };
+        let zh: Vec<Option<String>> = raw_zh.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         // A line matches with its translation; the first one that contains every word is shown.
-        let found = t.segments.iter().enumerate().find_map(|(i, s)| {
+        let found = segs.iter().enumerate().find_map(|(i, s)| {
             let line = match zh.get(i).cloned().flatten() { Some(z) => format!("{} {z}", s.text), None => s.text.clone() };
             has(&line).then(|| (s.start, line))
         });
@@ -343,10 +354,10 @@ fn recent_episodes(state: State<'_, AppState>) -> Res<Vec<Episode>> { db::recent
 #[tauri::command(async)]
 fn get_episode(state: State<'_, AppState>, id: String) -> Res<Option<Episode>> { db::get_episode(&state.db.lock().unwrap(), &id).map_err(e) }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_show(state: State<'_, AppState>, id: String) -> Res<()> { db::delete_show(&state.db.lock().unwrap(), &id).map_err(e) }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_progress(state: State<'_, AppState>, id: String, seconds: f64) -> Res<()> { db::set_progress(&state.db.lock().unwrap(), &id, seconds).map_err(e) }
 
 #[tauri::command]
@@ -366,7 +377,7 @@ async fn search_podcasts(term: String, country: Option<String>) -> Res<Vec<feeds
 
 // ---- transcripts -----------------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_transcript(state: State<'_, AppState>, episode_id: String) -> Res<Option<Transcript>> {
     db::get_transcript(&state.db.lock().unwrap(), &episode_id).map_err(e)
 }
@@ -547,6 +558,58 @@ async fn export_anki(path: String, deck: String, model: String, notes: Vec<anki:
 /// Asks where to save is the interface's job (the save dialog); this writes text there (a CSV of the word book).
 #[tauri::command]
 fn save_text(path: String, text: String) -> Res<()> { std::fs::write(path, text).map_err(e) }
+
+#[tauri::command(async)]
+fn video_clip_env(state: State<'_, AppState>) -> videoclip::FfmpegStatus {
+    videoclip::env_status(&state.data)
+}
+
+#[tauri::command]
+async fn video_clip_prepare(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    job_id: String,
+    video_id: String,
+    start: f64,
+    end: f64,
+) -> Res<videoclip::PreparedClip> {
+    let data = state.data.clone();
+    let cancel = state.job(&job_id);
+    let (app2, jid) = (app.clone(), job_id.clone());
+    let res = videoclip::prepare_segment(&data, &video_id, start, end, cancel.clone(), move |stage, progress, message| {
+        let _ = app2.emit("video-clip-progress", json!({
+            "jobId": jid, "stage": stage, "progress": progress, "message": message
+        }));
+    }).await;
+    state.done_with(&job_id, &cancel);
+    res.map_err(e)
+}
+
+#[tauri::command]
+async fn video_clip_render(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    job_id: String,
+    req: videoclip::RenderRequest,
+) -> Res<videoclip::RenderResult> {
+    let data = state.data.clone();
+    let cancel = state.job(&job_id);
+    let (app2, jid) = (app.clone(), job_id.clone());
+    let res = videoclip::render_clip(&data, req, cancel.clone(), move |stage, progress, message| {
+        let _ = app2.emit("video-clip-progress", json!({
+            "jobId": jid, "stage": stage, "progress": progress, "message": message
+        }));
+    }).await;
+    state.done_with(&job_id, &cancel);
+    res.map_err(e)
+}
+
+#[tauri::command]
+fn reveal_file(app: AppHandle, path: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    if !std::path::Path::new(&path).exists() { return Err("找不到导出的文件".into()); }
+    app.opener().reveal_item_in_dir(&path).map_err(e)
+}
 
 #[tauri::command]
 async fn list_models(provider: llm::Provider) -> Res<Vec<String>> { cloud::list_models(&provider).await.map_err(e) }
@@ -755,10 +818,10 @@ async fn download_episode(app: AppHandle, state: State<'_, AppState>, episode_id
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_downloads(state: State<'_, AppState>) -> Vec<offline::Saved> { offline::list(&state.data) }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_download(state: State<'_, AppState>, episode_id: String) -> Res<()> { offline::remove(&state.data, &episode_id).map_err(e) }
 
 // Off the main thread: the window keeps drawing while it runs.
@@ -1316,12 +1379,12 @@ async fn download_model(app: AppHandle, state: State<'_, AppState>, id: String, 
 }
 
 /// Listening time from the player (only while playing; seeks don't count).
-#[tauri::command]
+#[tauri::command(async)]
 fn log_listen(state: State<'_, AppState>, episode_id: String, show_id: String, seconds: f64, translated: bool) -> Res<()> {
     db::log_listen(&state.db.lock().unwrap(), &episode_id, &show_id, seconds, translated).map_err(e)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn listening_stats(state: State<'_, AppState>, since: String) -> Res<Vec<Value>> {
     db::listens_since(&state.db.lock().unwrap(), &since).map_err(e)
 }
@@ -1342,23 +1405,23 @@ fn delete_model(state: State<'_, AppState>, id: String) -> Res<()> {
 
 // ---- stored data and settings ------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_blob(state: State<'_, AppState>, episode_id: String, kind: String) -> Res<Option<String>> {
     db::get_blob(&state.db.lock().unwrap(), &episode_id, &kind).map_err(e)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_blob(state: State<'_, AppState>, episode_id: String, kind: String, data: String) -> Res<()> {
     db::set_blob(&state.db.lock().unwrap(), &episode_id, &kind, &data).map_err(e)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_settings(state: State<'_, AppState>) -> Res<Value> {
     let raw = db::get_setting(&state.db.lock().unwrap(), "app").map_err(e)?;
     Ok(raw.and_then(|r| serde_json::from_str(&r).ok()).unwrap_or(Value::Null))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_settings(state: State<'_, AppState>, settings: Value) -> Res<()> {
     net::set_proxy(settings["proxy"].as_str().unwrap_or("")).map_err(e)?;
     *asr::YT_BROWSER.write().unwrap() = settings["ytCookiesBrowser"].as_str().unwrap_or("").to_string();
@@ -1373,7 +1436,7 @@ fn set_api_key(provider: String, key: String) -> Res<()> { llm::set_key(&provide
 fn has_api_key(provider: String) -> bool { llm::get_key(&provider).is_some_and(|k| !k.is_empty()) }
 
 #[tauri::command]
-async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String, provider: llm::Provider, system: String, messages: Vec<llm::Message>, max_tokens: Option<u32>, json_mode: Option<bool>) -> Res<String> {
+async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String, provider: llm::Provider, system: String, messages: Vec<llm::Message>, max_tokens: Option<u32>, json_mode: Option<bool>, quick: Option<bool>) -> Res<String> {
     let cancel = state.job(&request_id);
     let rid = request_id.clone();
     let r = if provider.protocol == "cli" {
@@ -1385,7 +1448,7 @@ async fn llm_chat(app: AppHandle, state: State<'_, AppState>, request_id: String
         agents::complete(kind, &path, agents::Request { system: &system, user: &user, model: Some(provider.model.as_str()).filter(|m| !m.is_empty() && *m != "default"), json: json_mode.unwrap_or(false) },
             cancel.clone(), move |d| { let _ = app2.emit("llm", json!({"requestId": rid, "delta": d})); }).await
     } else {
-        llm::chat(&provider, &system, &messages, max_tokens.unwrap_or(8000), json_mode.unwrap_or(false), &cancel, |d| {
+        llm::chat(&provider, &system, &messages, max_tokens.unwrap_or(8000), json_mode.unwrap_or(false), quick.unwrap_or(false), &cancel, |d| {
             let _ = app.emit("llm", json!({"requestId": rid, "delta": d}));
         }).await
     };
@@ -1579,7 +1642,8 @@ pub fn run() {
             download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             app_update_check, app_update_download, app_update_install,
             shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
-            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete
+            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete,
+            video_clip_env, video_clip_prepare, video_clip_render, reveal_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

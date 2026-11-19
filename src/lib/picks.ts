@@ -1,5 +1,5 @@
 // Shows suggested on first launch and in Discover. Covers and feeds are fixed here so the page needs no lookups.
-import { isChineseUi, t, tk } from "./i18n";
+import { isChineseUi, showNamesTranslated, t, tk } from "./i18n";
 
 export type Topic = "乔木精读" | "AI 前沿" | "AI 工程" | "创业投资" | "产品与增长" | "科技评论" | "中文播客" | "人文社科" | "个人成长";
 export const TOPICS: Topic[] = ["乔木精读", "AI 前沿", "AI 工程", "创业投资", "产品与增长", "科技评论", "中文播客", "人文社科", "个人成长"];
@@ -88,7 +88,7 @@ export function shortName(title: string): string {
 export function showName(title: string): string {
   const short = shortName(title);
   const p = PICKS.find((x) => x.title === title || shortName(x.title) === short || x.by === title || x.channel === title);
-  return p && isChineseUi() ? t(p.zh) : short;
+  return p && showNamesTranslated() ? t(p.zh) : short;
 }
 
 /** A pick's name in the interface language: the curated Chinese name in Chinese UIs, its own title elsewhere. */
@@ -99,17 +99,35 @@ export const pickSub = (p: Pick) => (isChineseUi() && p.zh !== p.title ? p.title
 const norm = (u: string) => u.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
 export const sameFeed = (a: string, b: string) => norm(a) === norm(b);
 
+export interface LibraryShow { feedUrl: string; title: string; author?: string | null }
+
+/** YouTube stores the channel name ("Dwarkesh Patel"), while the card's title is the show ("Dwarkesh Podcast").
+ *  `by` and `channel` are that channel name. A host credit shorter than 3 characters ("YC") is not a title. */
+function namedLike(show: LibraryShow, pick: Pick): boolean {
+  const got = [show.title, shortName(show.title), show.author ?? "", shortName(show.author ?? "")];
+  const wanted = [pick.title, shortName(pick.title), pick.channel ?? "", shortName(pick.channel ?? "")];
+  if (pick.by.trim().length >= 3) wanted.push(pick.by, shortName(pick.by));
+  return got.some((g) => g.length >= 3 && wanted.some((w) => w.length >= 3 && g === w));
+}
+
 /** The library show that counts as following this pick, if any. 精读 channels match only their own site, so
- *  subscribing to a show's original feed doesn't hide its 精读 channel. Other picks also match by title, because
- *  subscribing a YouTube channel stores the Atom feed, not the @handle the card was opened with. */
-export function subscribedShow<T extends { feedUrl: string; title: string }>(p: Pick, shows: T[]): T | undefined {
+ *  subscribing to a show's original feed doesn't hide its 精读 channel. Other picks also match by title or channel
+ *  name, because subscribing a YouTube channel stores the Atom feed, not the @handle the card was opened with. */
+export function subscribedShow<T extends LibraryShow>(p: Pick, shows: T[]): T | undefined {
   if (p.deep) return shows.find((s) => sameFeed(s.feedUrl, p.input));
-  return shows.find((s) => sameFeed(s.feedUrl, p.input) || s.title === p.title || shortName(s.title) === shortName(p.title) || (!!p.channel && s.title === p.channel));
+  return shows.find((s) => sameFeed(s.feedUrl, p.input) || namedLike(s, p));
 }
 
 /** Whether the user already follows a pick. */
-export function isSubscribed(p: Pick, shows: { feedUrl: string; title: string }[]): boolean {
+export function isSubscribed(p: Pick, shows: LibraryShow[]): boolean {
   return subscribedShow(p, shows) != null;
+}
+
+/** True only when the subscribe call wrote a row the same screen will show as subscribed. */
+export function subscriptionVisible(input: string, returned: { id: string } | undefined, shows: (LibraryShow & { id: string })[]): boolean {
+  if (!returned || !shows.some((s) => s.id === returned.id)) return false;
+  const pick = PICKS.find((p) => sameFeed(p.input, input));
+  return !pick || subscribedShow(pick, shows) != null;
 }
 
 /** The 精读 channel for a show the user follows through its original feed (e.g. No Priors on Megaphone). */

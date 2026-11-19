@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, Loader2, RefreshCw, Settings2, Square, SquarePen } from "lucide-react";
 import { api, errorText, rawErrorText, type ChatMessage, type Episode } from "../lib/api";
@@ -12,13 +13,19 @@ import { providerFor, seekSoon, useStore } from "../store";
 import { Markdown } from "./Markdown";
 import { AnswerActions, HistoryMenu, QuestionActions, type ArchivedChat } from "./ChatActions";
 import { AskArt, NightNote, PageArt, PlugArt } from "./Illustrations";
+import { createManualClip, rangeFromClock } from "../lib/highlights";
+import { openVideoClipDialog } from "./VideoClipDialog";
 
 /** Whether a model is connected for Q&A; re-checked whenever settings change or the settings window closes. */
 function useConnected() {
-  const settings = useStore((s) => s.settings);
+  const { chatProvider, chatModel, providers } = useStore(useShallow((s) => ({
+    chatProvider: s.settings.chatProvider,
+    chatModel: s.settings.chatModel,
+    providers: s.settings.providers,
+  })));
   const open = useStore((s) => s.settingsOpen);
   const [ok, setOk] = useState<boolean | null>(null);
-  useEffect(() => { if (!open) void llmReady("chat").then(setOk); }, [settings, open]);
+  useEffect(() => { if (!open) void llmReady("chat").then(setOk); }, [chatProvider, chatModel, providers, open]);
   return ok;
 }
 
@@ -41,8 +48,15 @@ function ConnectCard({ what }: { what: string }) {
 function useReady(ep: Episode) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const translation = useJobs((s) => s.translations[ep.id]);
-  const settings = useStore((s) => s.settings);
-  const provider = providerFor(settings, "chat");
+  const { chatProvider, chatModel, providers } = useStore(useShallow((s) => ({
+    chatProvider: s.settings.chatProvider,
+    chatModel: s.settings.chatModel,
+    providers: s.settings.providers,
+  })));
+  const provider = useMemo(() => {
+    const p = providers[chatProvider];
+    return p && chatModel ? { ...p, model: chatModel } : p;
+  }, [providers, chatProvider, chatModel]);
   const context = () => transcriptForModel(transcript!.segments, translation?.items);
   // Errors that the settings window fixes carry `setup`, so the panel can offer a way there whatever the language.
   const setupError = (message: string) => Object.assign(new Error(message), { setup: true });
@@ -86,10 +100,23 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
   const connected = useConnected();
   // A local agent (Claude Code…) is started in the background as the panel opens, so the first answer is quicker.
-  const chatProvider = useStore((x) => x.settings.chatProvider);
+  const { chatProvider, chatPromptOn, chatPrompt, savedPrompts } = useStore(useShallow((s) => ({
+    chatProvider: s.settings.chatProvider,
+    chatPromptOn: s.settings.chatPromptOn,
+    chatPrompt: s.settings.chatPrompt,
+    savedPrompts: s.settings.quickPrompts,
+  })));
   useEffect(() => { warmAgent(providerFor(useStore.getState().settings, "chat")); }, [chatProvider]);
-  const settings = useStore((s) => s.settings);
   const seek = useSeek(ep);
+  const translation = useJobs((s) => s.translations[ep.id]);
+  const clipRange = useMemo(() => {
+    if (!ep.videoId || !transcript?.segments.length) return undefined;
+    return (start: number, end?: number) => {
+      const { startIdx, endIdx } = rangeFromClock(transcript.segments, start, end);
+      const clip = createManualClip(transcript.segments, translation?.items, startIdx, endIdx, ep);
+      openVideoClipDialog({ ep, segments: transcript.segments, zh: translation?.items, clip });
+    };
+  }, [ep, transcript, translation?.items]);
   const messages = useChats((s) => s[ep.id]?.messages ?? NO_MESSAGES);
   const streaming = useChats((s) => s[ep.id]?.streaming ?? null);
   const [input, setInput] = useState("");
@@ -102,7 +129,7 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   const box = useRef<HTMLTextAreaElement>(null);
   // The four the listener uses most (the first four by default) are shown; the rest open with "More".
   const [allPrompts, setAllPrompts] = useState(false);
-  const prompts = useMemo(() => byUse(quickPrompts(settings).filter((p) => p.enabled)), [settings]);
+  const prompts = useMemo(() => byUse(quickPrompts({ quickPrompts: savedPrompts }).filter((p) => p.enabled)), [savedPrompts]);
   const shownPrompts = allPrompts ? prompts : prompts.slice(0, 4);
 
   useEffect(() => {
@@ -137,7 +164,7 @@ export function ChatPanel({ ep }: { ep: Episode }) {
     chatAborts.set(ep.id, ctl);
     let partial = "";
     try {
-      const answer = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history, instruction: settings.chatPromptOn ? settings.chatPrompt : "", onDelta: (d) => { partial = d; putChat(ep.id, { streaming: d }); }, signal: ctl.signal });
+      const answer = await askEpisode({ provider: provider!, title: ep.title, show: ep.showTitle ?? "", transcript: context(), history, instruction: chatPromptOn ? chatPrompt : "", onDelta: (d) => { partial = d; putChat(ep.id, { streaming: d }); }, signal: ctl.signal });
       // Some agents only stream and return an empty final answer: keep what was shown.
       const content = answer.trim() ? answer : partial;
       save([...history, { role: "assistant", content: content.trim() ? content : t("出错了：{error}", { error: t("模型没有返回内容，请重试或换一个模型") }), model }]);
@@ -215,13 +242,13 @@ export function ChatPanel({ ep }: { ep: Episode }) {
           </div>
         ) : (
           <div key={i} className={`msg-wrap assistant ${i === messages.length - 1 ? "last" : ""}`}>
-            <div className="msg assistant"><Markdown text={m.content} onSeek={seek} /></div>
+            <div className="msg assistant"><Markdown text={m.content} onSeek={seek} onClip={clipRange} /></div>
             {streaming == null && <AnswerActions text={m.content} ep={ep} model={m.model} onRetry={i === messages.length - 1 && !blocked ? retry : undefined} onDelete={() => removePair(i)} />}
           </div>
         ))}
         {streaming != null && (
           <div className="msg assistant">
-            {streaming ? <Markdown text={streaming} onSeek={seek} /> : <p className="muted"><Loader2 size={14} className="spin" /> {t("正在阅读文字稿…")}</p>}
+            {streaming ? <Markdown text={streaming} onSeek={seek} onClip={clipRange} /> : <p className="muted"><Loader2 size={14} className="spin" /> {t("正在阅读文字稿…")}</p>}
           </div>
         )}
         {setupError && (
@@ -264,8 +291,17 @@ const putGuide = (id: string, p: Partial<GuideJob>) => useGuides.setState((s) =>
 
 export function SummaryPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
+  const translation = useJobs((s) => s.translations[ep.id]);
   const connected = useConnected();
   const seek = useSeek(ep);
+  const clipRange = useMemo(() => {
+    if (!ep.videoId || !transcript?.segments.length) return undefined;
+    return (start: number, end?: number) => {
+      const { startIdx, endIdx } = rangeFromClock(transcript.segments, start, end);
+      const clip = createManualClip(transcript.segments, translation?.items, startIdx, endIdx, ep);
+      openVideoClipDialog({ ep, segments: transcript.segments, zh: translation?.items, clip });
+    };
+  }, [ep, transcript, translation?.items]);
   const job = useGuides((s) => s[ep.id]);
   const summary = job?.summary ?? null;
   const streaming = job?.streaming ?? null;
@@ -332,7 +368,7 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
   }
   return (
     <div className="summary">
-      <Markdown text={text} onSeek={seek} />
+      <Markdown text={text} onSeek={seek} onClip={clipRange} />
       {streaming == null && (
         <div className="summary-foot">
           <span className="muted small">{job?.shared ? t("来自共享导读，没有花你的额度") : `${provider ? t(provider.name) : ""} · ${provider?.model ?? ""}`}</span>

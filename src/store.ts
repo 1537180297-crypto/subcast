@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { api, type Episode, type Show } from "./lib/api";
+import { invalidateEpisodes } from "./lib/cache";
 import { DEFAULTS, loadSettings, type Settings } from "./lib/settings";
-import { setLang, t } from "./lib/i18n";
+import { setLang, setTranslateNames, t } from "./lib/i18n";
 import type { Aligned, AlignStatus } from "./lib/timemap";
 
 export type View =
@@ -41,6 +42,7 @@ interface State {
   shows: Show[];
   view: View;
   history: View[];
+  future: View[];
   /** The episode loaded in the player (may differ from the one being viewed). */
   current: Episode | null;
   time: number;
@@ -79,6 +81,7 @@ interface State {
   init(): Promise<void>;
   go(view: View): void;
   back(): void;
+  forward(): void;
   reloadShows(): Promise<void>;
   /** `lazy`: for text being typed. The change shows at once; the disk write waits until typing pauses. */
   saveSettings(patch: Partial<Settings>, lazy?: boolean): Promise<void>;
@@ -97,6 +100,14 @@ const CHECK_EVERY = 30 * 60_000;
 
 let toastTimer: number | undefined;
 
+function sameView(a: View, b: View): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "show" && b.kind === "show") return a.id === b.id;
+  if (a.kind === "channel" && b.kind === "channel") return a.input === b.input;
+  if (a.kind === "episode" && b.kind === "episode") return a.id === b.id;
+  return true;
+}
+
 export const useStore = create<State>((set, get) => ({
   ready: false,
   speaking: false,
@@ -104,6 +115,7 @@ export const useStore = create<State>((set, get) => ({
   shows: [],
   view: { kind: "latest" },
   history: [],
+  future: [],
   current: null,
   time: 0,
   length: 0,
@@ -116,6 +128,7 @@ export const useStore = create<State>((set, get) => ({
   async init() {
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
     setLang(settings.uiLang);
+    setTranslateNames(settings.translateShowNames);
     void api.setMenuLabels([t("设置…")]).catch(() => {});
     set({ settings, shows, ready: true });
     void get().checkUpdates();
@@ -138,21 +151,33 @@ export const useStore = create<State>((set, get) => ({
     const cur = get().view;
     // Opening settings again while on it only switches the section (see openSettings), no new history entry.
     if (view.kind === "settings" && cur.kind === "settings") return;
-    set((s) => ({ view, history: [...s.history.slice(-30), s.view], settingsOpen: view.kind === "settings" }));
+    if (sameView(cur, view)) return;
+    set((s) => ({ view, history: [...s.history.slice(-30), s.view], future: [], settingsOpen: view.kind === "settings" }));
   },
   back() {
     const h = get().history;
-    const view = h.length ? h[h.length - 1] : { kind: "latest" as const };
-    set({ view, history: h.slice(0, -1), settingsOpen: view.kind === "settings" });
+    if (!h.length) return;
+    const view = h[h.length - 1];
+    set((s) => ({ view, history: h.slice(0, -1), future: [s.view, ...s.future].slice(0, 30), settingsOpen: view.kind === "settings" }));
+  },
+  forward() {
+    const f = get().future;
+    if (!f.length) return;
+    const view = f[0];
+    set((s) => ({ view, history: [...s.history.slice(-30), s.view], future: f.slice(1), settingsOpen: view.kind === "settings" }));
   },
   async reloadShows() {
     // Unchanged after a refresh (the usual case): keep the same array, so pages that depend on it don't reload.
     const shows = await api.listShows();
-    if (JSON.stringify(shows) !== JSON.stringify(get().shows)) set({ shows });
+    if (JSON.stringify(shows) !== JSON.stringify(get().shows)) {
+      invalidateEpisodes();
+      set({ shows });
+    }
   },
   async saveSettings(patch, lazy) {
     const settings = { ...get().settings, ...patch };
     if (patch.uiLang) { setLang(patch.uiLang); void api.setMenuLabels([t("设置…")]).catch(() => {}); }
+    if (patch.translateShowNames !== undefined) setTranslateNames(patch.translateShowNames);
     set({ settings });
     window.clearTimeout(settingsTimer);
     settingsTimer = 0;

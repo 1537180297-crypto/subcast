@@ -47,7 +47,7 @@ export interface Episode {
 
 export interface Segment { start: number; end: number; text: string }
 export interface Transcript { episodeId: string; source: string; language: string; segments: Segment[] }
-export interface SearchResult { title: string; author: string; cover?: string; feedUrl: string; genre?: string; episodes?: number }
+export interface SearchResult { title: string; author: string; cover?: string; feedUrl: string; genre?: string; episodes?: number; /** "youtube" for a YouTube channel; absent for an Apple Podcasts show. */ source?: "youtube" }
 export interface ModelInfo { id: string; name: string; sizeMb: number; note: string; installed: boolean; /** Another app's copy, used in place (no download). */ from?: string | null }
 export interface Provider { id: string; name: string; protocol: "openai" | "anthropic" | "cli"; baseUrl: string; model: string; needsKey: boolean; keyUrl?: string; models?: string[]; group?: "relay" | "provider" | "local" | "cli" }
 export interface CloudAsr { id: string; name: string; note: string; protocol: "doubao" | "openai" | "deepseek"; baseUrl: string; model: string; models: string[]; keyUrl?: string; needsKey: boolean; chunkSecs?: number }
@@ -71,6 +71,27 @@ export interface ChatMessage { role: "user" | "assistant"; content: string; /** 
 export interface Saved { episodeId: string; path: string; bytes: number; savedAt: number }
 
 export interface AsrEvent { episodeId: string; stage: "download" | "transcribe" | "segment" | "done" | "error"; progress: number; message?: string; segment?: Segment }
+export interface FfmpegStatus { installed: boolean; path?: string | null; hardwareH264: boolean }
+export interface PreparedClip { path: string; duration: number; width: number; height: number; hasBurnedSubtitles: boolean; cached: boolean; frames: string[]; bestFrame: number }
+export interface CueOverlay { start: number; end: number; y: number; pngBase64: string }
+export interface RenderVideoClipRequest {
+  rawPath: string;
+  outputPath?: string | null;
+  defaultName: string;
+  layout: "landscape" | "portrait_card" | "portrait_fill";
+  cardBg: "blur" | "night" | "paper";
+  cropX: number;
+  duration: number;
+  staticOverlayPng?: string | null;
+  cues: CueOverlay[];
+  coverPng?: string | null;
+  coverMode: "flash" | "hold" | "none";
+  embedThumbnail: boolean;
+  saveCoverSidecar: boolean;
+  landscapeCoverPng?: string | null;
+}
+export interface RenderVideoClipResult { videoPath: string; coverPath?: string | null; landscapeCoverPath?: string | null }
+export interface VideoClipProgress { jobId: string; stage: string; progress: number; message: string }
 
 export const api = {
   addSubscription: (input: string) => invoke<{ show?: Show; episode?: Episode }>("add_subscription", { input }),
@@ -162,6 +183,10 @@ export const api = {
   revealDownload: (episodeId: string) => invoke<void>("reveal_download", { episodeId }),
   clearTemp: () => invoke<void>("clear_temp"),
   fullNotes: (episodeId: string) => invoke<string | null>("full_notes", { episodeId }),
+  videoClipEnv: () => invoke<FfmpegStatus>("video_clip_env"),
+  videoClipPrepare: (jobId: string, videoId: string, start: number, end: number) => invoke<PreparedClip>("video_clip_prepare", { jobId, videoId, start, end }),
+  videoClipRender: (jobId: string, req: RenderVideoClipRequest) => invoke<RenderVideoClipResult>("video_clip_render", { jobId, req }),
+  revealFile: (path: string) => invoke<void>("reveal_file", { path }),
 };
 
 let llmCounter = 0;
@@ -173,6 +198,8 @@ export async function llmChat(opts: {
   messages: ChatMessage[];
   maxTokens?: number;
   jsonMode?: boolean;
+  /** Needs no deep thinking: ask the provider to turn thinking off or down, so the budget goes to the answer. */
+  quick?: boolean;
   onDelta?: (full: string) => void;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -201,6 +228,7 @@ export async function llmChat(opts: {
       messages: opts.messages,
       maxTokens: opts.maxTokens,
       jsonMode: opts.jsonMode,
+      quick: opts.quick,
     });
   } finally {
     // The last pieces go out now, before the caller sees the result (it keeps them if the reply fails).

@@ -31,7 +31,7 @@ export function systemLang(): Lang {
 }
 
 let current: Lang = "zh-CN";
-export const useLang = create<{ lang: Lang }>(() => ({ lang: current }));
+export const useLang = create<{ lang: Lang; names: boolean }>(() => ({ lang: current, names: true }));
 
 export function setLang(setting: LangSetting | undefined) {
   current = !setting || setting === "auto" ? systemLang() : setting;
@@ -42,6 +42,13 @@ export function setLang(setting: LangSetting | undefined) {
 export const lang = () => current;
 /** Chinese interfaces get machine-translated titles and notes; others show the originals. */
 export const isChineseUi = () => current === "zh-CN" || current === "zh-TW";
+
+/** Settings › 翻译订阅节目的名字. Off: subscribed shows keep their original names even in a Chinese interface. */
+export function setTranslateNames(on: boolean) {
+  useLang.setState({ names: on });
+}
+/** Whether subscribed show names get their Chinese versions (only in Chinese interfaces, and only when switched on). */
+export const showNamesTranslated = () => isChineseUi() && useLang.getState().names;
 
 /** Shortcut labels are written with ⌘; Windows and Linux show Ctrl+ instead. */
 export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
