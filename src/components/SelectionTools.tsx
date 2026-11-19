@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Image as ImageIcon, Languages, Loader2, X } from "lucide-react";
+import { Copy, Image as ImageIcon, Languages, Loader2, Scissors, X } from "lucide-react";
 import { api, type Episode } from "../lib/api";
+import { createManualClip } from "../lib/highlights";
+import { useJobs } from "../lib/jobs";
 import { CJK, POSTER_FONTS, POSTER_THEMES, drawPoster, loadPosterFont, type PosterInput } from "../lib/poster";
 import { showName } from "../lib/picks";
 import { useStore } from "../store";
 import { t, tx } from "../lib/i18n";
 import { Modal } from "./Chrome";
+import { openVideoClipDialog } from "./VideoClipDialog";
 import logoUrl from "../assets/logo.png";
 
 const ZONES = ".deep-body, .lines, .notes-body, .chat-scroll, .summary";
 
-interface Sel { text: string; x: number; y: number; below: boolean; ts?: string }
+interface Sel { text: string; x: number; y: number; below: boolean; ts?: string; startIdx?: number; endIdx?: number }
 
 const DOWNLOADS_DIR = /^.*\/(Downloads|下载)\//; // i18n-ignore (macOS folder names)
 
@@ -21,6 +24,16 @@ export function SelectionTools() {
   const [sel, setSel] = useState<Sel | null>(null);
   const [tr, setTr] = useState<string | null>(null);
   const [poster, setPoster] = useState<{ text: string; ts?: string } | null>(null);
+  const view = useStore((s) => s.view);
+  const current = useStore((s) => s.current);
+  const [hasVideo, setHasVideo] = useState(false);
+  useEffect(() => {
+    if (view.kind !== "episode") { setHasVideo(!!current?.videoId); return; }
+    if (current?.id === view.id) { setHasVideo(!!current.videoId); return; }
+    let live = true;
+    void api.getEpisode(view.id).then((ep) => { if (live) setHasVideo(!!ep?.videoId); }).catch(() => {});
+    return () => { live = false; };
+  }, [view, current?.id, current?.videoId]);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => {
     const read = () => {
@@ -33,10 +46,16 @@ export function SelectionTools() {
       // One word in subtitles with the learning card on: its word card shows instead (with 加入生词本).
       if (/^[A-Za-z][A-Za-z'’-]*$/.test(text) && host.closest(".lines.learning")) { setSel(null); return; }
       const rect = r.getBoundingClientRect();
-      const ts = (r.startContainer.parentElement?.closest(".line")?.querySelector(".line-time")?.textContent ?? undefined) || undefined;
+      const startLine = (r.startContainer.nodeType === 1 ? (r.startContainer as HTMLElement) : r.startContainer.parentElement)?.closest<HTMLElement>(".line[data-i]");
+      const endLine = (r.endContainer.nodeType === 1 ? (r.endContainer as HTMLElement) : r.endContainer.parentElement)?.closest<HTMLElement>(".line[data-i]");
+      const ts = (startLine?.querySelector(".line-time")?.textContent ?? undefined) || undefined;
+      const sRaw = startLine ? Number(startLine.dataset.i) : NaN;
+      const eRaw = endLine ? Number(endLine.dataset.i) : sRaw;
+      const startIdx = Number.isFinite(sRaw) ? Math.min(sRaw, Number.isFinite(eRaw) ? eRaw : sRaw) : undefined;
+      const endIdx = Number.isFinite(sRaw) ? Math.max(sRaw, Number.isFinite(eRaw) ? eRaw : sRaw) : undefined;
       const below = rect.top < 70;
       setTr(null);
-      setSel({ text, x: Math.max(8, Math.min(rect.left + rect.width / 2, innerWidth - 8)), y: below ? rect.bottom + 10 : rect.top - 10, below, ts });
+      setSel({ text, x: Math.max(8, Math.min(rect.left + rect.width / 2, innerWidth - 8)), y: below ? rect.bottom + 10 : rect.top - 10, below, ts, startIdx, endIdx });
     };
     const onChange = () => { window.clearTimeout(timer.current); timer.current = window.setTimeout(read, 220); };
     document.addEventListener("selectionchange", onChange);
@@ -61,6 +80,19 @@ export function SelectionTools() {
     catch { setTr(t("翻译服务暂时连不上，稍后再试")); }
   };
 
+  const clipVideo = async () => {
+    if (!sel || sel.startIdx == null) return;
+    const ep = await episode();
+    if (!ep?.videoId) return;
+    const trData = useJobs.getState().transcripts[ep.id];
+    if (!trData?.segments.length) return;
+    const zhItems = useJobs.getState().translations[ep.id]?.items;
+    const clip = createManualClip(trData.segments, zhItems, sel.startIdx, sel.endIdx ?? sel.startIdx, ep);
+    setSel(null);
+    window.getSelection()?.removeAllRanges();
+    openVideoClipDialog({ ep, segments: trData.segments, zh: zhItems, clip });
+  };
+
   return (
     <>
       {sel && (
@@ -69,6 +101,9 @@ export function SelectionTools() {
             <button onClick={copy}><Copy size={13} /> {t("复制")}</button>
             <button onClick={translate}><Languages size={13} /> {t("翻译")}</button>
             <button onClick={() => { setPoster({ text: sel.text, ts: sel.ts }); setSel(null); }}><ImageIcon size={13} /> {t("生成海报")}</button>
+            {hasVideo && sel.startIdx != null && (
+              <button onClick={() => void clipVideo()}><Scissors size={13} /> {t("剪视频")}</button>
+            )}
           </div>
           {tr && <div className="sel-tr">{tr === "…" ? <Loader2 size={13} className="spin" /> : tr}</div>}
         </div>

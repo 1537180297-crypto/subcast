@@ -18,6 +18,7 @@ import { useJobs } from "../lib/jobs";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { playNext } from "../lib/library";
 import { markEnded, notePlaybackProgress } from "../lib/watched";
+import { SeekHighlights } from "./HighlightViews";
 
 const SAVE_EVERY = 10;
 /** Starts an episode as soon as its player exists: right away when it does, or when it appears (a YouTube
@@ -502,7 +503,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
 export function Controls({ compact = false, video = false }: { compact?: boolean; video?: boolean }) {
   // Whole seconds: the clock and bar move once a second instead of re-rendering on every time update.
   // The bar and clock follow the player's own clock (`rawTime`), which can differ from subtitle time.
-  const { time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ time: Math.floor(s.rawTime ?? s.time), length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
+  const { currentId, time, length, playing, player, settings, loadingSince } = useStore(useShallow((s) => ({ currentId: s.current?.id, time: Math.floor(s.rawTime ?? s.time), length: s.length, playing: s.playing, player: s.player, settings: s.settings, loadingSince: s.loadingSince })));
   const sub = () => useStore.getState().time;
   const seekBar = (at: number) => (player?.seekRaw ? player.seekRaw(at) : player?.seek(at));
   const [drag, setDrag] = useState<number | null>(null);
@@ -516,19 +517,22 @@ export function Controls({ compact = false, video = false }: { compact?: boolean
       </button>
       <button className="icon-btn" title={t("前进 {n} 秒（→）", { n: settings.skipForward ?? 30 })} onClick={() => player?.seek(sub() + (settings.skipForward ?? 30))} disabled={!player}><RotateCw size={18} /></button>
       <span className="time">{clock(shown)}</span>
-      <input
-        className="seek"
-        type="range"
-        min={0}
-        max={Math.max(length, 1)}
-        step={1}
-        value={Math.min(shown, length || shown)}
-        onChange={(e) => setDrag(Number(e.target.value))}
-        onPointerUp={() => { if (drag != null) { seekBar(drag); setDrag(null); } }}
-        onKeyUp={() => { if (drag != null) { seekBar(drag); setDrag(null); } }}
-        style={{ "--fill": `${length ? (shown / length) * 100 : 0}%` } as React.CSSProperties}
-        aria-label={t("播放进度")}
-      />
+      <div className="seek-wrap">
+        {!compact && <SeekHighlights episodeId={currentId} length={length} onSeek={(sec) => player?.seek(sec)} />}
+        <input
+          className="seek"
+          type="range"
+          min={0}
+          max={Math.max(length, 1)}
+          step={1}
+          value={Math.min(shown, length || shown)}
+          onChange={(e) => setDrag(Number(e.target.value))}
+          onPointerUp={() => { if (drag != null) { seekBar(drag); setDrag(null); } }}
+          onKeyUp={() => { if (drag != null) { seekBar(drag); setDrag(null); } }}
+          style={{ "--fill": `${length ? (shown / length) * 100 : 0}%` } as React.CSSProperties}
+          aria-label={t("播放进度")}
+        />
+      </div>
       <span className="time">{length ? clock(length) : "--:--"}</span>
       <VolumeControl />
       <RateMenu rate={settings.playbackRate} max={player?.maxRate} />

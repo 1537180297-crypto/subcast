@@ -2,6 +2,7 @@ import { ConfirmHost } from "./components/ConfirmHost";
 import { useShallow } from "zustand/react/shallow";
 import { Splitter } from "./components/Splitter";
 import { SelectionTools } from "./components/SelectionTools";
+import { VideoClipDialog } from "./components/VideoClipDialog";
 import { SIDEBAR, useLayout } from "./lib/layout";
 import { lazy, memo, Suspense, useEffect } from "react";
 // Loaded when first opened, not with the app.
@@ -132,6 +133,7 @@ export default function App() {
       {addOpen && <AddDialog />}
       {manageOpen && <ManageSubs />}
       <SelectionTools />
+      <VideoClipDialog />
       <UpdateBanner />
       <ConfirmHost />
       <Toast />

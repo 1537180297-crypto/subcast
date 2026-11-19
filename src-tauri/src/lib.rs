@@ -24,6 +24,7 @@ mod shared;
 mod speech;
 mod transcript;
 mod translate;
+mod videoclip;
 mod youtube;
 mod ytlogin;
 
@@ -547,6 +548,58 @@ async fn export_anki(path: String, deck: String, model: String, notes: Vec<anki:
 /// Asks where to save is the interface's job (the save dialog); this writes text there (a CSV of the word book).
 #[tauri::command]
 fn save_text(path: String, text: String) -> Res<()> { std::fs::write(path, text).map_err(e) }
+
+#[tauri::command(async)]
+fn video_clip_env(state: State<'_, AppState>) -> videoclip::FfmpegStatus {
+    videoclip::env_status(&state.data)
+}
+
+#[tauri::command]
+async fn video_clip_prepare(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    job_id: String,
+    video_id: String,
+    start: f64,
+    end: f64,
+) -> Res<videoclip::PreparedClip> {
+    let data = state.data.clone();
+    let cancel = state.job(&job_id);
+    let (app2, jid) = (app.clone(), job_id.clone());
+    let res = videoclip::prepare_segment(&data, &video_id, start, end, cancel.clone(), move |stage, progress, message| {
+        let _ = app2.emit("video-clip-progress", json!({
+            "jobId": jid, "stage": stage, "progress": progress, "message": message
+        }));
+    }).await;
+    state.done_with(&job_id, &cancel);
+    res.map_err(e)
+}
+
+#[tauri::command]
+async fn video_clip_render(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    job_id: String,
+    req: videoclip::RenderRequest,
+) -> Res<videoclip::RenderResult> {
+    let data = state.data.clone();
+    let cancel = state.job(&job_id);
+    let (app2, jid) = (app.clone(), job_id.clone());
+    let res = videoclip::render_clip(&data, req, cancel.clone(), move |stage, progress, message| {
+        let _ = app2.emit("video-clip-progress", json!({
+            "jobId": jid, "stage": stage, "progress": progress, "message": message
+        }));
+    }).await;
+    state.done_with(&job_id, &cancel);
+    res.map_err(e)
+}
+
+#[tauri::command]
+fn reveal_file(app: AppHandle, path: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    if !std::path::Path::new(&path).exists() { return Err("找不到导出的文件".into()); }
+    app.opener().reveal_item_in_dir(&path).map_err(e)
+}
 
 #[tauri::command]
 async fn list_models(provider: llm::Provider) -> Res<Vec<String>> { cloud::list_models(&provider).await.map_err(e) }
@@ -1579,7 +1632,8 @@ pub fn run() {
             download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             app_update_check, app_update_download, app_update_install,
             shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
-            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete
+            download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete,
+            video_clip_env, video_clip_prepare, video_clip_render, reveal_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
