@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ChevronDown, Cloud, ExternalLink, Globe, Laptop, Square, Trash2, Volume2 } from "lucide-react";
+import { ChevronDown, Cloud, ExternalLink, Laptop, Square, Trash2, Volume2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type SystemVoice } from "../lib/api";
 import { TTS_CLOUD_MAIN, TTS_SERVICES, type TtsService } from "../lib/settings";
@@ -156,55 +156,59 @@ function CloudTtsEditor({
         </div>
       )}
 
-      <div className="row-actions">
-        <span className="spacer" />
-        <button className="adv-toggle" onClick={() => setAdvanced(!advanced)}>
-          <ChevronDown size={12} className={advanced ? "flip" : ""} /> {t("高级设置")}
-        </button>
-      </div>
+      {svc.protocol !== "edge" && (
+        <>
+          <div className="row-actions">
+            <span className="spacer" />
+            <button className="adv-toggle" onClick={() => setAdvanced(!advanced)}>
+              <ChevronDown size={12} className={advanced ? "flip" : ""} /> {t("高级设置")}
+            </button>
+          </div>
 
-      {advanced && (
-        <div className="adv-body">
-          <label>
-            <span>{t("接口地址")}</span>
-            <input
-              {...NO_AUTO}
-              value={svc.baseUrl}
-              onChange={(e) => onChange({ ...svc, baseUrl: e.target.value }, true)}
-              placeholder="https://…/v1"
-            />
-          </label>
-          {svc.protocol !== "doubao" && (
-            <>
+          {advanced && (
+            <div className="adv-body">
               <label>
-                <span>{t("模型")}</span>
+                <span>{t("接口地址")}</span>
                 <input
                   {...NO_AUTO}
-                  value={svc.model}
-                  list={`tts-model-${svc.id}`}
-                  onChange={(e) => onChange({ ...svc, model: e.target.value }, true)}
-                  placeholder={t("模型名")}
+                  value={svc.baseUrl}
+                  onChange={(e) => onChange({ ...svc, baseUrl: e.target.value }, true)}
+                  placeholder="https://…/v1"
                 />
-                <datalist id={`tts-model-${svc.id}`}>
-                  {svc.models.map((m) => <option key={m} value={m} />)}
-                </datalist>
               </label>
-              {svc.models.length > 1 && (
-                <div className="model-chips">
-                  {svc.models.map((m) => (
-                    <button
-                      key={m}
-                      className={`chip sm ${svc.model === m ? "on" : ""}`}
-                      onClick={() => onChange({ ...svc, model: m })}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
+              {svc.protocol !== "doubao" && (
+                <>
+                  <label>
+                    <span>{t("模型")}</span>
+                    <input
+                      {...NO_AUTO}
+                      value={svc.model}
+                      list={`tts-model-${svc.id}`}
+                      onChange={(e) => onChange({ ...svc, model: e.target.value }, true)}
+                      placeholder={t("模型名")}
+                    />
+                    <datalist id={`tts-model-${svc.id}`}>
+                      {svc.models.map((m) => <option key={m} value={m} />)}
+                    </datalist>
+                  </label>
+                  {svc.models.length > 1 && (
+                    <div className="model-chips">
+                      {svc.models.map((m) => (
+                        <button
+                          key={m}
+                          className={`chip sm ${svc.model === m ? "on" : ""}`}
+                          onClick={() => onChange({ ...svc, model: m })}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
-            </>
+            </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );
@@ -395,7 +399,7 @@ export function TtsSettings() {
       <section className="setup-block">
         <p className="setup-title">{t("朗读引擎")}</p>
         <p className="muted small">{t("用于精读和字幕中文翻译的朗读。")}</p>
-        <div className="engine-switch tts-engine-switch">
+        <div className="engine-switch">
           <button
             className={`engine ${localOn ? "on" : ""}`}
             onClick={() => void saveSettings({ ttsEngine: localOn ? active.id : lastLocal })}
@@ -413,41 +417,10 @@ export function TtsSettings() {
             <Cloud size={18} />
             <div>
               <p>{t("云端服务")}</p>
-              <p className="muted small">{t("豆包、MiMo、通义等，需 Key")}</p>
-            </div>
-          </button>
-          <button
-            className={`engine ${active.id === "edge" ? "on" : ""}`}
-            onClick={() => void saveSettings({ ttsEngine: "edge" })}
-          >
-            <Globe size={18} />
-            <div>
-              <p>{t("Edge 在线")}</p>
-              <p className="muted small">{t("免 Key，高峰期可能限流")}</p>
+              <p className="muted small">{t("豆包、MiMo、通义、Edge（免 Key）等")}</p>
             </div>
           </button>
         </div>
-
-        {active.id === "edge" && (
-          <div className="provider-form">
-            <div className="setup-head">
-              <p className="setup-title">{t("音色")}</p>
-              <PreviewButton engine="edge" voice={active.voice} />
-            </div>
-            <div className="model-chips">
-              {active.voices.map((v) => (
-                <button
-                  key={v.id}
-                  className={`chip sm ${active.voice === v.id ? "on" : ""}`}
-                  onClick={() => updateService({ ...active, voice: v.id })}
-                >
-                  {t(v.name)}
-                </button>
-              ))}
-            </div>
-            <p className="muted small">{t("使用微软 Edge 朗读接口，免费无需 Key；朗读时文字会发送到微软服务，高峰期可能偶尔限流。")}</p>
-          </div>
-        )}
 
         {localOn && <LocalTtsEditor onPick={pickLocal} />}
 
