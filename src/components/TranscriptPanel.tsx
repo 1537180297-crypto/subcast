@@ -2,9 +2,11 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AudioLines, BookA, Check, ChevronDown, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, PenLine, RefreshCw, Search, X } from "lucide-react";
+import { AudioLines, BookA, Check, ChevronDown, Square, Volume2, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, PenLine, RefreshCw, Search, X } from "lucide-react";
 import { AlignBar, anchorHere } from "./AlignBar";
 import { Modal } from "./Chrome";
+import { ReadAloudSettings } from "./ReadAloud";
+import { startZhRead, stopZhRead, useZhRead } from "../lib/zhRead";
 import { SubtitleExport } from "./SubtitleExport";
 import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
@@ -49,12 +51,12 @@ function onLineClick(e: React.MouseEvent, seek: () => void) {
   lineClick = window.setTimeout(() => { if (!window.getSelection()?.toString().trim()) seek(); }, 260);
 }
 
-const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean; marks: LearnMarks | null }) {
+const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks, reading }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number) => void; query: string; current: boolean; marks: LearnMarks | null; reading?: boolean }) {
   const showZh = mode !== "original";
   // "中文" means Chinese only, learning mode or not; a line not translated yet shows its original meanwhile.
   const showOrig = mode !== "translation" || (!zh && !pending);
   return (
-    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""}`} data-i={i} data-active={active || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
+    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""} ${reading ? "zh-reading" : ""}`} data-i={i} data-active={active || undefined} data-reading={reading || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start)}>
       <span className="line-time">{clock(seg.start)}</span>
       <div className="line-text">
         {showZh && (zh ? <p className="zh">{highlight(zh, query)}</p> : pending ? <span className="skeleton" /> : null)}
@@ -94,7 +96,7 @@ export function useModelDownload(onDone: () => void) {
 /** The one line under the tabs that says how this episode's subtitles stand, with the one action that applies. */
 function StatusLine({ left, text, spin, progress, action, right, title }: { left?: React.ReactNode; text: React.ReactNode; spin?: boolean; progress?: number; action?: React.ReactNode; right?: React.ReactNode; title?: string }) {
   return (
-    <div className="status-line" title={title}>
+    <div className="status-line" data-source={title}>
       {left}
       <span className="status-text" key={typeof text === "string" ? text : undefined}>{spin && <Loader2 size={13} className="spin" />}{text}</span>
       {progress != null && <div className="bar slim"><div style={{ width: `${Math.max(2, progress * 100)}%` }} /></div>}
@@ -177,6 +179,23 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   useEffect(() => { void llmReady("translate").then(setCanUpgrade); }, [settings.translateProvider, settings.translateMode, settings.providers]);
 
 
+  const readIndex = useZhRead((s) => (s.epId === ep.id ? s.index : null));
+  const readingHere = readIndex != null;
+  const [readSetup, setReadSetup] = useState(false);
+  const readBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!readSetup) return;
+    const h = (e: PointerEvent) => { if (!readBox.current?.contains(e.target as Node)) setReadSetup(false); };
+    document.addEventListener("pointerdown", h);
+    return () => document.removeEventListener("pointerdown", h);
+  }, [readSetup]);
+  // Leaving the episode stops reading it.
+  useEffect(() => () => { if (useZhRead.getState().epId === ep.id) stopZhRead(); }, [ep.id]);
+  // The line being read stays in view, like the one being played.
+  useEffect(() => {
+    if (readIndex == null || Date.now() - userScrolled.current < 5000 || query) return;
+    list.current?.querySelector<HTMLElement>("[data-reading]")?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [readIndex, query]);
   useEffect(() => {
     if (active < 0 || Date.now() - userScrolled.current < 5000 || query) return;
     list.current?.querySelector<HTMLElement>("[data-active]")?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -217,7 +236,19 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       ))}
     </div>
   );
+  const zhItems = translation?.items;
+  // While reading, a click on a line reads from there.
+  const readAt = (start: number) => readFrom(segments.findIndex((x) => x.start === start));
+  const readFrom = (i: number) => void startZhRead(ep.id, zhItems ?? [], i, (m) => { useStore.getState().notify(tr(m)); if (m.includes("Key")) setReadSetup(true); });
   const searchBtn = <>
+    {wantsZh && done > 0 && (
+      <div className="read-aloud zh-read" ref={readBox}>
+        {readingHere
+          ? <button className="icon-btn on" title={t("停止朗读")} aria-label={t("停止朗读")} onClick={stopZhRead}><Square size={13} fill="currentColor" /></button>
+          : <button className="icon-btn" title={t("朗读中文")} aria-label={t("朗读中文")} onClick={() => readFrom(Math.max(0, active))}><Volume2 size={16} /></button>}
+        {readSetup && <ReadAloudSettings />}
+      </div>
+    )}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
     {total > 0 && <PanelMenu ep={ep} segments={segments} zh={translation?.items} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, active, shadow, setShadow, canShadow: isCurrent } : undefined} onAlign={canAlign ? () => setAligning(true) : undefined} />}
@@ -255,7 +286,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       <div className={`lines${marks && settings.learnCard ? " learning" : ""}`} ref={list} onWheel={() => (userScrolled.current = Date.now())} onClickCapture={onWordClick}>
         {english && <LearnTip />}
         {rows.map((i, k) => (
-          <Row key={i} i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={aligning && canAlign ? anchorHere : seek} query={query} current={!!matches && k === hit} marks={marks} />
+          <Row key={i} i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={aligning && canAlign ? anchorHere : readingHere ? readAt : seek} query={query} current={!!matches && k === hit} marks={marks} reading={i === readIndex} />
         ))}
         {card && <WordCard target={card} ep={ep} onClose={closeCard} />}
         {!matches && total > 0 && (
