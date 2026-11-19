@@ -1205,6 +1205,7 @@ const dict: Record<string, string> = {
   "记得怎么样？选一个，决定下次什么时候再考": "How well did you know it? Your pick sets when it comes back",
   "键盘 1–4 选择，空格选「{label}」": "Keys 1–4 choose; space picks “{label}”",
   "查词时暂停播放，关掉词卡后继续": "Pause while looking up a word, resume when the card closes",
+  "查看这档节目的全部单集": "See all episodes of this show",
 };
 
 export default dict;
