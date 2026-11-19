@@ -1404,6 +1404,9 @@ const dict: Record<string, string> = {
   "未看完": "Unfinished",
   "在本期字幕里出现了 {n} 次": "Appears {n} times in this episode",
   "{n} 次": "{n}×",
+  "高级": "Premium",
+  "增强": "Enhanced",
+  "系统语音播放失败": "System voice playback failed",
 };
 
 export default dict;

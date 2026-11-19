@@ -4,7 +4,7 @@ import { ChevronDown, Cloud, ExternalLink, Globe, Laptop, Square, Volume2 } from
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type SystemVoice } from "../lib/api";
 import { TTS_CLOUD_MAIN, TTS_SERVICES, type TtsService } from "../lib/settings";
-import { currentTtsService, previewVoice, stopSpeaking, useTtsPreview } from "../lib/tts";
+import { currentTtsService, listWebSystemVoices, previewVoice, stopSpeaking, useTtsPreview } from "../lib/tts";
 import { useStore } from "../store";
 import { t, tr } from "../lib/i18n";
 import { KeyField, NO_AUTO } from "./SettingsDialog";
@@ -28,14 +28,30 @@ export function PreviewButton({ engine, voice }: { engine: string; voice: string
   );
 }
 
-/** Shared hook to load installed OS voices once per mount. */
+/** Shared hook to load installed OS voices (preferring Web Speech so macOS Premium / Enhanced / Siri voices appear). */
 export function useSystemVoices(enabled: boolean): SystemVoice[] {
   const [voices, setVoices] = useState<SystemVoice[]>([]);
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
-    void api.ttsSystemVoices().then((v) => { if (alive) setVoices(v); }).catch(() => {});
-    return () => { alive = false; };
+    const load = () => {
+      const web = listWebSystemVoices();
+      if (web.length) {
+        if (alive) setVoices(web);
+        return true;
+      }
+      return false;
+    };
+    if (!load()) {
+      void api.ttsSystemVoices().then((v) => { if (alive && !listWebSystemVoices().length) setVoices(v); }).catch(() => {});
+    }
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
+    const onChange = () => { load(); };
+    synth?.addEventListener?.("voiceschanged", onChange);
+    return () => {
+      alive = false;
+      synth?.removeEventListener?.("voiceschanged", onChange);
+    };
   }, [enabled]);
   return voices;
 }

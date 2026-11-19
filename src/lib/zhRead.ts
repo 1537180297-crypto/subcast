@@ -2,7 +2,7 @@
 // engine. It doesn't follow the picture: the episode pauses while it reads, and pressing play stops the reading.
 // The next two lines are fetched while one is read, so there's no gap between them.
 import { useStore } from "../store";
-import { stopSpeaking, synthesizeText } from "./tts";
+import { currentTtsService, hasWebSpeechVoices, speakSystemAsync, stopSpeaking, synthesizeText } from "./tts";
 import { create } from "zustand";
 import { t } from "./i18n";
 
@@ -18,6 +18,7 @@ export function stopZhRead() {
   session++;
   audio?.pause();
   audio = null;
+  window.speechSynthesis?.cancel();
   unsub?.(); unsub = null;
   useZhRead.setState({ epId: null, index: null });
 }
@@ -27,24 +28,36 @@ export async function startZhRead(epId: string, items: (string | null | undefine
   stopZhRead();
   stopSpeaking();
   const id = ++session;
-  const { player, playing } = useStore.getState();
+  const { player, playing, settings } = useStore.getState();
   if (playing) player?.toggle();
   // Pressing play (space, the button) means listening to the episode again.
   unsub = useStore.subscribe((s, prev) => { if (s.playing && !prev.playing && id === session) stopZhRead(); });
   const lines: number[] = [];
   for (let i = Math.max(0, from); i < items.length; i++) if (items[i]?.trim()) lines.push(i);
   if (!lines.length) { stopZhRead(); onError(t("这里往后还没有中文翻译")); return; }
-  const fetched = new Map<number, Promise<{ url: string; path: string; seconds: number }>>();
-  const fetchLine = (k: number) => {
-    if (k >= lines.length) return;
-    if (!fetched.has(k)) {
-      const p = synthesizeText(items[lines[k]]!.trim());
-      p.catch(() => {}); // awaited (and reported) when its turn comes
-      fetched.set(k, p);
-    }
-  };
   useZhRead.setState({ epId, index: lines[0] });
+  const svc = currentTtsService(settings);
   try {
+    if (svc.id === "system" && hasWebSpeechVoices()) {
+      for (let k = 0; k < lines.length; k++) {
+        if (id !== session) return;
+        useZhRead.setState({ index: lines[k] });
+        const st = useStore.getState().settings;
+        const rate = Math.min(2, Math.max(0.5, (st.ttsRate || 1) * (st.playbackRate || 1)));
+        await speakSystemAsync(items[lines[k]]!.trim(), { voice: svc.voice, rate, isCanceled: () => id !== session });
+        if (id !== session) return;
+      }
+      return;
+    }
+    const fetched = new Map<number, Promise<{ url: string; path: string; seconds: number }>>();
+    const fetchLine = (k: number) => {
+      if (k >= lines.length) return;
+      if (!fetched.has(k)) {
+        const p = synthesizeText(items[lines[k]]!.trim());
+        p.catch(() => {}); // awaited (and reported) when its turn comes
+        fetched.set(k, p);
+      }
+    };
     for (let k = 0; k < lines.length; k++) {
       for (let a = 0; a <= AHEAD; a++) fetchLine(k + a);
       const res = await fetched.get(k)!;

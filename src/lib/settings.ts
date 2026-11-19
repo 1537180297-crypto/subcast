@@ -416,11 +416,8 @@ export async function loadSettings(): Promise<Settings> {
   }
   let ttsEngine = raw.ttsEngine;
   if (!ttsEngine) {
-    const [hasTts, hasAsr] = await Promise.all([
-      api.hasApiKey("tts.doubao").catch(() => false),
-      api.hasApiKey("asr.doubao").catch(() => false),
-    ]);
-    ttsEngine = hasTts || hasAsr ? "doubao" : "system";
+    // Default Chinese & word reading to the OS Enhanced voice (zero rate-limiting, no key); users can still pick cloud engines or Edge manually.
+    ttsEngine = "system";
   }
   if (!ttsServices[ttsEngine]) ttsEngine = "system";
   return migrate({ ...DEFAULTS, ...raw, providers, cloudAsr, ttsEngine, ttsServices });

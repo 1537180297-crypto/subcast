@@ -1,6 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import { api, type TtsRequest } from "./api";
+import { api, type SystemVoice, type TtsRequest } from "./api";
 import { TTS_SERVICES, type Settings, type TtsService } from "./settings";
 import { useStore } from "../store";
 import { t } from "./i18n";
@@ -8,6 +8,11 @@ import { t } from "./i18n";
 /** Reads text aloud with the active TTS engine, a sentence-aligned chunk at a time, prefetching the next. */
 let session = 0;
 let audio: HTMLAudioElement | null = null;
+// Keep a strong reference while speaking so WebKit doesn't GC the utterance and drop `onend`.
+let activeUtterance: SpeechSynthesisUtterance | null = null;
+let cancelUtterance: (() => void) | null = null;
+
+const NOVELTY_RE = /\b(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Junior|Kathy|Organ|Ralph|Superstar|Trinoids|Whisper|Wobble|Zarvox)\b/i;
 
 export const useTtsPreview = create<{ active: string | null }>(() => ({ active: null }));
 
@@ -74,6 +79,10 @@ export function stopSpeaking() {
   session++;
   audio?.pause();
   audio = null;
+  activeUtterance = null;
+  cancelUtterance?.();
+  cancelUtterance = null;
+  window.speechSynthesis?.cancel();
   useStore.getState().set({ speaking: false });
   useTtsPreview.setState({ active: null });
 }
@@ -96,10 +105,18 @@ export async function speak(text: string, onError?: (m: string) => void) {
   if (playing) player?.toggle();
   useStore.getState().set({ speaking: true });
   const svc = currentTtsService(settings);
-  const parts = chunks(text, maxChunkChars(svc.protocol));
-  const fetchPart = (i: number) => (i < parts.length ? synthesizeText(parts[i]) : Promise.resolve(null));
-  let next = fetchPart(0);
+  const parts = chunks(text, svc.id === "system" ? 240 : maxChunkChars(svc.protocol));
   try {
+    if (svc.id === "system" && hasWebSpeechVoices()) {
+      const rate = Math.min(2, Math.max(0.5, settings.ttsRate || 1));
+      for (const part of parts) {
+        if (id !== session) return;
+        await speakSystemAsync(part, { voice: svc.voice, rate, isCanceled: () => id !== session });
+      }
+      return;
+    }
+    const fetchPart = (i: number) => (i < parts.length ? synthesizeText(parts[i]) : Promise.resolve(null));
+    let next = fetchPart(0);
     for (let i = 0; i < parts.length; i++) {
       const res = await next;
       if (id !== session || !res) return;
@@ -116,7 +133,7 @@ export async function speak(text: string, onError?: (m: string) => void) {
 
 function sampleLine(voiceId: string): string {
   const v = voiceId.toLowerCase();
-  if (v.startsWith("en") || v.includes("default_en") || v === "tim" || v === "dacey") {
+  if (v.startsWith("en") || v.includes("en-") || v.includes("en_") || v.includes("default_en") || v === "tim" || v === "dacey") {
     return "Hello, this is a voice sample from SubCast.";
   }
   return t("你好，这是 SubCast 朗读音色试听。");
@@ -133,6 +150,11 @@ export async function previewVoice(engineId: string, voiceId: string, onError?: 
   const id = ++session;
   useTtsPreview.setState({ active: key });
   try {
+    const rate = Math.min(2, Math.max(0.5, useStore.getState().settings.ttsRate || 1));
+    if (engineId === "system" && hasWebSpeechVoices()) {
+      await speakSystemAsync(sampleLine(voiceId), { voice: voiceId, rate, isCanceled: () => id !== session });
+      return;
+    }
     const res = await synthesizeText(sampleLine(voiceId), { engine: engineId, voice: voiceId });
     if (id !== session) return;
     await playUrl(res.url);
@@ -147,6 +169,7 @@ export async function previewVoice(engineId: string, voiceId: string, onError?: 
 function voiceScore(v: SpeechSynthesisVoice, langPrefix: "en" | "zh"): number {
   const lang = v.lang.toLowerCase();
   if (!lang.startsWith(langPrefix)) return -1;
+  if (NOVELTY_RE.test(v.name)) return -1;
   const id = `${v.voiceURI} ${v.name}`.toLowerCase();
   let s = 0;
   if (langPrefix === "en" ? lang.startsWith("en-us") : lang.startsWith("zh-cn")) s += 20;
@@ -159,6 +182,96 @@ function voiceScore(v: SpeechSynthesisVoice, langPrefix: "en" | "zh"): number {
   return s;
 }
 
+export function hasWebSpeechVoices(): boolean {
+  return typeof window !== "undefined" && !!window.speechSynthesis && window.speechSynthesis.getVoices().length > 0;
+}
+
+/** Lists installed Web Speech voices (including macOS Premium / Enhanced / Siri voices), ranked by quality. */
+export function listWebSystemVoices(): SystemVoice[] {
+  const raw = typeof window !== "undefined" && window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+  const picked: { v: SpeechSynthesisVoice; score: number; langGroup: number }[] = [];
+  for (const v of raw) {
+    const lang = v.lang.toLowerCase();
+    const isZh = lang.startsWith("zh");
+    const isEn = lang.startsWith("en");
+    const isJa = lang.startsWith("ja");
+    if (!isZh && !isEn && !isJa) continue;
+    if (NOVELTY_RE.test(v.name) || /super-compact/i.test(v.voiceURI)) continue;
+    const score = isZh ? voiceScore(v, "zh") : isEn ? voiceScore(v, "en") : 0;
+    const langGroup = lang.startsWith("zh-cn") ? 0 : isZh ? 1 : isEn ? 2 : 3;
+    picked.push({ v, score, langGroup });
+  }
+  picked.sort((a, b) => a.langGroup - b.langGroup || b.score - a.score || a.v.name.localeCompare(b.v.name));
+  const seen = new Set<string>();
+  const out: SystemVoice[] = [];
+  for (const { v } of picked) {
+    if (seen.has(v.voiceURI)) continue;
+    seen.add(v.voiceURI);
+    const id = `${v.voiceURI} ${v.name}`.toLowerCase();
+    const badge = /premium|gryphon-neural|siri\.natural/.test(id)
+      ? t("高级")
+      : /enhanced/.test(id)
+        ? t("增强")
+        : "";
+    const label = badge && !v.name.includes(badge) ? `${v.name} · ${badge}` : v.name;
+    out.push({ id: v.voiceURI, name: label, lang: v.lang });
+  }
+  return out;
+}
+
+function pickWebVoice(text: string, preferred?: string, fallbackPrefix?: "zh" | "en"): SpeechSynthesisVoice | null {
+  const voices = window.speechSynthesis?.getVoices() ?? [];
+  if (!voices.length) return null;
+  if (preferred) {
+    const exact = voices.find((v) => v.voiceURI === preferred || v.name === preferred);
+    if (exact) return exact;
+  }
+  const prefix: "zh" | "en" = fallbackPrefix ?? (/[\u4e00-\u9fff]/.test(text) ? "zh" : "en");
+  let best: SpeechSynthesisVoice | null = null;
+  let bestScore = -1;
+  for (const v of voices) {
+    const sc = voiceScore(v, prefix);
+    if (sc > bestScore) { bestScore = sc; best = v; }
+  }
+  return best;
+}
+
+/** Speaks one chunk/line using the OS Enhanced/Premium Web Speech voice, resolving when finished or canceled. */
+export function speakSystemAsync(
+  text: string,
+  opts?: { voice?: string; rate?: number; isCanceled?: () => boolean },
+): Promise<void> {
+  const synth = window.speechSynthesis;
+  if (!synth) return Promise.resolve();
+  synth.cancel();
+  const trimmed = text.trim();
+  if (!trimmed) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (activeUtterance === u) activeUtterance = null;
+      if (cancelUtterance === onCancel) cancelUtterance = null;
+      if (err) reject(err); else resolve();
+    };
+    const onCancel = () => finish();
+    const u = new SpeechSynthesisUtterance(trimmed);
+    const voice = pickWebVoice(trimmed, opts?.voice);
+    if (voice) { u.voice = voice; u.lang = voice.lang; }
+    else { u.lang = /[\u4e00-\u9fff]/.test(trimmed) ? "zh-CN" : "en-US"; }
+    u.rate = Math.min(2, Math.max(0.5, opts?.rate ?? 1));
+    u.onend = () => finish();
+    u.onerror = (ev) => {
+      if (opts?.isCanceled?.() || ev.error === "canceled" || ev.error === "interrupted") finish();
+      else finish(new Error(t("系统语音播放失败")));
+    };
+    activeUtterance = u;
+    cancelUtterance = onCancel;
+    synth.speak(u);
+  });
+}
+
 /** Speaks with the best installed system voice (preferring macOS Premium / Enhanced voices). */
 export function speakSystemEnhanced(text: string, lang: "en-US" | "zh-CN" = "en-US", rate = 0.9): void {
   const synth = window.speechSynthesis;
@@ -167,15 +280,9 @@ export function speakSystemEnhanced(text: string, lang: "en-US" | "zh-CN" = "en-
   const u = new SpeechSynthesisUtterance(text);
   u.lang = lang;
   u.rate = rate;
-  const prefix = lang.startsWith("zh") ? "zh" : "en";
-  const voices = synth.getVoices();
-  let best: SpeechSynthesisVoice | null = null;
-  let bestScore = -1;
-  for (const v of voices) {
-    const sc = voiceScore(v, prefix);
-    if (sc > bestScore) { bestScore = sc; best = v; }
-  }
+  const best = pickWebVoice(text, undefined, lang.startsWith("zh") ? "zh" : "en");
   if (best) u.voice = best;
+  activeUtterance = u;
   synth.speak(u);
 }
 
