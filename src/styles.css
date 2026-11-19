@@ -289,6 +289,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line-strong); flex: none; }
 .radio.on { border: 5px solid var(--accent); }
 .dl { display: flex; align-items: center; gap: 8px; }
+.toast.has-action { display: flex; align-items: center; gap: 14px; }
+.toast-action { all: unset; cursor: pointer; font-weight: 600; color: var(--accent); white-space: nowrap; }
+.toast-action:hover { text-decoration: underline; }
 .toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); max-width: 520px; padding: 10px 16px; border-radius: 10px; background: var(--ink); color: var(--on-ink); box-shadow: var(--shadow); z-index: 60; font-size: 13px; }
 
 @media (max-width: 1100px) {
@@ -2389,6 +2392,24 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .hl-card-top .hl-check + .hl-score { margin-right: auto; }
 .hl-title-btn { all: unset; cursor: pointer; }
 .hl-title-btn:hover { color: var(--accent-text); }
+.vclip-placeholder { position: absolute; inset: 0; overflow: hidden; }
+.vclip-yt { position: absolute; border: 0; pointer-events: none; }
+.vclip-pv-progress { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 6; display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 10px; background: rgba(14,14,18,0.78); color: #fff; font-size: 12px; overflow: hidden; backdrop-filter: blur(6px); }
+.vclip-pv-progress span:first-child { flex: 1; }
+.vclip-pv-progress i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); transition: width .4s linear; }
+.vclip-foot { align-items: center; gap: 10px; }
+.vclip-foot-progress { flex: 1; min-width: 0; max-width: 520px; display: grid; gap: 6px; }
+.vclip-foot-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.vclip-foot-row .clamp1 { flex: 1; min-width: 0; }
+.vclip-step { font-weight: 600; white-space: nowrap; }
+.vclip-foot-progress .bar div { transition: width .4s linear; }
+.vclip-foot-done { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vclip-done-mark { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: var(--accent-text); }
+.vclip-writing { display: flex; align-items: center; gap: 6px; color: var(--text-2); margin: 0; }
+.vclip-again { align-self: flex-end; }
+details.vclip-adv > summary { cursor: pointer; list-style: none; }
+details.vclip-adv > summary::-webkit-details-marker { display: none; }
+details.vclip-adv:not([open]) > summary { margin-bottom: 0; }
 .vclip-sub-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; flex-wrap: wrap; }
 .vclip-sub-toggle .muted { margin-left: 4px; }
 .vclip-cover-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

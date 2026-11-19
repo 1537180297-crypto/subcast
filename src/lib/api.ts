@@ -80,6 +80,8 @@ export interface RenderVideoClipRequest {
   defaultName: string;
   /** "frame" (with `frame`), or an older fixed layout. */
   layout: "frame" | "landscape" | "portrait_card" | "portrait_fill";
+  /** The export folder from Settings (empty: Downloads). */
+  outputDir?: string | null;
   frame?: { w: number; h: number; fit: "card" | "fill"; vx: number; vy: number; vw: number; vh: number; cropBox: boolean };
   cardBg: "blur" | "night" | "paper";
   cropX: number;
@@ -187,7 +189,7 @@ export const api = {
   fullNotes: (episodeId: string) => invoke<string | null>("full_notes", { episodeId }),
   videoClipEnv: () => invoke<FfmpegStatus>("video_clip_env"),
   /** Resolves the video's download addresses in the background, so cutting a clip starts downloading at once. */
-  videoClipWarm: (videoId: string) => invoke<void>("video_clip_warm", { videoId }),
+  videoClipWarm: (videoId: string, ranges?: [number, number][]) => invoke<void>("video_clip_warm", { videoId, ranges: ranges ?? null }),
   /** One stretch, or (with `ranges`) several cut together in order. */
   videoClipPrepare: (jobId: string, videoId: string, start: number, end: number, ranges?: [number, number][]) => invoke<PreparedClip>("video_clip_prepare", { jobId, videoId, start, end, ranges: ranges ?? null }),
   videoClipRender: (jobId: string, req: RenderVideoClipRequest) => invoke<RenderVideoClipResult>("video_clip_render", { jobId, req }),

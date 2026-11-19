@@ -68,6 +68,9 @@ pub struct Frame {
 pub struct RenderRequest {
     #[serde(default)]
     pub frame: Option<Frame>,
+    /// Where clips go unless the user picked a file (Settings › 存储); Downloads when empty.
+    #[serde(default)]
+    pub output_dir: Option<String>,
     pub raw_path: String,
     #[serde(default)]
     pub output_path: Option<String>,
@@ -794,6 +797,12 @@ pub async fn prepare_segment(
     let dir = clips_work_dir(data, video_id);
     tokio::fs::create_dir_all(&dir).await?;
     let dest = dir.join(format!("{start_ms}-{end_ms}.mp4"));
+    // One fetch per file at a time: a background prefetch and the user's own click on the same clip share it.
+    let lock = {
+        static LOCKS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = once_cell::sync::Lazy::new(Default::default);
+        LOCKS.lock().unwrap().entry(dest.clone()).or_default().clone()
+    };
+    let _held = lock.lock().await;
 
     on_progress("ffmpeg", 0.05, "正在检查视频工具…");
     let ffmpeg = ensure_ffmpeg(data, &cancel, |got, total| {
@@ -970,8 +979,12 @@ fn decode_png_base64(raw: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| anyhow!("PNG 解码失败：{e}")) // i18n-ignore
 }
 
-fn default_mp4_path(name: &str) -> Result<PathBuf> {
-    let dir = dirs::download_dir().or_else(dirs::desktop_dir).ok_or_else(|| anyhow!("找不到下载文件夹"))?;
+/// A free `<name>.mp4` in `dir` (the folder set in Settings), or else the Downloads folder.
+fn default_mp4_path(name: &str, dir: Option<&str>) -> Result<PathBuf> {
+    let dir = match dir.map(str::trim).filter(|d| !d.is_empty()).map(PathBuf::from).filter(|d| d.is_dir()) {
+        Some(d) => d,
+        None => dirs::download_dir().or_else(dirs::desktop_dir).ok_or_else(|| anyhow!("找不到下载文件夹"))?,
+    };
     let safe: String = name.chars().filter(|c| !"/\\:*?\"<>|\0".contains(*c)).take(80).collect();
     let safe = safe.trim();
     let base = if safe.is_empty() { "SubCast 切片" } else { safe }; // i18n-ignore
@@ -1008,7 +1021,7 @@ pub async fn render_clip(
 
     let final_out = match req.output_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(p) => PathBuf::from(p),
-        None => default_mp4_path(&req.default_name)?,
+        None => default_mp4_path(&req.default_name, req.output_dir.as_deref())?,
     };
     if let Some(parent) = final_out.parent() { tokio::fs::create_dir_all(parent).await?; }
 
@@ -1308,7 +1321,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             .unwrap();
         assert!(mk.status.success(), "generate test source failed");
 
-        let req_flash = RenderRequest { frame: None,
+        let req_flash = RenderRequest { frame: None, output_dir: None,
             raw_path: src.to_string_lossy().into_owned(),
             output_path: Some(out.to_string_lossy().into_owned()),
             default_name: "smoke".into(),
@@ -1341,7 +1354,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
         assert!(best < frames.len());
 
         let out_hold = data.join("out-hold.mp4");
-        let req_hold = RenderRequest { frame: None,
+        let req_hold = RenderRequest { frame: None, output_dir: None,
             raw_path: src.to_string_lossy().into_owned(),
             output_path: Some(out_hold.to_string_lossy().into_owned()),
             default_name: "smoke-hold".into(),
@@ -1401,6 +1414,7 @@ mod render_live {
         let out = std::env::temp_dir().join("subcast-render-test.mp4");
         let _ = std::fs::remove_file(&out);
         let req = RenderRequest {
+            output_dir: None,
             frame: Some(Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: true }),
             raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
             layout: "frame".into(), card_bg: "blur".into(), crop_x: 0.7, duration: 105.16,

@@ -70,6 +70,7 @@ interface State {
   /** Which tab the add dialog opens on. */
   addTab?: "search" | "link" | "import";
   toast: string | null;
+  toastAction: { label: string; run: () => void } | null;
   /** The settings page is showing (kept in step with `view`, for panels that recheck keys when it closes). */
   settingsOpen: boolean;
   settingsSection?: SettingsSection;
@@ -88,7 +89,8 @@ interface State {
   openEpisode(ep: Episode): void;
   /** Loads an episode into the player without navigating. */
   load(ep: Episode): void;
-  notify(text: string): void;
+  /** A short message at the bottom; `action` adds a button (kept on screen longer). */
+  notify(text: string, action?: { label: string; run: () => void }): void;
   openSettings(section?: SettingsSection): void;
   /** Checks every subscription for new episodes; tells the user when there are some. */
   checkUpdates(): Promise<void>;
@@ -122,6 +124,7 @@ export const useStore = create<State>((set, get) => ({
   playing: false,
   player: null,
   toast: null,
+  toastAction: null,
   settingsOpen: false,
   addOpen: false,
   manageOpen: false,
@@ -192,10 +195,10 @@ export const useStore = create<State>((set, get) => ({
     // Keep a player that already belongs to this episode (a video ready before "play" was pressed).
     if (get().current?.id !== ep.id) { const p = get().player; set({ current: ep, time: ep.progress || 0, rawTime: undefined, align: null, gapEnd: null, length: ep.duration || 0, playing: false, player: p?.episodeId === ep.id ? p : standby.get(ep.id) ?? null }); }
   },
-  notify(text) {
-    set({ toast: text });
+  notify(text, action) {
+    set({ toast: text, toastAction: action ?? null });
     window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => set({ toast: null }), 4200);
+    toastTimer = window.setTimeout(() => set({ toast: null, toastAction: null }), action ? 8000 : 4200);
   },
   openSettings(section) {
     set((s) => ({ settingsSection: section, settingsNonce: (s.settingsNonce ?? 0) + 1 }));

@@ -10,6 +10,7 @@
     "core:event:default",
     "opener:default",
     "dialog:allow-save",
+    "dialog:allow-open",
     "allow-add-subscription",
     "allow-refresh-show",
     "allow-refresh-all",

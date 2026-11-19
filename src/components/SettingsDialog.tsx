@@ -1,3 +1,4 @@
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { sizeMb } from "../lib/format";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
@@ -320,6 +321,26 @@ function UpdateStatus() {
 
 const REPO = "https://github.com/joeseesun/subcast";
 /** "占用 1.9 GB" for the 通用 page's storage row. */
+/** Where highlight clips are saved: the Downloads folder unless the user picks another. */
+function ClipExportRow() {
+  const { dir, saveSettings } = useStore(useShallow((s) => ({ dir: s.settings.clipExportDir ?? "", saveSettings: s.saveSettings })));
+  const pick = async () => {
+    const chosen = await openDialog({ directory: true, multiple: false, defaultPath: dir || undefined });
+    if (typeof chosen === "string" && chosen) void saveSettings({ clipExportDir: chosen });
+  };
+  return (
+    <div className="storage-row">
+      <div className="storage-row-text">
+        <p className="storage-row-name">{t("高光剪辑导出到")}</p>
+        <p className="muted small clamp1" title={dir || undefined}>{dir || t("「下载」文件夹")}</p>
+      </div>
+      <button className="btn sm" onClick={() => void pick()}><FolderOpen size={13} /> {t("选择文件夹")}</button>
+      {dir && <button className="btn ghost sm" onClick={() => void api.revealFile(dir).catch(() => {})}>{t("打开")}</button>}
+      {dir && <button className="btn ghost sm" onClick={() => void saveSettings({ clipExportDir: "" })}>{t("恢复默认")}</button>}
+    </div>
+  );
+}
+
 function StorageTotal() {
   const [total, setTotal] = useState<number | null>(null);
   useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp + (i.audioCache ?? 0) + (i.ttsCache ?? 0) + (i.ttsModels ?? 0))).catch(() => {}); }, []);
@@ -351,6 +372,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
           {n > 0 && <button className="btn ghost sm" onClick={() => go({ kind: "downloads" })}>{t("查看")}</button>}
           {n > 0 && <button className="icon-btn" title={t("全部删除")} onClick={clearAll}><Trash2 size={14} /></button>}
         </div>
+        <ClipExportRow />
         <div className="storage-row">
           <div className="storage-row-text">
             <p className="storage-row-name">{t("语音识别模型")}</p>

@@ -307,6 +307,12 @@ export function Modal({ title, onClose, children, wide, head }: { title: string;
 }
 
 export function Toast() {
-  const toast = useStore((s) => s.toast);
-  return toast ? <div className="toast" role="status">{toast}</div> : null;
+  const { toast, action } = useStore(useShallow((s) => ({ toast: s.toast, action: s.toastAction })));
+  if (!toast) return null;
+  return (
+    <div className={`toast${action ? " has-action" : ""}`} role="status">
+      <span>{toast}</span>
+      {action && <button type="button" className="toast-action" onClick={() => { action.run(); useStore.setState({ toast: null, toastAction: null }); }}>{action.label}</button>}
+    </div>
+  );
 }

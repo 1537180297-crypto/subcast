@@ -195,8 +195,23 @@ pub async fn fetch_section(
     cancel: Arc<AtomicBool>,
     mut on_progress: impl FnMut(f64, &str),
 ) -> Result<()> {
-    on_progress(0.0, "正在解析视频地址…");
-    let pair = resolve(ytdlp, video_id, 1080).await?;
+    // Resolving can take ~30 s the first time: the bar keeps creeping (a slowing curve) instead of sitting at 0.
+    let pair = {
+        let fut = resolve(ytdlp, video_id, 1080);
+        tokio::pin!(fut);
+        let started = std::time::Instant::now();
+        loop {
+            tokio::select! {
+                r = &mut fut => break r?,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {
+                    let t = started.elapsed().as_secs_f64();
+                    on_progress(0.3 * (1.0 - (-t / 14.0).exp()), "第一次剪这个视频，正在解析视频地址…");
+                }
+            }
+        }
+    };
+    // Stages: resolve 0–30%, download 30–88%, exact cut 90%.
+    let base = 0.3;
     let work = data.join("work").join(format!("fast-{}", uuid::Uuid::new_v4().simple()));
     tokio::fs::create_dir_all(&work).await?;
     let res = async {
@@ -214,13 +229,13 @@ pub async fn fetch_section(
         let report = async {
             while !done.load(Ordering::Relaxed) {
                 let (g, t) = (got.load(Ordering::Relaxed), total.load(Ordering::Relaxed).max(1));
-                on_progress((g as f64 / t as f64).min(1.0) * 0.75, "正在下载这一段画面…");
+                on_progress(base + (g as f64 / t as f64).min(1.0) * (0.88 - base), "正在下载这一段画面…");
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
         };
         let (fetched, ()) = tokio::join!(fetch, report);
         let (v0, a0) = fetched?;
-        on_progress(0.78, "正在剪出精确片段…");
+        on_progress(0.9, "正在剪出精确片段…");
         crate::videoclip::encode_exact(ffmpeg, &vp, start - v0, &ap, start - a0, end - start, dest, &cancel).await
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;

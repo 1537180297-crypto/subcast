@@ -567,12 +567,18 @@ fn video_clip_env(state: State<'_, AppState>) -> videoclip::FfmpegStatus {
 
 /// Resolves a video's download addresses in the background (and readies ffmpeg), so a clip starts downloading at once.
 #[tauri::command]
-fn video_clip_warm(state: State<'_, AppState>, video_id: String) {
+fn video_clip_warm(state: State<'_, AppState>, video_id: String, ranges: Option<Vec<(f64, f64)>>) {
     let data = state.data.clone();
     tauri::async_runtime::spawn(async move {
         let d2 = data.clone();
         let never = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let _ = tokio::join!(fastclip::warm(&data, &video_id), videoclip::ensure_ffmpeg(&d2, &never, |_, _| {}));
+        let (warmed, ff) = tokio::join!(fastclip::warm(&data, &video_id), videoclip::ensure_ffmpeg(&d2, &never, |_, _| {}));
+        // Then the likeliest clips (the best few), one by one, so opening them shows the real cut at once.
+        if warmed.is_ok() && ff.is_ok() {
+            for (a, b) in ranges.unwrap_or_default().into_iter().take(3) {
+                let _ = videoclip::prepare_segment(&data, &video_id, a, b, never.clone(), |_, _, _| {}).await;
+            }
+        }
     });
 }
 

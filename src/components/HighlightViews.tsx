@@ -40,9 +40,13 @@ export function HighlightsPanel({
     void loadHighlights(ep.id);
   }, [ep.id]);
   // Resolving the video's addresses takes ~30 s: done now, cutting a clip later only downloads its stretch.
+  // The best two clips are fetched too, with the exact range the clip dialog will ask for (0.25 s before,
+  // 0.4 s after), so opening them plays the real cut at once.
+  const topRanges = useMemo(() => [...(bundle?.clips ?? [])].sort((a, b) => b.score - a.score).slice(0, 2)
+    .map((c) => [Math.max(0, (segments[c.startIdx]?.start ?? c.start) - 0.25), (segments[c.endIdx]?.end ?? c.end) + 0.4] as [number, number]), [bundle, segments]);
   useEffect(() => {
-    if (ep.videoId) void api.videoClipWarm(ep.videoId).catch(() => {});
-  }, [ep.videoId]);
+    if (ep.videoId) void api.videoClipWarm(ep.videoId, topRanges).catch(() => {});
+  }, [ep.videoId, topRanges.map((r) => r.join("-")).join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
   const [copying, setCopying] = useState<string | null>(null);
   // Picking clips for one montage (several stretches cut together, in time order).
   const [picking, setPicking] = useState(false);
