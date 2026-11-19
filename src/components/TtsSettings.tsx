@@ -61,6 +61,14 @@ export function useSystemVoices(enabled: boolean): SystemVoice[] {
   return voices;
 }
 
+/** The AI-model key each service falls back to when it has none of its own (mirrors speech.rs resolve_key). */
+const SHARED_KEY: Record<string, { account: string; name: string }> = {
+  deepseek: { account: "deepseek", name: "DeepSeek" },
+  mimo: { account: "mimo", name: tk("小米 MiMo") },
+  qwen: { account: "qwen-cn", name: tk("通义千问（百炼）") },
+  openai: { account: "openai", name: "OpenAI" },
+};
+
 function CloudTtsEditor({
   svc,
   onChange,
@@ -145,6 +153,7 @@ function CloudTtsEditor({
           </div>
           <KeyField
             account={`tts.${svc.id}`}
+            shared={SHARED_KEY[svc.id]}
             placeholder={
               svc.sharedKeyHint
                 ? t(svc.sharedKeyHint)
@@ -176,7 +185,7 @@ function CloudTtsEditor({
                   placeholder="https://…/v1"
                 />
               </label>
-              {svc.protocol !== "doubao" && (
+              {svc.protocol !== "doubao" && svc.protocol !== "deepseek" && (
                 <>
                   <label>
                     <span>{t("模型")}</span>
@@ -457,7 +466,7 @@ export function TtsSettings() {
             <Cloud size={18} />
             <div>
               <p>{t("云端服务")}</p>
-              <p className="muted small">{t("豆包、MiMo、通义、Edge（免 Key）等")}</p>
+              <p className="muted small">{t("豆包、DeepSeek、MiMo、Edge（免 Key）等")}</p>
             </div>
           </button>
         </div>

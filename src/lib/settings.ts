@@ -213,7 +213,7 @@ export const VOICES: [string, string][] = [
 ];
 
 /** Cloud TTS services shown upfront; the rest sit behind 「更多」. */
-export const TTS_CLOUD_MAIN = ["doubao", "mimo", "qwen", "openai", "edge"];
+export const TTS_CLOUD_MAIN = ["doubao", "deepseek", "mimo", "qwen", "openai", "edge"];
 
 const v = (list: [string, string][]): TtsVoice[] => list.map(([id, name]) => ({ id, name }));
 
@@ -248,6 +248,17 @@ export const TTS_SERVICES: TtsService[] = [
     voices: v(VOICES),
   },
   {
+    id: "deepseek", name: "DeepSeek", note: tk("两种音色，中英文都能读，与 AI 模型共用 Key"), group: "cloud",
+    protocol: "deepseek", baseUrl: "https://api.deepseek.com", model: "", models: [],
+    keyUrl: "https://platform.deepseek.com/api_keys",
+    needsKey: true, sharedKeyHint: tk("填过「AI 模型」里的 DeepSeek 可以留空"),
+    voice: "stella",
+    voices: v([
+      ["stella", tk("Stella（女声）")],
+      ["tide", tk("Tide（男声）")],
+    ]),
+  },
+  {
     id: "mimo", name: tk("小米 MiMo"), note: tk("自然播客语调，与 AI 模型共用 Key"), group: "cloud",
     protocol: "mimo", baseUrl: "https://api.xiaomimimo.com/v1",
     model: "mimo-v2.5-tts", models: ["mimo-v2.5-tts"],
@@ -257,10 +268,10 @@ export const TTS_SERVICES: TtsService[] = [
     // mimo-v2.5-tts's built-in voices (the old v2 ids default_zh / default_en are rejected with HTTP 400).
     voices: v([
       ["mimo_default", tk("默认")],
-      ["冰糖", tk("冰糖")],
-      ["茉莉", tk("茉莉")],
-      ["苏打", tk("苏打")],
-      ["白桦", tk("白桦")],
+      ["冰糖", tk("冰糖")], // i18n-ignore (API voice id)
+      ["茉莉", tk("茉莉")], // i18n-ignore (API voice id)
+      ["苏打", tk("苏打")], // i18n-ignore (API voice id)
+      ["白桦", tk("白桦")], // i18n-ignore (API voice id)
       ["Mia", "Mia"],
       ["Chloe", "Chloe"],
       ["Milo", "Milo"],

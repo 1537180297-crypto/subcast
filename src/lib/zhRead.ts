@@ -61,7 +61,7 @@ export async function startZhRead(epId: string, items: (string | null | undefine
       if (k >= lines.length) return;
       if (!fetched.has(k)) {
         const rate = useStore.getState().settings.ttsRate || 1;
-        const p = synthesizeText(items[lines[k]]!.trim(), { rate }).then((r) => ({ ...r, rate }));
+        const p = synthesizeText(items[lines[k]]!.trim(), { rate });
         p.catch(() => {}); // awaited (and reported) when its turn comes
         fetched.set(k, p);
       }

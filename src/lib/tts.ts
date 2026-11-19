@@ -47,6 +47,9 @@ export function chunks(text: string, max = 800): string[] {
   return out.filter(Boolean);
 }
 
+/** Services with no speed setting: they synthesise at 1× and playback is sped up instead. */
+const NO_NATIVE_SPEED = new Set<string>(["deepseek"]);
+
 export function buildTtsRequest(
   s: Settings,
   text: string,
@@ -54,7 +57,8 @@ export function buildTtsRequest(
 ): TtsRequest {
   const svc = (opts?.engine ? s.ttsServices[opts.engine] : undefined) ?? currentTtsService(s);
   const voice = opts?.voice ?? svc.voice;
-  const rate = opts?.rate ?? s.ttsRate ?? 1;
+  const wanted = opts?.rate ?? s.ttsRate ?? 1;
+  const rate = NO_NATIVE_SPEED.has(svc.protocol) ? 1 : wanted;
   return {
     engine: svc.id,
     protocol: svc.protocol,
@@ -71,10 +75,12 @@ export function buildTtsRequest(
 export async function synthesizeText(
   text: string,
   opts?: { engine?: string; voice?: string; rate?: number },
-): Promise<{ url: string; path: string; seconds: number }> {
-  const req = buildTtsRequest(useStore.getState().settings, text, opts);
+): Promise<{ url: string; path: string; seconds: number; rate: number }> {
+  const s = useStore.getState().settings;
+  const req = buildTtsRequest(s, text, opts);
   const res = await api.ttsSynthesize(req);
-  return { url: convertFileSrc(res.path), path: res.path, seconds: res.seconds };
+  // `rate`: the speed the audio was made at (1 for services without a speed setting); playback makes up the rest.
+  return { url: convertFileSrc(res.path), path: res.path, seconds: res.seconds, rate: req.rate ?? 1 };
 }
 
 export function stopSpeaking() {
@@ -129,7 +135,7 @@ export async function speak(text: string, onError?: (m: string) => void) {
     const fetchPart = (i: number) => {
       if (i >= parts.length) return Promise.resolve(null);
       const rate = useStore.getState().settings.ttsRate || 1;
-      return synthesizeText(parts[i], { rate }).then((r) => ({ ...r, rate }));
+      return synthesizeText(parts[i], { rate });
     };
     let next = fetchPart(0);
     for (let i = 0; i < parts.length; i++) {
@@ -172,7 +178,7 @@ export async function previewVoice(engineId: string, voiceId: string, onError?: 
     }
     const res = await synthesizeText(sampleLine(voiceId), { engine: engineId, voice: voiceId });
     if (id !== session) return;
-    await playUrl(res.url);
+    await playUrl(res.url, res.rate);
   } catch (e) {
     if (id === session) onError?.(String((e as any)?.message ?? e));
   } finally {
@@ -306,6 +312,7 @@ function englishVoiceFor(svc: TtsService): string {
     case "edge": return svc.voice.toLowerCase().startsWith("en-") ? svc.voice : "en-US-AndrewMultilingualNeural";
     case "doubao": return svc.voice.toLowerCase().startsWith("en_") ? svc.voice : "en_male_tim_uranus_bigtts";
     case "mimo": return /^mimo-v2-tts$/.test(svc.model.trim()) ? "default_en" : ["Mia", "Chloe", "Milo", "Dean"].includes(svc.voice) ? svc.voice : "Mia";
+    case "deepseek": return svc.voice || "stella"; // detects the language from the text
     default: return svc.voice;
   }
 }
@@ -329,6 +336,7 @@ export async function speakWord(text: string, rate = 0.9): Promise<void> {
     const res = await synthesizeText(text, { voice: englishVoiceFor(svc), rate });
     if (id !== wordSession) return;
     const el = new Audio(res.url);
+    el.playbackRate = Math.min(2, Math.max(0.5, rate / res.rate));
     wordAudio = el;
     await new Promise<void>((resolve, reject) => {
       el.onended = () => resolve();
