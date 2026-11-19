@@ -108,6 +108,9 @@ function SubtitleLine({ ep }: { ep: Episode }) {
   const mode = useStore((s) => s.settings.subtitleMode);
   const drag = useRef<{ y: number; lift: number; h: number; moved: boolean } | null>(null);
   const [dragging, setDragging] = useState(false);
+  // A click plays or pauses a moment later, so a double-click (back to the usual place) doesn't do both.
+  const click = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(click.current), []);
   if (!transcript) return null;
   const i = activeIndex(transcript.segments, time);
   const seg = transcript.segments[i];
@@ -133,11 +136,11 @@ function SubtitleLine({ ep }: { ep: Episode }) {
     const d = drag.current;
     drag.current = null;
     setDragging(false);
-    if (d && !d.moved) useStore.getState().player?.toggle();
+    if (d && !d.moved) { window.clearTimeout(click.current); click.current = window.setTimeout(() => useStore.getState().player?.toggle(), 260); }
   };
   return (
     <div className="subtitle-overlay">
-      <div className={`sub-box ${dragging ? "dragging" : ""}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onDoubleClick={() => setSubLift(0)}>
+      <div className={`sub-box ${dragging ? "dragging" : ""}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onDoubleClick={(e) => { e.stopPropagation(); window.clearTimeout(click.current); setSubLift(0); }}>
         {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
         {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
       </div>
