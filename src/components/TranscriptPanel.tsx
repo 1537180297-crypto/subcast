@@ -1,8 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AudioLines, BookA, Check, ChevronDown, Square, Volume2, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, RefreshCw, Search, X } from "lucide-react";
+import { AudioLines, BookA, Check, ChevronDown, Play, Scissors, Sparkles, Square, Volume2, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, RefreshCw, Search, X } from "lucide-react";
 import { AlignBar, anchorHere } from "./AlignBar";
 import { Modal } from "./Chrome";
 import { ReadAloudSettings } from "./ReadAloud";
@@ -22,6 +22,9 @@ import { lang, t, tk, tr, useLang } from "../lib/i18n";
 import { looksEnglish } from "../lib/dict";
 import { EpisodeWords, LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget, type LearnMarks } from "./Learn";
 import { ShadowBar, useShadowing } from "./Shadowing";
+import { loadHighlights, previewEpisodeRange, useHighlights, type HighlightClip } from "../lib/highlights";
+import { HighlightsPanel } from "./HighlightViews";
+import { openVideoClipDialog } from "./VideoClipDialog";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
 
@@ -54,12 +57,12 @@ function onLineClick(e: React.MouseEvent, seek: () => void) {
   lineClick = window.setTimeout(() => { if (!window.getSelection()?.toString().trim()) seek(); }, 260);
 }
 
-const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks, reading }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number, i: number) => void; query: string; current: boolean; marks: LearnMarks | null; reading?: boolean }) {
+const Row = memo(function Row({ seg, i, zh, active, mode, pending, onSeek, query, current, marks, reading, hlClass }: { seg: Segment; i: number; zh?: string | null; active: boolean; mode: string; pending: boolean; onSeek: (t: number, i: number) => void; query: string; current: boolean; marks: LearnMarks | null; reading?: boolean; hlClass?: string }) {
   const showZh = mode !== "original";
   // "中文" means Chinese only, learning mode or not; a line not translated yet shows its original meanwhile.
   const showOrig = mode !== "translation" || (!zh && !pending);
   return (
-    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""} ${reading ? "zh-reading" : ""}`} data-i={i} data-active={active || undefined} data-reading={reading || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start, i))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start, i)}>
+    <div className={`line ${active ? "active" : ""} ${current ? "hit" : ""} ${reading ? "zh-reading" : ""} ${hlClass ?? ""}`} data-i={i} data-active={active || undefined} data-reading={reading || undefined} data-hit={current || undefined} role="button" tabIndex={0} onPointerDown={onLinePointerDown} onClick={(e) => onLineClick(e, () => onSeek(seg.start, i))} onKeyDown={(e) => e.key === "Enter" && onSeek(seg.start, i)}>
       <span className="line-time">{clock(seg.start)}</span>
       <div className="line-text">
         {showZh && (zh ? <p className="zh">{highlight(zh, query)}</p> : pending ? <span className="skeleton" /> : null)}
@@ -124,6 +127,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [hit, setHit] = useState(0);
+  const [showHighlights, setShowHighlights] = useState(false);
+  const hlBundle = useHighlights((s) => s.bundles[ep.id]);
+  const hlLoading = useHighlights((s) => !!s.loading[ep.id]);
   const [startError, setStartError] = useState<string | null>(null);
   const [canUpgrade, setCanUpgrade] = useState(false);
   const segments = transcript?.segments ?? NO_SEGMENTS;
@@ -210,10 +216,24 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
 
   // ⌘F searches the transcript; Enter / ⇧Enter step through matches.
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") { e.preventDefault(); setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); } };
+    const k = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") { e.preventDefault(); setShowHighlights(false); setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); } };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, []);
+
+  useEffect(() => { setShowHighlights(false); void loadHighlights(ep.id); }, [ep.id]);
+
+  const hlMap = useMemo(() => {
+    const starts = new Map<number, HighlightClip>();
+    const inside = new Set<number>();
+    const ends = new Set<number>();
+    for (const c of hlBundle?.clips ?? []) {
+      starts.set(c.startIdx, c);
+      ends.add(c.endIdx);
+      for (let i = c.startIdx; i <= c.endIdx; i++) inside.add(i);
+    }
+    return { starts, inside, ends };
+  }, [hlBundle]);
 
   const matches = useMemo(() => {
     if (!query) return null;
@@ -255,7 +275,20 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       </div>
     )}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
-    <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
+    {total > 0 && (
+      <button
+        type="button"
+        className={`hl-toggle ${showHighlights ? "on" : ""} ${hlBundle?.clips.length ? "has" : ""}`}
+        title={t("高光金句片段")}
+        aria-pressed={showHighlights}
+        onClick={() => { setShowHighlights((v) => !v); if (!showHighlights) setSearching(false); }}
+      >
+        {hlLoading ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
+        <span>{t("高光")}</span>
+        {hlBundle?.clips.length ? <span className="hl-badge">{hlBundle.clips.length}</span> : null}
+      </button>
+    )}
+    <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setShowHighlights(false); setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
     {total > 0 && <PanelMenu ep={ep} segments={segments} zh={translation?.items} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, shadow, setShadow, canShadow: isCurrent } : undefined} onAlign={canAlign ? () => setAligning(true) : undefined} />}
   </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
@@ -288,11 +321,47 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       {shadow && isCurrent && (
         <ShadowBar onExit={() => setShadow(false)} />
       )}
+      {showHighlights && !searching ? (
+        <HighlightsPanel
+          ep={ep}
+          segments={segments}
+          zh={translation?.items}
+          onJumpToTranscript={(idx, start) => {
+            setShowHighlights(false);
+            seek(start);
+            window.setTimeout(() => list.current?.querySelector<HTMLElement>(`[data-i="${idx}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }), 50);
+          }}
+        />
+      ) : (
       <div className={`lines${marks && settings.learnCard ? " learning" : ""}`} ref={list} onWheel={() => (userScrolled.current = Date.now())} onClickCapture={onWordClick}>
         {english && <LearnTip />}
-        {rows.map((i, k) => (
-          <Row key={i} i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={aligning && canAlign ? anchorHere : (readingHere || (mode === "translation" && done > 0)) ? readAt : seek} query={query} current={!!matches && k === hit} marks={marks} reading={i === readIndex} />
-        ))}
+        {rows.map((i, k) => {
+          const hlStart = !matches ? hlMap.starts.get(i) : undefined;
+          const hlClass = !matches && hlMap.inside.has(i)
+            ? `hl-in${hlStart ? " hl-start" : ""}${hlMap.ends.has(i) ? " hl-end" : ""}`
+            : undefined;
+          return (
+            <Fragment key={i}>
+              {hlStart && (
+                <div className="hl-head">
+                  <span className="hl-score">✦ {hlStart.score}</span>
+                  <span className="hl-head-title clamp1">{hlStart.title}</span>
+                  <span className="num small muted">{Math.round(hlStart.end - hlStart.start)}s</span>
+                  <span className="spacer" />
+                  <button type="button" className="link-btn" onClick={() => previewEpisodeRange(ep, hlStart.start, hlStart.end)}>
+                    <Play size={11} fill="currentColor" /> {t("试看")}
+                  </button>
+                  {ep.videoId && (
+                    <button type="button" className="link-btn hl-clip-btn" onClick={() => openVideoClipDialog({ ep, segments, zh: translation?.items, clip: hlStart })}>
+                      <Scissors size={11} /> {t("剪视频")}
+                    </button>
+                  )}
+                </div>
+              )}
+              <Row i={i} seg={segments[i]} zh={translation?.items[i]} active={i === active} mode={mode} pending={pending} onSeek={aligning && canAlign ? anchorHere : (readingHere || (mode === "translation" && done > 0)) ? readAt : seek} query={query} current={!!matches && k === hit} marks={marks} reading={i === readIndex} hlClass={hlClass} />
+            </Fragment>
+          );
+        })}
         {card && <WordCard target={card} ep={ep} onClose={closeCard} />}
         {!matches && total > 0 && (
           <div className={`lines-end ${active === total - 1 ? "reached" : ""}`}>
@@ -301,6 +370,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

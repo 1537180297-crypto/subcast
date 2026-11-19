@@ -12,6 +12,8 @@ import { providerFor, seekSoon, useStore } from "../store";
 import { Markdown } from "./Markdown";
 import { AnswerActions, HistoryMenu, QuestionActions, type ArchivedChat } from "./ChatActions";
 import { AskArt, NightNote, PageArt, PlugArt } from "./Illustrations";
+import { createManualClip, rangeFromClock } from "../lib/highlights";
+import { openVideoClipDialog } from "./VideoClipDialog";
 
 /** Whether a model is connected for Q&A; re-checked whenever settings change or the settings window closes. */
 function useConnected() {
@@ -90,6 +92,15 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   useEffect(() => { warmAgent(providerFor(useStore.getState().settings, "chat")); }, [chatProvider]);
   const settings = useStore((s) => s.settings);
   const seek = useSeek(ep);
+  const translation = useJobs((s) => s.translations[ep.id]);
+  const clipRange = useMemo(() => {
+    if (!ep.videoId || !transcript?.segments.length) return undefined;
+    return (start: number, end?: number) => {
+      const { startIdx, endIdx } = rangeFromClock(transcript.segments, start, end);
+      const clip = createManualClip(transcript.segments, translation?.items, startIdx, endIdx, ep);
+      openVideoClipDialog({ ep, segments: transcript.segments, zh: translation?.items, clip });
+    };
+  }, [ep, transcript, translation?.items]);
   const messages = useChats((s) => s[ep.id]?.messages ?? NO_MESSAGES);
   const streaming = useChats((s) => s[ep.id]?.streaming ?? null);
   const [input, setInput] = useState("");
@@ -215,13 +226,13 @@ export function ChatPanel({ ep }: { ep: Episode }) {
           </div>
         ) : (
           <div key={i} className={`msg-wrap assistant ${i === messages.length - 1 ? "last" : ""}`}>
-            <div className="msg assistant"><Markdown text={m.content} onSeek={seek} /></div>
+            <div className="msg assistant"><Markdown text={m.content} onSeek={seek} onClip={clipRange} /></div>
             {streaming == null && <AnswerActions text={m.content} ep={ep} model={m.model} onRetry={i === messages.length - 1 && !blocked ? retry : undefined} onDelete={() => removePair(i)} />}
           </div>
         ))}
         {streaming != null && (
           <div className="msg assistant">
-            {streaming ? <Markdown text={streaming} onSeek={seek} /> : <p className="muted"><Loader2 size={14} className="spin" /> {t("正在阅读文字稿…")}</p>}
+            {streaming ? <Markdown text={streaming} onSeek={seek} onClip={clipRange} /> : <p className="muted"><Loader2 size={14} className="spin" /> {t("正在阅读文字稿…")}</p>}
           </div>
         )}
         {setupError && (
@@ -264,8 +275,17 @@ const putGuide = (id: string, p: Partial<GuideJob>) => useGuides.setState((s) =>
 
 export function SummaryPanel({ ep }: { ep: Episode }) {
   const { transcript, provider, context, check } = useReady(ep);
+  const translation = useJobs((s) => s.translations[ep.id]);
   const connected = useConnected();
   const seek = useSeek(ep);
+  const clipRange = useMemo(() => {
+    if (!ep.videoId || !transcript?.segments.length) return undefined;
+    return (start: number, end?: number) => {
+      const { startIdx, endIdx } = rangeFromClock(transcript.segments, start, end);
+      const clip = createManualClip(transcript.segments, translation?.items, startIdx, endIdx, ep);
+      openVideoClipDialog({ ep, segments: transcript.segments, zh: translation?.items, clip });
+    };
+  }, [ep, transcript, translation?.items]);
   const job = useGuides((s) => s[ep.id]);
   const summary = job?.summary ?? null;
   const streaming = job?.streaming ?? null;
@@ -332,7 +352,7 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
   }
   return (
     <div className="summary">
-      <Markdown text={text} onSeek={seek} />
+      <Markdown text={text} onSeek={seek} onClip={clipRange} />
       {streaming == null && (
         <div className="summary-foot">
           <span className="muted small">{job?.shared ? t("来自共享导读，没有花你的额度") : `${provider ? t(provider.name) : ""} · ${provider?.model ?? ""}`}</span>
