@@ -476,6 +476,8 @@ svg { transition: transform .16s var(--ease); }
 .search-drop { position: absolute; top: 44px; left: 0; right: 0; max-height: 440px; overflow-y: auto; padding: 6px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); z-index: 30; }
 .drop-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; }
 .drop-row:hover { background: var(--soft); }
+.drop-row.clickable { cursor: pointer; }
+.src-badge { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line); color: var(--text-2); font-size: 11px; font-weight: 600; line-height: 16px; vertical-align: 1px; }
 .drop-row > img, .drop-row > .cover-fallback { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; flex: none; }
 .drop-meta { flex: 1; min-width: 0; }
 .drop-meta .ep-name { font-size: 13.5px; -webkit-line-clamp: 1; }
