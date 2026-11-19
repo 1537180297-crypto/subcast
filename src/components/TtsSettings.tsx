@@ -223,7 +223,7 @@ export function TtsSettings() {
     <>
       <section className="setup-block">
         <p className="setup-title">{t("朗读引擎")}</p>
-        <p className="muted small">{t("用于精读、导读和字幕面板里的中文朗读。")}</p>
+        <p className="muted small">{t("用于精读和字幕中文翻译的朗读。")}</p>
         <div className="engine-switch tts-engine-switch">
           <button
             className={`engine ${active.id === "edge" ? "on" : ""}`}

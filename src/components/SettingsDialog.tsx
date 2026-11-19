@@ -394,7 +394,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
           <div className="storage-row">
             <div className="storage-row-text">
               <p className="storage-row-name">{t("朗读缓存")}</p>
-              <p className="muted small">{t("朗读精读、导读和中文译文生成的语音缓存；最多占 500 MB，久不用的先删")}</p>
+              <p className="muted small">{t("朗读精读和字幕中文翻译生成的语音缓存；最多占 500 MB，久不用的先删")}</p>
             </div>
             <span className="storage-size">{size(info.ttsCache)}</span>
             <button className="btn ghost sm" onClick={() => void api.openDataFolder("tts-cache")}><FolderOpen size={13} /> {t("打开文件夹")}</button>
