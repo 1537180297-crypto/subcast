@@ -10,7 +10,7 @@ import type { View } from "./store";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
 import { detectAgents } from "./lib/agents";
-import { useReadingSettings } from "./lib/reading";
+import { stepSubScale, useReadingSettings } from "./lib/reading";
 import { useRevealOnExpand } from "./lib/reveal";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
@@ -86,6 +86,8 @@ export default function App() {
         volumeDown: () => { useStore.getState().notify(t("音量 {n}%", { n: Math.round(stepVolume(-1) * 100) })); },
         fullscreen: () => toggleTheater(),
         subtitleMode: () => cycleMode(),
+        subBigger: () => stepSubScale(1),
+        subSmaller: () => stepSubScale(-1),
         toggleSidebar: () => { const l = useLayout.getState(); l.put({ sideOpen: !l.sideOpen }); },
         togglePanel: () => { const l = useLayout.getState(); l.put({ panelOpen: !l.panelOpen }); },
         search: () => { const box = document.querySelector<HTMLInputElement>(".top-search input"); if (!box) return false; box.focus(); box.select(); },

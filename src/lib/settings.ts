@@ -26,6 +26,10 @@ export interface Settings {
   subtitleSize?: "s" | "m" | "l" | "xl";
   subtitleFont?: "system" | "serif" | "kai" | "sans";
   subtitleLook?: "box" | "outline";
+  /** Subtitle size as a multiplier, set from the video's "Aa" (0.7–2); wins over `subtitleSize` when set. */
+  subtitleScale?: number;
+  /** How far video subtitles are moved up from their usual place, in % of the picture's height (dragged). */
+  subtitleLift?: number;
   chatSize?: "m" | "l";
   audioNextLine?: boolean;
   skipBack?: number;

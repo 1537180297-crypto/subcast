@@ -1492,7 +1492,7 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .theater-exit { color: #fff; }
 .video.theater.idle { cursor: none; }
 .video.theater.idle .theater-bar { opacity: 0; pointer-events: none; }
-.video.theater.idle .subtitle-overlay { bottom: 6vh; }
+.video.theater.idle .subtitle-overlay { bottom: calc(6vh + var(--sub-lift, 0cqh)); }
 @media (prefers-reduced-motion: reduce) { .theater-bar { transition: none; } }
 /* Settings › 快捷键 */
 .shortcuts { display: flex; flex-direction: column; gap: 16px; }
@@ -1686,14 +1686,14 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
    little larger than the original), so a small player, the floating window and full screen all keep the same
    proportions. `--sub-scale` (Settings › 阅读与字幕) multiplies it. */
 .video { container: vid / size; }
-.video .subtitle-overlay { bottom: 6cqh; gap: .6cqh; }
+.video .subtitle-overlay { bottom: calc(6cqh + var(--sub-lift, 0cqh)); gap: .6cqh; }
 .video .subtitle-overlay .sub-zh { font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); line-height: 1.38; }
 .video .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-scale, 1)); line-height: 1.38; }
 .video .subtitle-overlay p { padding: .25em .55em; border-radius: .3em; }
 .video.theater .subtitle-overlay .sub-zh { font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); }
 .video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-scale, 1)); }
-.video.theater .subtitle-overlay { bottom: 9cqh; left: 10%; right: 10%; }
-.video.theater:not(.idle) .subtitle-overlay { bottom: calc(9cqh + 56px); }
+.video.theater .subtitle-overlay { bottom: calc(9cqh + var(--sub-lift, 0cqh)); left: 10%; right: 10%; }
+.video.theater:not(.idle) .subtitle-overlay { bottom: calc(9cqh + var(--sub-lift, 0cqh) + 56px); }
 .settings-nav button { display: flex; align-items: center; gap: 9px; }
 .settings-nav button svg { flex: none; opacity: .75; }
 .settings-nav button.on svg { opacity: 1; color: var(--accent); }
@@ -2107,3 +2107,29 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .btn .kbd { margin-left: 4px; }
 /* Settings › 通用 › YouTube 账号 */
 .yt-account-state { flex: 1; color: var(--text-2); font-size: 13px; }
+
+/* ===================== subtitles on video: drag to move, "Aa" to adjust ===================== */
+.video .subtitle-overlay .sub-box { pointer-events: auto; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.video .subtitle-overlay .sub-box.dragging { cursor: grabbing; }
+.sub-tune { position: absolute; top: 10px; right: 10px; z-index: 7; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; opacity: 0; transition: opacity .2s var(--ease); }
+.video:hover .sub-tune, .sub-tune.open, .sub-tune:focus-within { opacity: 1; }
+.video.theater.idle .sub-tune:not(.open) { opacity: 0; pointer-events: none; }
+.video-dock.floating .sub-tune { display: none; }
+.sub-tune-btn { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; backdrop-filter: blur(6px); }
+.sub-tune-btn:hover, .sub-tune.open .sub-tune-btn { background: rgba(0,0,0,.75); }
+.sub-tune-pop { width: 280px; max-height: calc(100cqh - 62px); overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); box-shadow: 0 10px 28px rgba(0,0,0,.24); font-size: 13px; cursor: default; }
+.sub-tune-row { display: flex; align-items: center; gap: 10px; }
+.sub-tune-row > span:first-child { flex: none; width: 36px; color: var(--text-2); }
+.sub-tune-row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent, currentColor); }
+.sub-tune-val { width: 40px; text-align: right; color: var(--text-2); }
+.sub-tune-hint { margin: 0; font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.sub-tune-foot { display: flex; justify-content: space-between; gap: 8px; }
+.sub-tune-foot .link-btn:disabled { opacity: .45; cursor: default; }
+.sub-export { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.sub-export .reading-row { display: flex; align-items: center; justify-content: flex-start; gap: 12px; }
+.sub-export .reading-row > span:first-child { flex: none; width: 40px; color: var(--text-2); font-size: 13px; }
+.sub-export .seg-control { flex-wrap: wrap; }
+.sub-export p { margin: 0; }
+.sub-export-preview { margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; border-radius: 8px; background: var(--soft); color: var(--text); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.sub-export .row-actions { justify-content: flex-end; }
+.modal:has(.sub-export) { width: min(660px, calc(100vw - 32px)); }

@@ -2,9 +2,10 @@ import { useShallow } from "zustand/react/shallow";
 import { SkeletonLines } from "./Skeleton";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AudioLines, BookA, Check, ChevronDown, Ellipsis, Languages, ListChecks, Loader2, Mic, PenLine, RefreshCw, Search, X } from "lucide-react";
+import { AudioLines, BookA, Check, ChevronDown, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, PenLine, RefreshCw, Search, X } from "lucide-react";
 import { AlignBar, anchorHere } from "./AlignBar";
 import { Modal } from "./Chrome";
+import { SubtitleExport } from "./SubtitleExport";
 import type { EpisodeContext } from "../lib/ai";
 import { CassetteArt, FlatLineArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { bytes } from "../lib/offline";
@@ -219,7 +220,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const searchBtn = <>
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
-    {((wantsZh && canUpgrade) || learning || canAlign) && <PanelMenu ep={ep} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, active, shadow, setShadow, canShadow: isCurrent } : undefined} onAlign={canAlign ? () => setAligning(true) : undefined} />}
+    {total > 0 && <PanelMenu ep={ep} segments={segments} zh={translation?.items} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, active, shadow, setShadow, canShadow: isCurrent } : undefined} onAlign={canAlign ? () => setAligning(true) : undefined} />}
   </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
 
@@ -268,11 +269,12 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   );
 }
 
-/** "…" on the subtitle bar: the rarer tools (本集术语表, retranslating with the model). */
+/** "…" on the subtitle bar: the rarer tools (本集术语表, retranslating with the model, exporting). */
 interface LearnMenu { segments: Segment[]; zh: (string | null | undefined)[] | undefined; active: number; shadow: boolean; setShadow: (v: boolean) => void; canShadow: boolean }
 
-function PanelMenu({ ep, onRetranslate, learn, onAlign }: { ep: Episode; onRetranslate?: () => void; learn?: LearnMenu; onAlign?: () => void }) {
+function PanelMenu({ ep, segments, zh, onRetranslate, learn, onAlign }: { ep: Episode; segments: Segment[]; zh: (string | null | undefined)[] | undefined; onRetranslate?: () => void; learn?: LearnMenu; onAlign?: () => void }) {
   const [menu, setMenu] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [gloss, setGloss] = useState(false);
   const [words, setWords] = useState(false);
   const [dictation, setDictation] = useState(false);
@@ -300,8 +302,11 @@ function PanelMenu({ ep, onRetranslate, learn, onAlign }: { ep: Episode; onRetra
           </>}
           {onAlign && (learn || onRetranslate) && <div className="menu-sep" role="separator" />}
           {onAlign && <button role="menuitem" onClick={() => { setMenu(false); onAlign(); }}><AudioLines size={14} /> {t("字幕和声音对不上…")}</button>}
+          {(learn || onRetranslate || onAlign) && <div className="menu-sep" role="separator" />}
+          <button role="menuitem" onClick={() => { setMenu(false); setExporting(true); }}><Download size={14} /> {t("导出字幕…")}</button>
         </div>
       )}
+      {exporting && <SubtitleExport ep={ep} segments={segments} zh={zh} onClose={() => setExporting(false)} />}
       {gloss && onRetranslate && <Glossary ep={ep} onRetranslate={onRetranslate} onClose={() => setGloss(false)} />}
       {words && learn && <EpisodeWords ep={ep} segments={learn.segments} zh={learn.zh} onClose={() => setWords(false)} />}
       {dictation && learn && <Dictation ep={ep} segments={learn.segments} from={Math.max(0, learn.active)} onClose={() => setDictation(false)} />}

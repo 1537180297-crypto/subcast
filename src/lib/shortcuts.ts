@@ -6,7 +6,7 @@ import { IS_MAC } from "./i18n";
 
 export type ActionId =
   | "playPause" | "back" | "forward" | "backShort" | "forwardShort" | "prevLine" | "nextLine"
-  | "fullscreen" | "subtitleMode" | "speedUp" | "speedDown" | "mute" | "volumeUp" | "volumeDown"
+  | "fullscreen" | "subtitleMode" | "subBigger" | "subSmaller" | "speedUp" | "speedDown" | "mute" | "volumeUp" | "volumeDown"
   | "toggleSidebar" | "togglePanel" | "search" | "settings" | "keysHelp";
 
 export interface ActionDef { id: ActionId; label: string; group: string; keys: string[]; /** Works while typing in a text box. */ global?: boolean }
@@ -26,6 +26,8 @@ export const ACTIONS: ActionDef[] = [
   { id: "volumeDown", label: tk("调低音量"), group: tk("播放"), keys: ["Mod+ArrowDown", "-"] },
   { id: "fullscreen", label: tk("全屏看视频"), group: tk("视频与字幕"), keys: ["F"] },
   { id: "subtitleMode", label: tk("切换字幕：双语 / 中文 / 原文"), group: tk("视频与字幕"), keys: ["C"] },
+  { id: "subBigger", label: tk("字幕变大"), group: tk("视频与字幕"), keys: ["Mod+="] },
+  { id: "subSmaller", label: tk("字幕变小"), group: tk("视频与字幕"), keys: ["Mod+-"] },
   { id: "toggleSidebar", label: tk("显示 / 收起侧栏"), group: tk("窗口"), keys: ["Mod+B"], global: true },
   { id: "togglePanel", label: tk("显示 / 收起字幕栏"), group: tk("窗口"), keys: ["Mod+\\"], global: true },
   { id: "search", label: tk("搜索节目"), group: tk("窗口"), keys: ["Mod+L"], global: true },
