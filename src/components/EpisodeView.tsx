@@ -34,45 +34,13 @@ import { bytes, cancelDownload, downloadEpisode, isSaved, removeDownload, useOff
 import { showLinks } from "../lib/showLinks";
 import { toggleFavorite, useLibrary } from "../lib/library";
 import { YtVideoStrip } from "./YtPromo";
+import { SubtitleTune } from "./SubtitleTune";
+import { pieceAt, pieces } from "../lib/pieces";
+import { setSubLift } from "../lib/reading";
 import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 
 type Tab = "transcript" | "deep" | "chat" | "summary";
 const TAB_NAMES: Record<Tab, string> = { transcript: tk("字幕"), deep: tk("乔木精读"), chat: tk("AI 问答"), summary: tk("AI 导读") };
-
-/** Splits a subtitle block into reading-sized pieces: at the end of each sentence, at a comma once a piece is
- *  long enough, and between words only when a sentence runs on too long. */
-export function pieces(text: string, cjk: boolean): string[] {
-  const soft = cjk ? 14 : 38, hard = cjk ? 30 : 80;
-  // A "." inside a number ("1.5") doesn't end anything.
-  const units = cjk ? text.split(/(?<=[，。！？；：、,!?;]|\.(?!\d))/) : text.split(/(?<=\s)/);
-  const out: string[] = [];
-  let cur = "";
-  for (let n = 0; n < units.length; n++) {
-    const u = units[n];
-    // A sentence only ends at "." when what follows starts a new one (a capital, a digit-free quote, CJK), so
-    // "raised to 1. point five" or "e.g. this" stay together.
-    const nextStart = (units[n + 1] ?? "").trimStart()[0] ?? "";
-    const continues = !cjk && /\.$/.test(u.trim()) && /[a-z0-9]/.test(nextStart);
-    if (cur && (cur + u).trim().length > hard) { out.push(cur.trim()); cur = ""; }
-    cur += u;
-    const t = cur.trim();
-    // Initials and titles end in a full stop without ending the sentence ("J.P.", "Mr.", "U.S.").
-    const last = u.trim();
-    const abbrev = !cjk && /^(?:[A-Z]\.)+(?:[A-Z]\.?)?$|^(?:Mr|Mrs|Ms|Dr|St|vs|etc|Inc|Co|Jr|Sr|No|Vol)\.$/.test(last);
-    if ((!abbrev && !continues && /[。！？.!?]["”')）]*$/.test(t)) || (t.length >= soft && /[，；：,;:]$/.test(t))) { out.push(t); cur = ""; }
-  }
-  if (cur.trim()) out.push(cur.trim());
-  return out.length ? out : [text];
-}
-
-/** The piece being spoken now, assuming speech is spread evenly over the block. */
-function pieceAt(text: string, cjk: boolean, progress: number): string {
-  const ps = pieces(text, cjk);
-  const total = ps.reduce((n, p) => n + p.length, 0);
-  let acc = 0;
-  for (const p of ps) { acc += p.length; if (acc / total >= progress) return p; }
-  return ps[ps.length - 1];
-}
 
 /** Which piece (sentence-sized) of a block is being spoken, assuming speech is spread evenly over it. */
 function pieceIndex(ps: string[], progress: number): number {
@@ -126,10 +94,23 @@ function AudioSubtitles({ ep }: { ep: Episode }) {
 }
 
 function SubtitleOverlay({ ep }: { ep: Episode }) {
+  const has = useJobs((s) => !!s.transcripts[ep.id]);
+  if (!has) return null;
+  return <><SubtitleLine ep={ep} /><SubtitleTune /></>;
+}
+
+/** The line being spoken, over the video. Dragging it moves the subtitles up or down (kept for every video); a
+ *  click without moving plays or pauses like the rest of the picture. */
+function SubtitleLine({ ep }: { ep: Episode }) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const items = useJobs((s) => s.translations[ep.id]?.items);
   const time = useStore((s) => s.time);
   const mode = useStore((s) => s.settings.subtitleMode);
+  const drag = useRef<{ y: number; lift: number; h: number; moved: boolean } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  // A click plays or pauses a moment later, so a double-click (back to the usual place) doesn't do both.
+  const click = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(click.current), []);
   if (!transcript) return null;
   const i = activeIndex(transcript.segments, time);
   const seg = transcript.segments[i];
@@ -137,9 +118,29 @@ function SubtitleOverlay({ ep }: { ep: Episode }) {
   const zh = items?.[i];
   const progress = Math.min(1, Math.max(0, (time - seg.start) / Math.max(0.5, seg.end - seg.start)));
   const cjk = /[\u4e00-\u9fff]/.test(seg.text);
+  const down = (e: React.PointerEvent<HTMLDivElement>) => {
+    const video = e.currentTarget.closest<HTMLElement>(".video");
+    if (e.button !== 0 || !video) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { y: e.clientY, lift: useStore.getState().settings.subtitleLift ?? 0, h: video.clientHeight || 1, moved: false };
+  };
+  const move = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const dy = d.y - e.clientY;
+    if (!d.moved && Math.abs(dy) < 4) return;
+    if (!d.moved) { d.moved = true; setDragging(true); }
+    setSubLift(d.lift + (dy / d.h) * 100);
+  };
+  const up = () => {
+    const d = drag.current;
+    drag.current = null;
+    setDragging(false);
+    if (d && !d.moved) { window.clearTimeout(click.current); click.current = window.setTimeout(() => useStore.getState().player?.toggle(), 260); }
+  };
   return (
     <div className="subtitle-overlay">
-      <div className="sub-box">
+      <div className={`sub-box ${dragging ? "dragging" : ""}`} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onDoubleClick={(e) => { e.stopPropagation(); window.clearTimeout(click.current); setSubLift(0); }}>
         {zh && mode !== "original" && <p className="sub-zh">{pieceAt(zh, true, progress)}</p>}
         {(mode !== "translation" || !zh) && <p className="sub-orig">{pieceAt(seg.text, cjk, progress)}</p>}
       </div>

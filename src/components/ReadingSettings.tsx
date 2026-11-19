@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { useJobs } from "../lib/jobs";
 import { t, useLang } from "../lib/i18n";
-import { SUB_FONTS } from "../lib/reading";
+import { SUB_FONTS, SUB_SCALE, subScale } from "../lib/reading";
 import { POSTER_FONTS } from "../lib/poster";
 import type { Settings } from "../lib/settings";
 
@@ -41,7 +41,8 @@ export function ReadingSettings() {
       <section className="setup-block">
         <p className="setup-title">{t("字幕")}</p>
         <div className="reading-row"><span>{t("字号")}</span>
-          <Seg value={settings.subtitleSize ?? "m"} options={[["s", t("小")], ["m", t("标准")], ["l", t("大")], ["xl", t("特大")]]} onChange={(v) => save({ subtitleSize: v })} />
+          {/* The video's "Aa" can pick sizes in between: then none of these is lit. */}
+          <Seg value={(Object.keys(SUB_SCALE) as (keyof typeof SUB_SCALE)[]).find((k) => Math.abs(SUB_SCALE[k] - subScale(settings)) < 0.01) ?? ("" as "m")} options={[["s", t("小")], ["m", t("标准")], ["l", t("大")], ["xl", t("特大")]]} onChange={(v) => save({ subtitleSize: v, subtitleScale: undefined })} />
         </div>
         <div className="reading-row"><span>{t("字体")}</span>
           <Seg value={settings.subtitleFont ?? "sans"} options={(Object.keys(SUB_FONTS) as (keyof typeof SUB_FONTS)[]).map((id) => [id, fontName(id)])} onChange={(v) => save({ subtitleFont: v })} />
