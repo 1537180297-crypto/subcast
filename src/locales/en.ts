@@ -1461,6 +1461,7 @@ const dict: Record<string, string> = {
   "先播放这一集": "Play this episode first",
   "退出跟读模式": "Stop shadowing",
   "跟读模式": "Shadowing",
+  "中英文一起调：英文按比例略小，字体同时用于两行。": "Sizes both lines together, with English a little smaller; the font applies to both.",
 };
 
 export default dict;

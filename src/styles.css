@@ -1691,6 +1691,7 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .reading-preview.look-outline .subtitle-overlay p { background: transparent !important; backdrop-filter: none !important; text-shadow: 0 0 2px #000, 0 0 2px #000, 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6); }
 .reading-preview .subtitle-overlay .sub-zh { font-size: calc(18px * var(--sub-scale, 1)); }
 .reading-preview .subtitle-overlay .sub-orig { font-size: calc(13px * var(--sub-scale, 1)); }
+.reading-note { margin: -2px 0 4px; }
 .reading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 4px 0; font-size: 13.5px; }
 /* Bigger subtitle sizes wrap to a second line instead of being cut off with "…". */
 .subtitle-overlay p { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; text-overflow: clip; }

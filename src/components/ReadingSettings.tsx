@@ -40,6 +40,10 @@ export function ReadingSettings() {
 
       <section className="setup-block">
         <p className="setup-title">{t("字幕")}</p>
+        {/* Same choice as the video's "Aa" and the C key: the preview above follows it. */}
+        <div className="reading-row"><span>{t("显示")}</span>
+          <Seg value={settings.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")]]} onChange={(v) => save({ subtitleMode: v })} />
+        </div>
         <div className="reading-row"><span>{t("字号")}</span>
           {/* The video's "Aa" can pick sizes in between: then none of these is lit. */}
           <Seg value={(Object.keys(SUB_SCALE) as (keyof typeof SUB_SCALE)[]).find((k) => Math.abs(SUB_SCALE[k] - subScale(settings)) < 0.01) ?? ("" as "m")} options={[["s", t("小")], ["m", t("标准")], ["l", t("大")], ["xl", t("特大")]]} onChange={(v) => save({ subtitleSize: v, subtitleScale: undefined })} />
@@ -47,6 +51,7 @@ export function ReadingSettings() {
         <div className="reading-row"><span>{t("字体")}</span>
           <Seg value={settings.subtitleFont ?? "sans"} options={(Object.keys(SUB_FONTS) as (keyof typeof SUB_FONTS)[]).map((id) => [id, fontName(id)])} onChange={(v) => save({ subtitleFont: v })} />
         </div>
+        <p className="muted small reading-note">{t("中英文一起调：英文按比例略小，字体同时用于两行。")}</p>
         <div className="reading-row"><span>{t("视频上的字幕")}</span>
           <Seg value={settings.subtitleLook ?? "outline"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => save({ subtitleLook: v })} />
         </div>
