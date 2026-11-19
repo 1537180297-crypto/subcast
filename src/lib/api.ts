@@ -184,6 +184,8 @@ export const api = {
   clearTemp: () => invoke<void>("clear_temp"),
   fullNotes: (episodeId: string) => invoke<string | null>("full_notes", { episodeId }),
   videoClipEnv: () => invoke<FfmpegStatus>("video_clip_env"),
+  /** Resolves the video's download addresses in the background, so cutting a clip starts downloading at once. */
+  videoClipWarm: (videoId: string) => invoke<void>("video_clip_warm", { videoId }),
   videoClipPrepare: (jobId: string, videoId: string, start: number, end: number) => invoke<PreparedClip>("video_clip_prepare", { jobId, videoId, start, end }),
   videoClipRender: (jobId: string, req: RenderVideoClipRequest) => invoke<RenderVideoClipResult>("video_clip_render", { jobId, req }),
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),

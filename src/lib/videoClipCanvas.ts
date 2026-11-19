@@ -1,7 +1,8 @@
 // WYSIWYG Canvas renderer for video clip static overlays (hook title + attribution) and timed bilingual subtitle bands.
 import type { Segment } from "./api";
 import { t } from "./i18n";
-import { buildCues, type Cue, type SubContent } from "./subexport";
+import { type Cue, type SubContent } from "./subexport";
+import { isCjk, sameChars, shortLines, splitInto } from "./clipLines";
 
 export type ClipLayout = "landscape" | "portrait_card" | "portrait_fill";
 export type CardBg = "blur" | "night" | "paper";
@@ -33,7 +34,9 @@ export function canvasDimensions(layout: ClipLayout): { width: number; height: n
   return layout === "landscape" ? { width: 1920, height: 1080 } : { width: 1080, height: 1920 };
 }
 
-/** Builds normalized, flicker-free subtitle cues relative to `clipStart` (0-based). */
+/** Clip subtitles relative to `clipStart` (0-based): one short line per cue (bilingual: the translation split to
+ *  match), timed by length within its segment, the way short-video subtitles read. `lineBreaks` holds model-made
+ *  lines (by segment index) for the CJK text; anything else is split here. */
 export function buildClipCues(
   segments: Segment[],
   zhOverrides: (string | null | undefined)[],
@@ -42,25 +45,50 @@ export function buildClipCues(
   clipStart: number,
   clipEnd: number,
   content: SubContent,
+  lineBreaks?: Record<number, string[]>,
+  maxCjk = 14,
 ): Cue[] {
-  const segSlice = segments.slice(startIdx, endIdx + 1);
-  const zhSlice = zhOverrides.slice(startIdx, endIdx + 1);
-  const raw = buildCues(segSlice, zhSlice, content);
   const dur = Math.max(0.5, clipEnd - clipStart);
-  const out: Cue[] = [];
+  const raw: Cue[] = [];
+  for (let i = startIdx; i <= endIdx; i++) {
+    const seg = segments[i];
+    if (!seg) continue;
+    const orig = seg.text.trim();
+    const tr = zhOverrides[i]?.trim() || "";
+    const lead = content === "translation" && tr ? tr : orig;
+    if (!lead) continue;
+    const model = lineBreaks?.[i];
+    const lines = model && sameChars(model, lead) ? model : shortLines(lead, maxCjk);
+    if (!lines.length) continue;
+    const second = content === "bilingual" && tr && lead === orig ? splitInto(tr, lines.length) : [];
+    const total = lines.reduce((n, l) => n + l.length, 0) || 1;
+    let acc = 0;
+    lines.forEach((line, k) => {
+      const s = seg.start + (seg.end - seg.start) * (acc / total);
+      acc += line.length;
+      const e = seg.start + (seg.end - seg.start) * (acc / total);
+      const isZhLead = lead === tr;
+      raw.push({ start: s, end: e, orig: isZhLead ? "" : line, zh: isZhLead ? line : second[k] || undefined });
+    });
+  }
 
+  const out: Cue[] = [];
   for (const c of raw) {
     const start = Math.max(0, c.start - clipStart);
     const end = Math.min(dur, c.end - clipStart);
-    const orig = c.orig.trim();
-    const zh = c.zh?.trim();
-    if (end - start < 0.08 || (!orig && !zh)) continue;
+    if (end - start < 0.08 || (!c.orig && !c.zh)) continue;
     const prev = out[out.length - 1];
-    if (prev) {
-      if (prev.end > start) prev.end = Math.max(prev.start + 0.08, start);
-      else if (start - prev.end < 0.08) prev.end = start;
+    // A line that would flash by joins its neighbour when the two still fit on one line.
+    const len = (x: Cue) => (x.orig || x.zh || "").length;
+    if (prev && end - start < 0.7 && len(prev) + len(c) <= maxCjk * (isCjk(c.orig || c.zh || "") ? 1 : 2.3)) {
+      prev.end = end;
+      if (c.orig) prev.orig = `${prev.orig} ${c.orig}`.trim();
+      if (c.zh) prev.zh = `${prev.zh ?? ""}${prev.zh ? " " : ""}${c.zh}`;
+      continue;
     }
-    out.push({ start, end, orig, zh });
+    if (prev && prev.end > start) prev.end = Math.max(prev.start + 0.08, start);
+    else if (prev && start - prev.end < 0.25) prev.end = start; // no blink between lines
+    out.push({ start, end, orig: c.orig, zh: c.zh });
   }
   return out;
 }

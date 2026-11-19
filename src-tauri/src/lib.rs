@@ -7,6 +7,7 @@ mod agents;
 mod cloud;
 mod db;
 mod edge_tts;
+mod fastclip;
 mod feeds;
 mod hlsproxy;
 mod import;
@@ -562,6 +563,17 @@ fn save_text(path: String, text: String) -> Res<()> { std::fs::write(path, text)
 #[tauri::command(async)]
 fn video_clip_env(state: State<'_, AppState>) -> videoclip::FfmpegStatus {
     videoclip::env_status(&state.data)
+}
+
+/// Resolves a video's download addresses in the background (and readies ffmpeg), so a clip starts downloading at once.
+#[tauri::command]
+fn video_clip_warm(state: State<'_, AppState>, video_id: String) {
+    let data = state.data.clone();
+    tauri::async_runtime::spawn(async move {
+        let d2 = data.clone();
+        let never = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let _ = tokio::join!(fastclip::warm(&data, &video_id), videoclip::ensure_ffmpeg(&d2, &never, |_, _| {}));
+    });
 }
 
 #[tauri::command]
@@ -1643,7 +1655,7 @@ pub fn run() {
             app_update_check, app_update_download, app_update_install,
             shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
             download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete,
-            video_clip_env, video_clip_prepare, video_clip_render, reveal_file
+            video_clip_env, video_clip_warm, video_clip_prepare, video_clip_render, reveal_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
