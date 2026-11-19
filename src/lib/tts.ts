@@ -89,9 +89,18 @@ export function stopSpeaking() {
   useTtsPreview.setState({ active: null });
 }
 
-function playUrl(url: string, playbackRate = 1): Promise<void> {
+let audioRate = 1;
+/** Playback-rate correction for audio synthesized at `made` when 语速 has changed since. */
+const rateFix = (made: number) => Math.min(2, Math.max(0.5, (useStore.getState().settings.ttsRate || 1) / made));
+// Changing 语速 while something is being read applies at once.
+useStore.subscribe((s, prev) => {
+  if (audio && s.settings.ttsRate !== prev.settings.ttsRate) audio.playbackRate = rateFix(audioRate);
+});
+
+function playUrl(url: string, madeAt = useStore.getState().settings.ttsRate || 1): Promise<void> {
   const el = new Audio(url);
-  el.playbackRate = Math.min(2, Math.max(0.5, playbackRate));
+  audioRate = madeAt;
+  el.playbackRate = rateFix(madeAt);
   audio = el;
   return new Promise<void>((resolve, reject) => {
     el.onended = () => resolve();
@@ -110,20 +119,24 @@ export async function speak(text: string, onError?: (m: string) => void) {
   const parts = chunks(text, svc.id === "system" ? 240 : maxChunkChars(svc.protocol));
   try {
     if (svc.id === "system" && hasWebSpeechVoices()) {
-      const rate = Math.min(2, Math.max(0.5, settings.ttsRate || 1));
       for (const part of parts) {
         if (id !== session) return;
+        const rate = Math.min(2, Math.max(0.5, useStore.getState().settings.ttsRate || 1));
         await speakSystemAsync(part, { voice: svc.voice, rate, isCanceled: () => id !== session });
       }
       return;
     }
-    const fetchPart = (i: number) => (i < parts.length ? synthesizeText(parts[i]) : Promise.resolve(null));
+    const fetchPart = (i: number) => {
+      if (i >= parts.length) return Promise.resolve(null);
+      const rate = useStore.getState().settings.ttsRate || 1;
+      return synthesizeText(parts[i], { rate }).then((r) => ({ ...r, rate }));
+    };
     let next = fetchPart(0);
     for (let i = 0; i < parts.length; i++) {
       const res = await next;
       if (id !== session || !res) return;
       next = fetchPart(i + 1);
-      await playUrl(res.url);
+      await playUrl(res.url, res.rate);
       if (id !== session) return;
     }
   } catch (e) {
