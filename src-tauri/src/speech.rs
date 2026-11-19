@@ -1,10 +1,10 @@
 //! Multi-engine text-to-speech synthesis with on-disk caching (`<data>/tts-cache/`).
 //!
-//! Supports key-free engines (Microsoft Edge Read Aloud, system voice) and cloud services
+//! Supports key-free engines (Microsoft Edge Read Aloud, offline Melo/Kokoro via sherpa-onnx, system voice) and cloud services
 //! (Doubao, Xiaomi MiMo, Alibaba Qwen-TTS, OpenAI / SiliconFlow / OpenAI-compatible, MiniMax,
 //! ElevenLabs). Audio files are written to disk and returned by path + duration so both
 //! ReadAloud and future Chinese dubbing can play them via `convertFileSrc` without base64 bridging.
-use crate::{cloud, edge_tts, llm, net};
+use crate::{cloud, edge_tts, llm, local_tts, net};
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -20,9 +20,9 @@ const DOUBAO_RATE: u32 = 24_000;
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TtsRequest {
-    /// Service id (e.g. "edge", "system", "doubao", "mimo", "qwen", "openai", "siliconflow", "minimax", "elevenlabs", "custom").
+    /// Service id (e.g. "edge", "local", "system", "doubao", "mimo", "qwen", "openai", "siliconflow", "minimax", "elevenlabs", "custom").
     pub engine: String,
-    /// Wire protocol: "edge" | "system" | "doubao" | "mimo" | "openai" | "qwen" | "minimax" | "elevenlabs".
+    /// Wire protocol: "edge" | "system" | "local" | "doubao" | "mimo" | "openai" | "qwen" | "minimax" | "elevenlabs".
     pub protocol: String,
     #[serde(default)]
     pub base_url: Option<String>,
@@ -232,6 +232,7 @@ pub async fn synthesize(data: &Path, req: TtsRequest) -> Result<TtsResult> {
     let (bytes, ext) = match req.protocol.as_str() {
         "edge" => (edge_tts::synthesize(&req.voice, text, rate).await?, "mp3"),
         "system" => (system_tts(&req.voice, text, rate).await?, "wav"),
+        "local" => (local_tts::synthesize(data, req.model.as_deref().unwrap_or("melo"), &req.voice, text, rate).await?, "wav"),
         "doubao" => (doubao_tts(&req, text, rate).await?, "wav"),
         "mimo" => (mimo_tts(&req, text, rate).await?, "wav"),
         "openai" => openai_tts(&req, text, rate).await?,
