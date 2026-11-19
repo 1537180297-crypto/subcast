@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ChevronDown, Cloud, ExternalLink, Laptop, Square, Trash2, Volume2 } from "lucide-react";
+import { Check, ChevronDown, Cloud, Download, ExternalLink, Laptop, Lock, Square, Trash2, Volume2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type SystemVoice } from "../lib/api";
 import { TTS_CLOUD_MAIN, TTS_SERVICES, type TtsService } from "../lib/settings";
@@ -13,8 +13,8 @@ import {
   cancelLocalTts, deleteLocalTts, installLocalTts, localInstalled, refreshLocalTts, useLocalTts, type LocalModelId,
 } from "../lib/localTts";
 import { KeyField, NO_AUTO } from "./SettingsDialog";
+import { RateControl } from "./RatePicker";
 
-const TTS_RATES = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
 
 /** One preview button for the active engine + voice. */
 export function PreviewButton({ engine, voice }: { engine: string; voice: string }) {
@@ -223,7 +223,7 @@ function CloudTtsEditor({
   );
 }
 
-/** The three offline choices: Melo and Kokoro (downloaded on first use) and the Mac's own Tingting. */
+/** The offline choices: the OS voice, plus Melo and Kokoro (downloaded on first use). */
 const LOCAL_MODELS: { id: LocalModelId; name: string; note: string }[] = [
   { id: "melo", name: "Melo", note: tk("中英混读，一个女声，最快") },
   { id: "kokoro", name: "Kokoro", note: tk("8 种中文男女声，英文也能读") },
@@ -231,6 +231,26 @@ const LOCAL_MODELS: { id: LocalModelId; name: string; note: string }[] = [
 
 /** Whether this engine id is one of the offline voices shown under 「本地语音」. */
 export const isLocalEngine = (id: string) => id === "local" || id === "system";
+
+/** One selectable model card. A div (not a button) so download / delete buttons can sit inside it. */
+function VoiceCard({
+  on, name, note, onSelect, children,
+}: { on: boolean; name: string; note: string; onSelect: () => void; children: React.ReactNode }) {
+  return (
+    <div
+      role="radio"
+      aria-checked={on}
+      tabIndex={0}
+      className={`voice-card ${on ? "on" : ""}`}
+      onClick={onSelect}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onSelect(); } }}
+    >
+      <p className="voice-card-name">{name}</p>
+      <p className="voice-card-note">{note}</p>
+      <div className="voice-card-status">{children}</div>
+    </div>
+  );
+}
 
 function LocalTtsEditor({ onPick }: { onPick: (engine: "local" | "system", model?: LocalModelId) => void }) {
   const { settings, saveSettings } = useStore(
@@ -262,9 +282,53 @@ function LocalTtsEditor({ onPick }: { onPick: (engine: "local" | "system", model
     await deleteLocalTts(id);
   };
 
-  const modelState = status?.models.find((m) => m.id === model);
-  const installed = localInstalled(status, model);
-  const dl = downloading?.id === model ? downloading : null;
+  const modelStatus = (id: LocalModelId) => {
+    const st = status?.models.find((m) => m.id === id);
+    const dl = downloading?.id === id ? downloading : null;
+    if (dl) {
+      const pct = dl.total ? Math.round((dl.received / dl.total) * 100) : 0;
+      return (
+        <>
+          <div className="voice-card-bar"><div style={{ width: `${pct}%` }} /></div>
+          <span className="num">{pct}%</span>
+          <button className="link-btn small" onClick={(e) => { e.stopPropagation(); void cancelLocalTts(id); }}>{t("取消")}</button>
+        </>
+      );
+    }
+    if (localInstalled(status, id)) {
+      return (
+        <>
+          <span className="voice-card-ok"><Check size={12} /> {t("已下载")}{st ? ` · ${bytes(st.bytes)}` : ""}</span>
+          <button
+            className="icon-btn sm"
+            title={t("删除")}
+            aria-label={t("删除")}
+            onClick={(e) => { e.stopPropagation(); void remove(id); }}
+          >
+            <Trash2 size={13} />
+          </button>
+        </>
+      );
+    }
+    return (
+      <>
+        <span>{st ? t("约 {size}", { size: bytes(st.bytes + (status?.runtime ? 0 : 22 * 1024 * 1024)) }) : t("首次使用需要下载")}</span>
+        <button
+          className="btn sm"
+          disabled={downloading != null}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPick("local", id);
+            if (useLocalTts.getState().downloading?.id !== id) void installLocalTts(id).then((ok) => ok && notify(t("本地语音已就绪")));
+          }}
+        >
+          <Download size={12} /> {t("下载")}
+        </button>
+      </>
+    );
+  };
+
+  const voiceChips = onSystem || (active.id === "local" && model === "kokoro");
 
   return (
     <div className="provider-form">
@@ -272,95 +336,71 @@ function LocalTtsEditor({ onPick }: { onPick: (engine: "local" | "system", model
         <p className="setup-title">{t("模型")}</p>
         <PreviewButton engine={active.id} voice={active.voice} />
       </div>
-      <div className="model-chips">
-        <button className={`chip sm ${onSystem ? "on" : ""}`} onClick={() => onPick("system")}>
-          {t("系统增强语音")}
-        </button>
+      <div className="voice-cards" role="radiogroup" aria-label={t("模型")}>
+        <VoiceCard
+          on={onSystem}
+          name={t("系统增强语音")}
+          note={t("系统自带的增强音色，开箱即用")}
+          onSelect={() => onPick("system")}
+        >
+          <span className="voice-card-ok"><Check size={12} /> {t("系统自带，无需下载")}</span>
+        </VoiceCard>
         {supported && LOCAL_MODELS.map((m) => (
-          <button
+          <VoiceCard
             key={m.id}
-            className={`chip sm ${active.id === "local" && model === m.id ? "on" : ""}`}
-            onClick={() => onPick("local", m.id)}
+            on={active.id === "local" && model === m.id}
+            name={m.name}
+            note={t(m.note)}
+            onSelect={() => onPick("local", m.id)}
           >
-            {m.name}
-          </button>
+            {modelStatus(m.id)}
+          </VoiceCard>
         ))}
       </div>
 
-      {active.id === "local" && (
-        <>
-          <p className="muted small">{t(LOCAL_MODELS.find((m) => m.id === model)!.note)}</p>
-          <div className="storage-row">
-            <div className="storage-row-text">
-              <p className="storage-row-name">{installed ? t("已下载") : t("首次使用需要下载")}</p>
-              <p className="muted small">
-                {dl
-                  ? `${bytes(dl.received)}${dl.total ? ` / ${bytes(dl.total)}` : ""}`
-                  : modelState ? t("约 {size}", { size: bytes(modelState.bytes + (status?.runtime ? 0 : 22 * 1024 * 1024)) }) : ""}
-              </p>
-            </div>
-            {dl ? (
-              <div className="dl">
-                <span className="small num">{dl.total ? Math.round((dl.received / dl.total) * 100) : 0}%</span>
-                <button className="btn ghost sm" onClick={() => void cancelLocalTts(model)}>{t("取消")}</button>
-              </div>
-            ) : installed ? (
-              <button className="icon-btn" title={t("删除")} onClick={() => void remove(model)}><Trash2 size={14} /></button>
-            ) : (
-              <button
-                className="btn sm"
-                disabled={downloading != null}
-                onClick={() => void installLocalTts(model).then((ok) => ok && notify(t("本地语音已就绪")))}
-              >
-                {t("下载")}
-              </button>
-            )}
-          </div>
-          {model === "kokoro" && (
+      {voiceChips && (
+        <div className="voice-pick">
+          <p className="setup-title">{t("音色")}</p>
+          {onSystem ? (
             <>
-              <p className="setup-title">{t("音色")}</p>
               <div className="model-chips">
-                {local.voices.map((v) => (
+                <button className={`chip sm ${!active.voice ? "on" : ""}`} onClick={() => setSystemVoice("")}>
+                  {t("系统默认")}
+                </button>
+                {shownSysVoices.map((v) => (
                   <button
                     key={v.id}
-                    className={`chip sm ${local.voice === v.id ? "on" : ""}`}
-                    onClick={() => setLocal({ voice: v.id })}
+                    className={`chip sm ${active.voice === v.id ? "on" : ""}`}
+                    onClick={() => setSystemVoice(v.id)}
                   >
-                    {t(v.name)}
+                    {v.name} <span className="muted">({v.lang})</span>
                   </button>
                 ))}
               </div>
+              {otherSysVoices.length > 0 && zhSysVoices.length > 0 && (
+                <button className="adv-toggle" onClick={() => setMoreSysVoices(!moreSysVoices)}>
+                  <ChevronDown size={12} className={moreSysVoices ? "flip" : ""} />{" "}
+                  {moreSysVoices ? t("收起其他语言音色") : t("其他语言音色（{n}）", { n: otherSysVoices.length })}
+                </button>
+              )}
             </>
+          ) : (
+            <div className="model-chips">
+              {local.voices.map((v) => (
+                <button
+                  key={v.id}
+                  className={`chip sm ${local.voice === v.id ? "on" : ""}`}
+                  onClick={() => setLocal({ voice: v.id })}
+                >
+                  {t(v.name)}
+                </button>
+              ))}
+            </div>
           )}
-        </>
+        </div>
       )}
 
-      {onSystem && (
-        <>
-          <div className="model-chips">
-            <button className={`chip sm ${!active.voice ? "on" : ""}`} onClick={() => setSystemVoice("")}>
-              {t("系统默认")}
-            </button>
-            {shownSysVoices.map((v) => (
-              <button
-                key={v.id}
-                className={`chip sm ${active.voice === v.id ? "on" : ""}`}
-                onClick={() => setSystemVoice(v.id)}
-              >
-                {v.name} <span className="muted">({v.lang})</span>
-              </button>
-            ))}
-          </div>
-          {otherSysVoices.length > 0 && zhSysVoices.length > 0 && (
-            <button className="adv-toggle" onClick={() => setMoreSysVoices(!moreSysVoices)}>
-              <ChevronDown size={12} className={moreSysVoices ? "flip" : ""} />{" "}
-              {moreSysVoices ? t("收起其他语言音色") : t("其他语言音色（{n}）", { n: otherSysVoices.length })}
-            </button>
-          )}
-        </>
-      )}
-
-      <p className="muted small">{t("完全在本机离线合成，文字不会离开你的电脑。")}</p>
+      <p className="privacy-note"><Lock size={11} /> {t("完全在本机离线合成，文字不会离开你的电脑。")}</p>
     </div>
   );
 }
@@ -460,18 +500,8 @@ export function TtsSettings() {
 
       <section className="setup-block">
         <p className="setup-title">{t("朗读语速")}</p>
-        <div className="model-chips">
-          {TTS_RATES.map((r) => (
-            <button
-              key={r}
-              className={`chip sm ${(settings.ttsRate ?? 1) === r ? "on" : ""}`}
-              onClick={() => void saveSettings({ ttsRate: r })}
-            >
-              {r}×
-            </button>
-          ))}
-        </div>
-        <p className="muted small">{t("字幕面板朗读中文时还会叠乘当前播放倍速。")}</p>
+        <RateControl />
+        <p className="muted small">{t("朗读时也可以在朗读按钮旁随时调整。")}</p>
       </section>
     </>
   );

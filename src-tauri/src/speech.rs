@@ -307,7 +307,7 @@ async fn mimo_tts(req: &TtsRequest, text: &str, rate: f64) -> Result<Vec<u8>> {
         .unwrap_or("https://api.xiaomimimo.com/v1").trim_end_matches('/');
     let url = if base.ends_with("/chat/completions") { base.to_string() } else { format!("{base}/chat/completions") };
     let model = req.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("mimo-v2.5-tts");
-    let voice = if req.voice.trim().is_empty() { "default_zh" } else { req.voice.trim() };
+    let voice = if req.voice.trim().is_empty() { "mimo_default" } else { req.voice.trim() };
     // Natural-language pace direction sent to MiMo (not user-facing UI text).
     let pace = if (rate - 1.0).abs() <= 0.05 {
         "正常语速，自然清晰朗读。".to_string() // i18n-ignore

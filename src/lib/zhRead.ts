@@ -1,5 +1,5 @@
 // 朗读中文: reads the subtitles' Chinese translation aloud, line after line from where you are, with the active TTS
-// engine. It doesn't follow the picture: the episode pauses while it reads, and pressing play stops the reading.
+// engine at the 语速 set beside the button (the episode's own playback speed doesn't apply). It doesn't follow the picture: the episode pauses while it reads, and pressing play stops the reading.
 // The next two lines are fetched while one is read, so there's no gap between them.
 import { useStore } from "../store";
 import { currentTtsService, hasWebSpeechVoices, speakSystemAsync, stopSpeaking, synthesizeText } from "./tts";
@@ -12,7 +12,10 @@ export const useZhRead = create<ZhRead>(() => ({ epId: null, index: null }));
 let session = 0;
 let audio: HTMLAudioElement | null = null;
 let unsub: (() => void) | null = null;
+let audioRate = 1;
 const AHEAD = 2;
+/** Playback-rate correction for audio synthesized at `made` when 语速 is now something else. */
+const rateFix = (made: number) => Math.min(2, Math.max(0.5, (useStore.getState().settings.ttsRate || 1) / made));
 
 export function stopZhRead() {
   session++;
@@ -31,7 +34,12 @@ export async function startZhRead(epId: string, items: (string | null | undefine
   const { player, playing, settings } = useStore.getState();
   if (playing) player?.toggle();
   // Pressing play (space, the button) means listening to the episode again.
-  unsub = useStore.subscribe((s, prev) => { if (s.playing && !prev.playing && id === session) stopZhRead(); });
+  unsub = useStore.subscribe((s, prev) => {
+    if (id !== session) return;
+    if (s.playing && !prev.playing) stopZhRead();
+    // A new 语速 applies to the line being read right away.
+    else if (audio && s.settings.ttsRate !== prev.settings.ttsRate) audio.playbackRate = rateFix(audioRate);
+  });
   const lines: number[] = [];
   for (let i = Math.max(0, from); i < items.length; i++) if (items[i]?.trim()) lines.push(i);
   if (!lines.length) { stopZhRead(); onError(t("这里往后还没有中文翻译")); return; }
@@ -42,18 +50,18 @@ export async function startZhRead(epId: string, items: (string | null | undefine
       for (let k = 0; k < lines.length; k++) {
         if (id !== session) return;
         useZhRead.setState({ index: lines[k] });
-        const st = useStore.getState().settings;
-        const rate = Math.min(2, Math.max(0.5, (st.ttsRate || 1) * (st.playbackRate || 1)));
+        const rate = Math.min(2, Math.max(0.5, useStore.getState().settings.ttsRate || 1));
         await speakSystemAsync(items[lines[k]]!.trim(), { voice: svc.voice, rate, isCanceled: () => id !== session });
         if (id !== session) return;
       }
       return;
     }
-    const fetched = new Map<number, Promise<{ url: string; path: string; seconds: number; speed: number }>>();
+    const fetched = new Map<number, Promise<{ url: string; path: string; seconds: number; rate: number }>>();
     const fetchLine = (k: number) => {
       if (k >= lines.length) return;
       if (!fetched.has(k)) {
-        const p = synthesizeText(items[lines[k]]!.trim());
+        const rate = useStore.getState().settings.ttsRate || 1;
+        const p = synthesizeText(items[lines[k]]!.trim(), { rate });
         p.catch(() => {}); // awaited (and reported) when its turn comes
         fetched.set(k, p);
       }
@@ -65,7 +73,9 @@ export async function startZhRead(epId: string, items: (string | null | undefine
       if (id !== session) return;
       useZhRead.setState({ index: lines[k] });
       const el = new Audio(res.url);
-      el.playbackRate = Math.min(2, Math.max(0.5, (useStore.getState().settings.playbackRate || 1) * res.speed));
+      // Lines fetched before the speed changed catch up by playing faster or slower.
+      audioRate = res.rate;
+      el.playbackRate = rateFix(res.rate);
       audio = el;
       await new Promise<void>((resolve, reject) => { el.onended = () => resolve(); el.onerror = () => reject(new Error(t("音频播放失败"))); void el.play().catch(reject); });
       if (id !== session) return;
