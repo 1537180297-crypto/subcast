@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shadow-start"
+description = "Enables the shadow_start command without any pre-configured scope."
+commands.allow = ["shadow_start"]
+
+[[permission]]
+identifier = "deny-shadow-start"
+description = "Denies the shadow_start command without any pre-configured scope."
+commands.deny = ["shadow_start"]

@@ -16,6 +16,7 @@ mod model;
 mod net;
 mod align;
 mod offline;
+mod shadow;
 #[cfg_attr(debug_assertions, allow(dead_code))] // serving the interface is release-only
 mod ota;
 mod qiaomu;
@@ -998,6 +999,20 @@ async fn listen_probes(state: &AppState, path: &std::path::Path, starts: &[f64],
     heard
 }
 
+/// 跟读打分 (src-tauri/src/shadow.rs): the microphone on or off, a new turn, and what was said in it.
+#[tauri::command]
+fn shadow_start(app: tauri::AppHandle) -> Res<()> { shadow::start(move |peak| { let _ = app.emit("shadow-level", peak); }).map_err(e) }
+#[tauri::command]
+fn shadow_stop() { shadow::stop() }
+#[tauri::command]
+fn shadow_clear() { shadow::clear() }
+#[tauri::command]
+fn shadow_ready(state: State<'_, AppState>, model: String) -> bool { shadow::ready(&state.data, &model) }
+#[tauri::command]
+async fn shadow_hear(state: State<'_, AppState>, model: String, language: String) -> Res<String> { shadow::hear(&state.data, &model, &language).await.map_err(e) }
+#[tauri::command]
+fn open_mic_settings() { shadow::open_mic_settings() }
+
 /// Saves a time map adjusted by hand ("对齐到这一句").
 #[tauri::command]
 fn save_time_map(state: State<'_, AppState>, episode_id: String, map: align::TimeMap) -> Res<()> {
@@ -1553,6 +1568,7 @@ pub fn run() {
             set_progress, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
             download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             app_update_check, app_update_download, app_update_install,
+            shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
             download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete
         ])
         .run(tauri::generate_context!())

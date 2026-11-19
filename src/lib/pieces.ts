@@ -34,3 +34,25 @@ export function pieceAt(text: string, cjk: boolean, progress: number): string {
   for (const p of ps) { acc += p.length; if (acc / total >= progress) return p; }
   return ps[ps.length - 1];
 }
+
+/** Shorter pieces join the next one: a cue that flashes by can't be read (or said back). */
+const MIN_CUE = 1;
+
+/** Pieces of a block with times spread over it by length (as the overlay assumes speech is spread evenly). */
+export function timedPieces(text: string, cjk: boolean, start: number, end: number): { start: number; end: number; text: string }[] {
+  const ps = pieces(text, cjk);
+  const total = ps.reduce((n, p) => n + p.length, 0) || 1;
+  const out: { start: number; end: number; text: string }[] = [];
+  let acc = 0;
+  for (const p of ps) {
+    const s = start + (end - start) * (acc / total);
+    acc += p.length;
+    const e = start + (end - start) * (acc / total);
+    const last = out[out.length - 1];
+    if (last && last.end - last.start < MIN_CUE) { last.end = e; last.text += (cjk ? "" : " ") + p; }
+    else out.push({ start: s, end: e, text: p });
+  }
+  const last = out[out.length - 1];
+  if (out.length > 1 && last.end - last.start < MIN_CUE) { const prev = out[out.length - 2]; prev.end = last.end; prev.text += (cjk ? "" : " ") + last.text; out.pop(); }
+  return out;
+}

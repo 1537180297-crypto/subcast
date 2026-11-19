@@ -106,6 +106,8 @@ export interface Settings {
   learnSounds: boolean;
   /** Pause playback while a word card is open (and resume when it closes). */
   learnPauseCard: boolean;
+  /** 跟读: hear the listener with the microphone and move on once the sentence was said (else timed pauses). */
+  shadowScore?: boolean;
   /** The one-time "想顺便学英语吗？" tip was answered. */
   learnAsked: boolean;
   /** Upload transcripts we make to the shared library (anonymous; reading shared ones is always on). */
