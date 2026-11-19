@@ -15,6 +15,7 @@ import { useRevealOnExpand } from "./lib/reveal";
 import { startJobListeners } from "./lib/jobs";
 import { useStore } from "./store";
 import { AddDialog, MiniPlayer, Sidebar, Toast, TopBar } from "./components/Chrome";
+import { ManageSubs } from "./components/ManageSubs";
 import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelView, firstRunSetup } from "./components/Lists";
 import { startOffline } from "./lib/offline";
 import { loadFavorites } from "./lib/library";
@@ -36,7 +37,7 @@ import { EqBars } from "./components/Illustrations";
 export default function App() {
   useReadingSettings();
   useRevealOnExpand();
-  const { ready, view, addOpen, init } = useStore(useShallow((s) => ({ ready: s.ready, view: s.view, addOpen: s.addOpen, init: s.init })));
+  const { ready, view, addOpen, manageOpen, init } = useStore(useShallow((s) => ({ ready: s.ready, view: s.view, addOpen: s.addOpen, manageOpen: s.manageOpen, init: s.init })));
 
   useEffect(() => {
     startJobListeners();
@@ -127,6 +128,7 @@ export default function App() {
       <VideoDock />
       {keysHelp && <KeysHelp />}
       {addOpen && <AddDialog />}
+      {manageOpen && <ManageSubs />}
       <SelectionTools />
       <UpdateBanner />
       <ConfirmHost />

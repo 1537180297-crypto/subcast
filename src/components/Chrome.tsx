@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { BookMarked, ChevronLeft, CircleArrowUp, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn } from "lucide-react";
+import { BookMarked, ChevronLeft, CircleArrowUp, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search, Settings as Cog, X, Import, ChartColumn, ListChecks } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { ImportPanel } from "./ImportPanel";
 import { useStore, type View } from "../store";
@@ -55,7 +55,13 @@ export function Sidebar() {
         {(wordsNav || view.kind === "words") && nav({ kind: "words" }, <BookMarked size={16} />, t("生词本"), due)}
       </nav>
       <div className="side-sep" />
-      <div className="side-head"><span className="label">{tx("sidebar", "订阅")}</span><button className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={14} /></button></div>
+      <div className="side-head">
+        <span className="label">{tx("sidebar", "订阅")}</span>
+        <span className="side-head-actions">
+          {shows.length > 1 && <button className="icon-btn sm side-manage" title={t("管理订阅")} aria-label={t("管理订阅")} onClick={() => set({ manageOpen: true })}><ListChecks size={14} /></button>}
+          <button className="icon-btn sm" title={t("添加节目")} aria-label={t("添加节目")} onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={14} /></button>
+        </span>
+      </div>
       <div className="show-list">
         {shows.map((s) => (
           <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={rail ? showName(s.title) : s.title}>
