@@ -6,6 +6,7 @@ import { AudioLines, BookA, Check, ChevronDown, Square, Volume2, Download, Ellip
 import { AlignBar, anchorHere } from "./AlignBar";
 import { Modal } from "./Chrome";
 import { ReadAloudSettings } from "./ReadAloud";
+import { isKeyError } from "../lib/tts";
 import { startZhRead, stopZhRead, useZhRead } from "../lib/zhRead";
 import { SubtitleExport } from "./SubtitleExport";
 import type { EpisodeContext } from "../lib/ai";
@@ -239,14 +240,14 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const zhItems = translation?.items;
   // While reading, a click on a line reads from there.
   const readAt = (start: number) => readFrom(segments.findIndex((x) => x.start === start));
-  const readFrom = (i: number) => void startZhRead(ep.id, zhItems ?? [], i, (m) => { useStore.getState().notify(tr(m)); if (m.includes("Key")) setReadSetup(true); });
+  const readFrom = (i: number) => void startZhRead(ep.id, zhItems ?? [], i, (m) => { useStore.getState().notify(tr(m)); if (isKeyError(m)) setReadSetup(true); });
   const searchBtn = <>
     {wantsZh && done > 0 && (
       <div className="read-aloud zh-read" ref={readBox}>
         {readingHere
           ? <button className="icon-btn on" title={t("停止朗读")} aria-label={t("停止朗读")} onClick={stopZhRead}><Square size={13} fill="currentColor" /></button>
           : <button className="icon-btn" title={t("朗读中文")} aria-label={t("朗读中文")} onClick={() => readFrom(Math.max(0, active))}><Volume2 size={16} /></button>}
-        {readSetup && <ReadAloudSettings />}
+        {readSetup && <ReadAloudSettings onClose={() => setReadSetup(false)} />}
       </div>
     )}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}

@@ -2,7 +2,7 @@ import { sizeMb } from "../lib/format";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
-import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, GraduationCap, type LucideIcon } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, Volume2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, GraduationCap, type LucideIcon } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { ASR_SERVICES, CLOUD_ASR_MAIN } from "../lib/settings";
 import { stopSpeaking } from "../lib/tts";
@@ -21,6 +21,7 @@ import { ModelSettings } from "./ModelSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { ReadingSettings } from "./ReadingSettings";
 import { LearnSettings } from "./LearnSettings";
+import { TtsSettings } from "./TtsSettings";
 import { DOWNLOAD_PAGE, checkForUpdate, hasUpdate, installUpdate, useUpdate } from "../lib/updater";
 
 export const NO_AUTO = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
@@ -108,9 +109,9 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
 /** Settings, a page of its own (it was a dialog): room for five sections, and the player stays usable. */
 export function SettingsView() {
   const { settings, saveSettings, set, notify, settingsSection, settingsNonce } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection, settingsNonce: s.settingsNonce })));
-  type Section = "subtitles" | "ai" | "general" | "learn" | "about";
+  type Section = "subtitles" | "ai" | "tts" | "general" | "learn" | "about";
   // Old section names (links from elsewhere in the app) land in their new home.
-  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "general", shortcuts: "general", storage: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai", learn: "learn" };
+  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "tts", shortcuts: "general", storage: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai", learn: "learn" };
   const [section, setSection] = useState<Section>(LEGACY[settingsSection ?? "subtitles"] ?? "subtitles");
   // Asked for a section while the page is already open (a "去设置" link): go there.
   useEffect(() => { if (settingsSection) setSection(LEGACY[settingsSection] ?? "subtitles"); }, [settingsNonce]);
@@ -126,7 +127,7 @@ export function SettingsView() {
   const [moreCloud, setMoreCloud] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
-  const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["general", tk("通用"), SlidersHorizontal], ["learn", tk("学英语"), GraduationCap], ["about", tk("关于"), Info]];
+  const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["tts", tk("朗读"), Volume2], ["general", tk("通用"), SlidersHorizontal], ["learn", tk("学英语"), GraduationCap], ["about", tk("关于"), Info]];
   const modelRow = (m: ModelInfo) => (
     <div key={m.id} className={`model-item ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`}>
       <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrEngine: "local", asrModel: m.id })}>
@@ -194,6 +195,7 @@ export function SettingsView() {
             </>
           )}
           {section === "ai" && <ModelSettings ProviderEditor={ProviderEditor} />}
+          {section === "tts" && <TtsSettings />}
           {section === "general" && (
             <>
               <section className="setup-block">
@@ -332,14 +334,14 @@ const REPO = "https://github.com/joeseesun/subcast";
 /** "占用 1.9 GB" for the 通用 page's storage row. */
 function StorageTotal() {
   const [total, setTotal] = useState<number | null>(null);
-  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp + (i.audioCache ?? 0))).catch(() => {}); }, []);
+  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp + (i.audioCache ?? 0) + (i.ttsCache ?? 0))).catch(() => {}); }, []);
   return <span className="muted small">{total == null ? "" : t("占用 {size}", { size: bytes(total) })}</span>;
 }
 
 function Storage({ onAsr }: { onAsr: () => void }) {
   const go = useStore((s) => s.go);
   const saved = useOffline((s) => s.saved);
-  const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number; audioCache: number } | null>(null);
+  const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number; audioCache: number; ttsCache?: number } | null>(null);
   const load = () => void api.storageInfo().then(setInfo).catch(() => {});
   useEffect(load, [saved]);
   const n = Object.keys(saved).length;
@@ -386,6 +388,17 @@ function Storage({ onAsr }: { onAsr: () => void }) {
             </div>
             <span className="storage-size">{size(info.audioCache)}</span>
             <button className="btn sm" onClick={() => void clearAudioCache().then(load)}>{t("清理")}</button>
+          </div>
+        )}
+        {!!info?.ttsCache && (
+          <div className="storage-row">
+            <div className="storage-row-text">
+              <p className="storage-row-name">{t("朗读缓存")}</p>
+              <p className="muted small">{t("朗读精读、导读和中文译文生成的语音缓存；最多占 500 MB，久不用的先删")}</p>
+            </div>
+            <span className="storage-size">{size(info.ttsCache)}</span>
+            <button className="btn ghost sm" onClick={() => void api.openDataFolder("tts-cache")}><FolderOpen size={13} /> {t("打开文件夹")}</button>
+            <button className="btn sm" onClick={() => void api.clearTtsCache().then(load)}>{t("清理")}</button>
           </div>
         )}
         {!!info?.temp && (

@@ -1,9 +1,8 @@
-// 朗读中文: reads the subtitles' Chinese translation aloud, line after line from where you are, with the voice set
-// for 朗读. It doesn't follow the picture: the episode pauses while it reads, and pressing play stops the reading.
+// 朗读中文: reads the subtitles' Chinese translation aloud, line after line from where you are, with the active TTS
+// engine. It doesn't follow the picture: the episode pauses while it reads, and pressing play stops the reading.
 // The next two lines are fetched while one is read, so there's no gap between them.
-import { api } from "./api";
 import { useStore } from "../store";
-import { stopSpeaking } from "./tts";
+import { stopSpeaking, synthesizeText } from "./tts";
 import { create } from "zustand";
 import { t } from "./i18n";
 
@@ -28,18 +27,18 @@ export async function startZhRead(epId: string, items: (string | null | undefine
   stopZhRead();
   stopSpeaking();
   const id = ++session;
-  const { player, playing, settings } = useStore.getState();
+  const { player, playing } = useStore.getState();
   if (playing) player?.toggle();
   // Pressing play (space, the button) means listening to the episode again.
   unsub = useStore.subscribe((s, prev) => { if (s.playing && !prev.playing && id === session) stopZhRead(); });
   const lines: number[] = [];
   for (let i = Math.max(0, from); i < items.length; i++) if (items[i]?.trim()) lines.push(i);
   if (!lines.length) { stopZhRead(); onError(t("这里往后还没有中文翻译")); return; }
-  const fetched = new Map<number, Promise<string>>();
+  const fetched = new Map<number, Promise<{ url: string; path: string; seconds: number }>>();
   const fetchLine = (k: number) => {
     if (k >= lines.length) return;
     if (!fetched.has(k)) {
-      const p = api.ttsSpeak(items[lines[k]]!.trim(), settings.ttsVoice, settings.ttsResource);
+      const p = synthesizeText(items[lines[k]]!.trim());
       p.catch(() => {}); // awaited (and reported) when its turn comes
       fetched.set(k, p);
     }
@@ -48,11 +47,11 @@ export async function startZhRead(epId: string, items: (string | null | undefine
   try {
     for (let k = 0; k < lines.length; k++) {
       for (let a = 0; a <= AHEAD; a++) fetchLine(k + a);
-      const b64 = await fetched.get(k)!;
+      const res = await fetched.get(k)!;
       fetched.delete(k);
       if (id !== session) return;
       useZhRead.setState({ index: lines[k] });
-      const el = new Audio(`data:audio/wav;base64,${b64}`);
+      const el = new Audio(res.url);
       el.playbackRate = Math.min(2, Math.max(0.5, useStore.getState().settings.playbackRate || 1));
       audio = el;
       await new Promise<void>((resolve, reject) => { el.onended = () => resolve(); el.onerror = () => reject(new Error(t("音频播放失败"))); void el.play().catch(reject); });
