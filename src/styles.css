@@ -2185,3 +2185,30 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .line.zh-reading { background: var(--accent-soft); }
 .line.zh-reading .zh { color: var(--accent-text); }
 .zh-read .icon-btn.on { color: var(--accent-text); background: var(--accent-soft); }
+
+/* 朗读 › 本地语音: one card per model; status and actions live inside the card. */
+.voice-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; }
+.voice-card { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 12px 12px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); cursor: pointer; transition: border-color .15s, background .15s; }
+.voice-card:hover { border-color: var(--line-strong); }
+.voice-card.on { background: var(--soft); border-color: color-mix(in srgb, var(--ink) 35%, transparent); }
+.voice-card:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink) 45%, transparent); outline-offset: 2px; }
+.voice-card-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.voice-card-note { font-size: 12px; line-height: 1.45; color: var(--muted); flex: 1; }
+.voice-card-status { display: flex; align-items: center; gap: 8px; min-height: 26px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--text-2); }
+.voice-card-status > span:first-child { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.voice-card-status .btn.sm { gap: 4px; }
+.voice-card-ok { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); }
+.voice-card-ok svg { color: var(--ok); flex: none; }
+.voice-card-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.voice-card-bar > div { height: 100%; border-radius: 2px; background: var(--accent); transition: width .25s var(--ease); }
+.voice-pick { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.privacy-note { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.privacy-note svg { flex: none; }
+
+/* 语速: segmented control, and the small "1.25×" button beside a read-aloud button. */
+.rate-seg { align-self: flex-start; }
+.rate-seg button { font-variant-numeric: tabular-nums; }
+.rate-picker { position: relative; display: inline-flex; }
+.rate-btn { height: 24px; min-width: 38px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; }
+.rate-btn:hover, .rate-btn.on { background: var(--soft); color: var(--text); }
+.rate-pop { position: absolute; z-index: 31; top: calc(100% + 6px); right: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 12px 32px rgba(0,0,0,0.14); text-align: left; white-space: nowrap; }

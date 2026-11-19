@@ -6,6 +6,7 @@ import { AudioLines, BookA, Check, ChevronDown, Square, Volume2, Download, Ellip
 import { AlignBar, anchorHere } from "./AlignBar";
 import { Modal } from "./Chrome";
 import { ReadAloudSettings } from "./ReadAloud";
+import { RatePicker } from "./RatePicker";
 import { isKeyError } from "../lib/tts";
 import { startZhRead, stopZhRead, useZhRead } from "../lib/zhRead";
 import { SubtitleExport } from "./SubtitleExport";
@@ -248,6 +249,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
         {readingHere
           ? <button className="icon-btn on" title={t("停止朗读")} aria-label={t("停止朗读")} onClick={stopZhRead}><Square size={13} fill="currentColor" /></button>
           : <button className="icon-btn" title={t("朗读中文")} aria-label={t("朗读中文")} onClick={() => readFrom(Math.max(0, active))}><Volume2 size={16} /></button>}
+        <RatePicker />
         {readSetup && <ReadAloudSettings onClose={() => setReadSetup(false)} />}
       </div>
     )}
