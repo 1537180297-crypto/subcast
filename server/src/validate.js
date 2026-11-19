@@ -209,7 +209,37 @@ function validateClient(c) {
   };
 }
 
-const UPLOAD_FIELDS = new Set(['keys', 'title', 'show', 'duration', 'source', 'model', 'language', 'segments', 'translation', 'client']);
+const UPLOAD_FIELDS = new Set(['keys', 'title', 'show', 'duration', 'source', 'model', 'language', 'segments', 'translation', 'client', 'audio']);
+const AUDIO_FIELDS = new Set(['bytes', 'etag', 'secs', 'fpAlgo', 'fp']);
+export const FP_ALGOS = new Set(['chromaprint2']);
+// chromaprint (preset 2) makes one 32-bit item every 1366/11025 s, about 8.07 a second.
+export const FP_ITEMS_PER_SEC = 11025 / 1366;
+const B64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
+// The audio file the subtitles were made from: its size and ETag (to tell whether a listener has the same file)
+// and its acoustic fingerprint (to line the subtitles up with a different cut of the episode).
+function validateAudio(a) {
+  if (a === undefined || a === null) return null;
+  if (!isPlainObject(a)) throw invalid('audio must be an object or null');
+  checkFields(a, AUDIO_FIELDS, 'audio');
+  if (!Number.isSafeInteger(a.bytes) || a.bytes <= 0) throw invalid('audio.bytes must be a positive integer');
+  const etag = optString(a.etag, 'audio.etag', 200);
+  if (typeof a.secs !== 'number' || !Number.isFinite(a.secs) || a.secs <= 0 || a.secs >= MAX_DURATION) {
+    throw invalid('audio.secs must be a number of seconds between 0 and 86400');
+  }
+  let fp = null;
+  if (a.fp !== undefined && a.fp !== null) {
+    if (!FP_ALGOS.has(a.fpAlgo)) throw invalid('audio.fpAlgo must be chromaprint2');
+    if (typeof a.fp !== 'string' || !B64_RE.test(a.fp)) throw invalid('audio.fp must be base64');
+    fp = Buffer.from(a.fp, 'base64');
+    const items = fp.length / 4;
+    const expected = a.secs * FP_ITEMS_PER_SEC;
+    if (fp.length % 4 || items < 8 || Math.abs(items - expected) > Math.max(16, expected * 0.02)) {
+      throw invalid('audio.fp does not match audio.secs');
+    }
+  }
+  return { bytes: a.bytes, etag, secs: round3(a.secs), fpAlgo: fp ? a.fpAlgo : null, fp };
+}
 
 export function validateUpload(body) {
   if (!isPlainObject(body)) throw invalid('body must be a JSON object');
@@ -229,7 +259,8 @@ export function validateUpload(body) {
   const { segments, maxEnd } = validateSegments(body.segments, d);
   const translation = validateTranslation(body.translation, segments.length);
   const client = validateClient(body.client);
-  return { keys, title, show, duration: round3(d), source: body.source, model, language, segments, maxEnd, translation, client };
+  const audio = validateAudio(body.audio);
+  return { keys, title, show, duration: round3(d), source: body.source, model, language, segments, maxEnd, translation, client, audio };
 }
 
 const REPORT_FIELDS = new Set(['reason', 'install']);

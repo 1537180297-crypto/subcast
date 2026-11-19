@@ -92,9 +92,12 @@ npm run backup     # VACUUM INTO + gzip 快照到 data/backups/（保留最近 3
   "source": "whisper|qwen3|cloud", "model": "large-v3-turbo", "language": "en",
   "segments": [...],
   "translation": { "lang": "zh-CN", "engine": "llm", "model": "deepseek-chat", "items": [...] },
-  "client": { "app": "subcast", "version": "0.2.0", "install": "<每安装一个随机 UUID v4>" }
+  "client": { "app": "subcast", "version": "0.2.0", "install": "<每安装一个随机 UUID v4>" },
+  "audio": { "bytes": 27328678, "etag": "\"…\"", "secs": 1708.04, "fpAlgo": "chromaprint2", "fp": "<base64>" }
 }
 ```
+
+`audio`（可选，0.3.0 起）：做字幕用的那份音频文件。`bytes`、`etag` 让听众判断自己拿到的是不是同一个文件；`fp` 是它的声音指纹（chromaprint 预设 2，每 1366/11025 秒一个小端 u32，base64），换了广告或重新剪辑的版本靠它把字幕对齐。查询结果里带 `audio: { bytes, etag, secs, fp: true|false }`（没有时为 `null`），指纹本身单独用 `GET /api/v1/transcripts/:id/fingerprint` 取（`{ algo, secs, fp }`）。近似重复的上传若带指纹而原版本没有，且得分不低，会接替原版本的内容。
 
 响应：`{ id, stored, rank, versions, action }`
 
@@ -246,7 +249,7 @@ Episode guides (Chinese Markdown). One per episode: the first stays, and the ins
 
 ### `POST /api/v1/transcripts`
 
-Body as in the contract: `keys`, `title`, `show`, `duration`, `source` (`whisper|qwen3|cloud`), `model`, `language`, `segments`, optional `translation`, and `client` (`app`, `version`, `install` — a random UUID v4 per install).
+Body as in the contract: `keys`, `title`, `show`, `duration`, `source` (`whisper|qwen3|cloud`), `model`, `language`, `segments`, optional `translation`, `client` (`app`, `version`, `install` — a random UUID v4 per install), and optional `audio` (since 0.3.0): the file the subtitles were made from, `{ bytes, etag, secs, fpAlgo: "chromaprint2", fp }`, where `fp` is its acoustic fingerprint (one little-endian u32 per 1366/11025 s, base64). Lookups carry `audio: { bytes, etag, secs, fp: bool }` or `null`; the fingerprint itself comes from `GET /api/v1/transcripts/:id/fingerprint` (`{ algo, secs, fp }`), so listeners whose file differs (other ads, a re-cut) can line the subtitles up. A near-duplicate upload with a fingerprint takes over a version without one when it scores no lower.
 
 Response: `{ id, stored, rank, versions, action }`
 
