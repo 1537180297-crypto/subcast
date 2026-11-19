@@ -250,6 +250,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
           ? <button className="icon-btn on" title={t("停止朗读")} aria-label={t("停止朗读")} onClick={stopZhRead}><Square size={13} fill="currentColor" /></button>
           : <button className="icon-btn" title={t("朗读中文")} aria-label={t("朗读中文")} onClick={() => readFrom(Math.max(0, active))}><Volume2 size={16} /></button>}
         <RatePicker />
+        <button className="icon-btn sm" aria-label={t("朗读设置")} title={t("朗读设置")} aria-expanded={readSetup} onClick={() => setReadSetup(!readSetup)}><ChevronDown size={13} /></button>
         {readSetup && <ReadAloudSettings onClose={() => setReadSetup(false)} />}
       </div>
     )}

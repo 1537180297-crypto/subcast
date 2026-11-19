@@ -148,7 +148,7 @@ export async function speak(text: string, onError?: (m: string) => void) {
 
 function sampleLine(voiceId: string): string {
   const v = voiceId.toLowerCase();
-  if (v.startsWith("en") || v.includes("en-") || v.includes("en_") || v.includes("default_en") || v === "tim" || v === "dacey") {
+  if (v.startsWith("en") || v.includes("en-") || v.includes("en_") || v.includes("default_en") || v === "tim" || v === "dacey" || ["mia", "chloe", "milo", "dean"].includes(v)) {
     return "Hello, this is a voice sample from SubCast.";
   }
   return t("你好，这是 SubCast 朗读音色试听。");
@@ -305,7 +305,7 @@ function englishVoiceFor(svc: TtsService): string {
   switch (svc.id) {
     case "edge": return svc.voice.toLowerCase().startsWith("en-") ? svc.voice : "en-US-AndrewMultilingualNeural";
     case "doubao": return svc.voice.toLowerCase().startsWith("en_") ? svc.voice : "en_male_tim_uranus_bigtts";
-    case "mimo": return "default_en";
+    case "mimo": return /^mimo-v2-tts$/.test(svc.model.trim()) ? "default_en" : ["Mia", "Chloe", "Milo", "Dean"].includes(svc.voice) ? svc.voice : "Mia";
     default: return svc.voice;
   }
 }
