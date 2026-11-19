@@ -7,7 +7,7 @@ export interface TtsService {
   id: string;
   name: string;
   note: string;
-  group: "free" | "cloud";
+  group: "local" | "cloud";
   protocol: TtsProtocol;
   baseUrl: string;
   model: string;
@@ -211,34 +211,18 @@ export const VOICES: [string, string][] = [
 ];
 
 /** Cloud TTS services shown upfront; the rest sit behind 「更多」. */
-export const TTS_CLOUD_MAIN = ["doubao", "mimo", "qwen", "openai"];
+export const TTS_CLOUD_MAIN = ["doubao", "mimo", "qwen", "openai", "edge"];
 
 const v = (list: [string, string][]): TtsVoice[] => list.map(([id, name]) => ({ id, name }));
 
 export const TTS_SERVICES: TtsService[] = [
   {
-    id: "system", name: tk("系统语音"), note: tk("优先使用本机增强语音，完全离线、无需 Key"), group: "free",
+    id: "system", name: tk("系统语音"), note: tk("优先使用本机增强语音，完全离线、无需 Key"), group: "local",
     protocol: "system", baseUrl: "", model: "", models: [], needsKey: false,
     voice: "", voices: [],
   },
   {
-    id: "edge", name: tk("Edge 在线语音"), note: tk("免费、无需 Key，高峰期可能限流"), group: "free",
-    protocol: "edge", baseUrl: "", model: "", models: [], needsKey: false,
-    voice: "zh-CN-YunxiNeural",
-    voices: v([
-      ["zh-CN-YunxiNeural", tk("云希（男声）")],
-      ["zh-CN-XiaoxiaoNeural", tk("晓晓（女声）")],
-      ["zh-CN-YunjianNeural", tk("云健（播音）")],
-      ["zh-CN-XiaoyiNeural", tk("晓伊（温和）")],
-      ["zh-CN-YunyangNeural", tk("云扬（新闻）")],
-      ["zh-TW-HsiaoChenNeural", tk("晓臻（台湾）")],
-      ["zh-HK-HiuMaanNeural", tk("晓曼（粤语）")],
-      ["en-US-AndrewMultilingualNeural", "Andrew"],
-      ["en-US-EmmaMultilingualNeural", "Emma"],
-    ]),
-  },
-  {
-    id: "local", name: tk("本地语音"), note: tk("在本机离线合成，文字不会离开你的电脑"), group: "free",
+    id: "local", name: tk("本地语音"), note: tk("在本机离线合成，文字不会离开你的电脑"), group: "local",
     protocol: "local", baseUrl: "", model: "melo", models: ["melo", "kokoro"], needsKey: false,
     voice: "zf_001",
     voices: v([
@@ -301,6 +285,22 @@ export const TTS_SERVICES: TtsService[] = [
     voices: v([
       ["alloy", "Alloy"], ["ash", "Ash"], ["coral", "Coral"], ["echo", "Echo"],
       ["nova", "Nova"], ["onyx", "Onyx"], ["sage", "Sage"], ["shimmer", "Shimmer"],
+    ]),
+  },
+  {
+    id: "edge", name: tk("Edge 在线语音"), note: tk("无需 API Key，高峰期可能限流"), group: "cloud",
+    protocol: "edge", baseUrl: "", model: "", models: [], needsKey: false,
+    voice: "zh-CN-YunxiNeural",
+    voices: v([
+      ["zh-CN-YunxiNeural", tk("云希（男声）")],
+      ["zh-CN-XiaoxiaoNeural", tk("晓晓（女声）")],
+      ["zh-CN-YunjianNeural", tk("云健（播音）")],
+      ["zh-CN-XiaoyiNeural", tk("晓伊（温和）")],
+      ["zh-CN-YunyangNeural", tk("云扬（新闻）")],
+      ["zh-TW-HsiaoChenNeural", tk("晓臻（台湾）")],
+      ["zh-HK-HiuMaanNeural", tk("晓曼（粤语）")],
+      ["en-US-AndrewMultilingualNeural", "Andrew"],
+      ["en-US-EmmaMultilingualNeural", "Emma"],
     ]),
   },
   {
