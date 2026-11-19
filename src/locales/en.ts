@@ -1037,7 +1037,6 @@ const dict: Record<string, string> = {
   "词典里没有这个词": "Not in the dictionary",
   "在这句里": "In this sentence",
   "暂时没能解释，稍后再试": "Couldn't explain it right now. Try again later.",
-  "原声": "Original",
   "已在生词本": "In word book",
   "加入生词本": "Add to word book",
   "想顺便学英语吗？": "Learn English while you listen?",

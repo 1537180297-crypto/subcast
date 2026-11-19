@@ -147,7 +147,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   useEffect(() => {
     const s = useStore.getState();
     if (cardOpen) {
-      if (settings.learnPause && isCurrent && s.playing) { s.player?.toggle(); pausedForCard.current = true; }
+      if (settings.learnPauseCard && isCurrent && s.playing) { s.player?.toggle(); pausedForCard.current = true; }
     } else if (pausedForCard.current) {
       pausedForCard.current = false;
       if (!s.playing) s.player?.toggle();
