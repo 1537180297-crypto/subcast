@@ -657,6 +657,12 @@ body.resizing iframe, body.resizing video { pointer-events: none; }
 .ep-body-col { flex: 1; min-width: 0; }
 .ep-kicker { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); line-height: 1.4; }
 .ep-kicker > * + *::before { content: "·"; margin-right: 6px; color: var(--line-strong); }
+.ep-kicker > .unseen-dot + *::before { content: none; margin: 0; }
+.unseen-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.kicker-prog { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-text); font-weight: 500; font-variant-numeric: tabular-nums; flex: none; }
+.prog-ring { transform: rotate(-90deg); flex: none; }
+.prog-ring-track { fill: none; stroke: color-mix(in srgb, var(--accent) 24%, transparent); stroke-width: 1.8; }
+.prog-ring-fill { fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linecap: round; }
 .ep-kicker .show-name { color: var(--text-2); font-weight: 500; }
 .ep-title2 { margin-top: 3px; font-size: 15px; font-weight: 600; line-height: 1.5; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-wrap: pretty; }
 .ep-orig { margin-top: 2px; font-size: 12.5px; line-height: 1.45; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
@@ -667,7 +673,14 @@ body.resizing iframe, body.resizing video { pointer-events: none; }
 .mini-bar { width: 34px; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 22%, transparent); overflow: hidden; }
 .mini-bar > span { display: block; height: 100%; background: var(--accent); }
 .ep-item.playing .ep-title2 { color: var(--accent-text); }
-.ep-item.played .ep-title2 { color: var(--text-2); font-weight: 500; }
+.ep-item.state-watched .ep-title2, .ep-card.state-watched .card-title { color: var(--muted); font-weight: 400; }
+.ep-item.state-watched:hover .ep-title2, .ep-card.state-watched:hover .card-title { color: var(--text-2); }
+.ep-item.state-watched .ep-orig { opacity: .72; }
+.ep-item.state-watched .ep-thumb .thumb-img, .ep-card.state-watched .ep-thumb .thumb-img { filter: saturate(.5) brightness(.84); transition: filter .16s var(--ease), transform .25s var(--ease); }
+.ep-item.state-watched:hover .ep-thumb .thumb-img, .ep-card.state-watched:hover .ep-thumb .thumb-img { filter: saturate(.82) brightness(.94); }
+.row-watch-btn { align-self: center; flex: none; opacity: 0; border-radius: 50%; transition: opacity .12s var(--ease), background .12s var(--ease); }
+.ep-item:hover .row-watch-btn, .ep-item:focus-within .row-watch-btn, .row-watch-btn:focus-visible { opacity: 1; }
+@media (hover: none) { .row-watch-btn { opacity: 1; } }
 .side-head.second { margin-top: 14px; }
 .show-item.curated { opacity: .82; }
 .show-item.curated:hover, .show-item.curated.on { opacity: 1; }
@@ -765,7 +778,9 @@ body.resizing iframe, body.resizing video { pointer-events: none; }
 .ep-thumb { position: relative; width: 64px; height: 64px; }
 .ep-thumb.wide { width: 112px; height: 63px; }
 .thumb-dur { position: absolute; right: 4px; bottom: 4px; padding: 0 4px; border-radius: 4px; font-size: 10.5px; line-height: 16px; color: #fff; background: rgba(0,0,0,.72); font-variant-numeric: tabular-nums; }
-.thumb-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.35); }
+.thumb-dur.lifted { bottom: 8px; }
+.thumb-done { position: absolute; right: 5px; top: 5px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: rgba(18,18,18,.72); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); box-shadow: 0 1px 4px rgba(0,0,0,.22); }
+.thumb-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,.42); }
 .thumb-bar > span { display: block; height: 100%; background: var(--accent); }
 .ep-item:hover .ep-thumb img { transform: scale(1.03); }
 .ep-thumb img { transition: transform .25s var(--ease); }
@@ -1318,6 +1333,8 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 .cover-play:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { .cover-play > img, .cover-play-btn { transition: none; } }
 .round-btn.fav-btn.on { color: var(--accent); }
+.round-btn.watch-btn.on { color: var(--accent-text); background: var(--accent-soft); }
+.module-head-actions { display: inline-flex; align-items: center; gap: 10px; }
 
 /* ===================== Home: full-width top, then main + side columns ===================== */
 .page.home { container: home / inline-size; }

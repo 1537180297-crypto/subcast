@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mark-show-watched"
+description = "Enables the mark_show_watched command without any pre-configured scope."
+commands.allow = ["mark_show_watched"]
+
+[[permission]]
+identifier = "deny-mark-show-watched"
+description = "Denies the mark_show_watched command without any pre-configured scope."
+commands.deny = ["mark_show_watched"]

@@ -33,6 +33,10 @@ pub fn open(path: &Path) -> Result<Connection> {
     if !has_deep {
         conn.execute_batch("ALTER TABLE episodes ADD COLUMN deep INTEGER NOT NULL DEFAULT 0; UPDATE episodes SET deep=1 WHERE transcript_type='qiaomu';")?;
     }
+    let has_watched: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('episodes') WHERE name='watched_override'", [], |r| r.get::<_, i64>(0))? > 0;
+    if !has_watched {
+        conn.execute_batch("ALTER TABLE episodes ADD COLUMN watched_override TEXT;")?;
+    }
     Ok(conn)
 }
 
@@ -74,11 +78,16 @@ fn show_from(r: &rusqlite::Row) -> rusqlite::Result<Show> {
     })
 }
 
+/// Shared SQL predicate for "watched" (mirrors `src/lib/watched.ts` exactly).
+/// Uses COALESCE so the expression is strictly boolean (never SQL NULL under `NOT`).
+const IS_WATCHED_SQL: &str = "(COALESCE(e.watched_override, '') = 'done' OR (e.watched_override IS NULL AND COALESCE(e.duration, 0) > 0 AND (e.progress >= e.duration * 0.95 OR (e.duration > 300.0 AND (e.duration - e.progress) <= 90.0))))";
+
 pub fn list_shows(conn: &Connection) -> Result<Vec<Show>> {
-    let mut st = conn.prepare(
+    let sql = format!(
         "SELECT s.id,s.kind,s.title,s.author,s.cover,s.feed_url,s.link,s.description,s.updated_at,
-         (SELECT COUNT(*) FROM episodes e WHERE e.show_id=s.id AND e.progress=0) FROM shows s WHERE s.kind != 'single' ORDER BY s.title COLLATE NOCASE",
-    )?;
+         (SELECT COUNT(*) FROM episodes e WHERE e.show_id=s.id AND NOT {IS_WATCHED_SQL}) FROM shows s WHERE s.kind != 'single' ORDER BY s.title COLLATE NOCASE"
+    );
+    let mut st = conn.prepare(&sql)?;
     let rows = st.query_map([], show_from)?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -96,7 +105,7 @@ pub fn delete_show(conn: &Connection, id: &str) -> Result<()> {
 }
 
 const EPISODE_COLS: &str = "e.id,e.show_id,e.guid,e.title,e.published,e.duration,e.audio_url,e.video_id,e.link,e.cover,e.notes,e.transcript_url,e.transcript_type,e.progress,
-    EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id), s.title, e.deep";
+    EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id), s.title, e.deep, e.watched_override";
 
 /// The same columns without show notes, which are large and lists don't show.
 fn list_cols() -> String { EPISODE_COLS.replacen("e.notes", "NULL", 1) }
@@ -113,7 +122,7 @@ fn episode_from(r: &rusqlite::Row) -> rusqlite::Result<Episode> {
         id: r.get(0)?, show_id: r.get(1)?, guid: r.get(2)?, title: r.get(3)?, published: r.get(4)?, duration: r.get(5)?,
         audio_url: r.get(6)?, video_id: r.get(7)?, link: r.get(8)?, cover: r.get(9)?, notes: r.get(10)?,
         transcript_url: r.get(11)?, transcript_type: r.get(12)?, progress: r.get(13)?, has_transcript: r.get(14)?, show_title: r.get(15)?,
-        deep: r.get(16)?,
+        deep: r.get(16)?, watched_override: r.get(17)?,
     })
 }
 
@@ -156,8 +165,37 @@ pub fn set_audio_url(conn: &Connection, id: &str, url: &str) -> Result<()> {
 }
 
 pub fn set_progress(conn: &Connection, id: &str, seconds: f64) -> Result<()> {
-    conn.execute("UPDATE episodes SET progress=?2 WHERE id=?1", params![id, seconds.max(0.01)])?;
+    let s = seconds.max(0.0);
+    // Resuming playback past 5 s clears an explicit "unseen" reset so auto-tracking takes over again.
+    conn.execute(
+        "UPDATE episodes SET progress=?2, watched_override = CASE WHEN watched_override = 'unseen' AND ?2 > 5.0 THEN NULL ELSE watched_override END WHERE id=?1",
+        params![id, s],
+    )?;
     Ok(())
+}
+
+/// Sets or clears an explicit watched override ("done" | "unseen" | None). Marking "unseen" also resets progress to 0.
+pub fn set_watched(conn: &Connection, id: &str, watched: Option<&str>) -> Result<()> {
+    match watched {
+        Some("done") => {
+            conn.execute("UPDATE episodes SET watched_override = 'done' WHERE id = ?1", [id])?;
+        }
+        Some("unseen") => {
+            conn.execute("UPDATE episodes SET watched_override = 'unseen', progress = 0 WHERE id = ?1", [id])?;
+        }
+        _ => {
+            conn.execute("UPDATE episodes SET watched_override = NULL WHERE id = ?1", [id])?;
+        }
+    }
+    Ok(())
+}
+
+/// Marks every unwatched episode of a show as watched ("done"); returns how many changed.
+pub fn mark_show_watched(conn: &Connection, show_id: &str) -> Result<usize> {
+    let sql = format!("UPDATE episodes SET watched_override = 'done' WHERE show_id = ?1 AND NOT {IS_WATCHED_SQL}");
+    // Replace table alias `e.` with direct column names for UPDATE.
+    let sql = sql.replace("e.", "");
+    Ok(conn.execute(&sql, [show_id])?)
 }
 
 pub fn save_transcript(conn: &Connection, t: &Transcript) -> Result<()> {
@@ -264,6 +302,62 @@ mod tests {
         ep.deep = false;
         upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
         assert!(!get_episode(&conn, "b").unwrap().unwrap().deep);
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn watched_override_and_unplayed_counts() {
+        let path = std::env::temp_dir().join(format!("subcast-watched-test-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut conn = open(&path).unwrap();
+        let show = Show { id: "s1".into(), kind: "podcast".into(), title: "Show".into(), feed_url: "https://ex.com/rss".into(), ..Default::default() };
+        upsert_show(&conn, &show).unwrap();
+        let eps = vec![
+            // Unseen (0 s)
+            Episode { id: "e1".into(), show_id: "s1".into(), guid: "1".into(), title: "E1".into(), duration: Some(1800.0), ..Default::default() },
+            // In progress (600 / 1800 s) -> still counts as unwatched
+            Episode { id: "e2".into(), show_id: "s1".into(), guid: "2".into(), title: "E2".into(), duration: Some(1800.0), ..Default::default() },
+            // Auto-watched via <= 90 s remaining on > 5 min episode (1720 / 1800 s)
+            Episode { id: "e3".into(), show_id: "s1".into(), guid: "3".into(), title: "E3".into(), duration: Some(1800.0), ..Default::default() },
+            // Auto-watched via >= 95% on short episode (190 / 200 s)
+            Episode { id: "e4".into(), show_id: "s1".into(), guid: "4".into(), title: "E4".into(), duration: Some(200.0), ..Default::default() },
+            // No duration -> not auto-watched until override = 'done'
+            Episode { id: "e5".into(), show_id: "s1".into(), guid: "5".into(), title: "E5".into(), duration: None, ..Default::default() },
+        ];
+        upsert_episodes(&mut conn, &eps).unwrap();
+        set_progress(&conn, "e2", 600.0).unwrap();
+        set_progress(&conn, "e3", 1720.0).unwrap();
+        set_progress(&conn, "e4", 190.0).unwrap();
+        set_progress(&conn, "e5", 999.0).unwrap();
+
+        // e1, e2, e5 are unwatched (3); e3 and e4 are auto-watched.
+        assert_eq!(list_shows(&conn).unwrap()[0].unplayed, 3);
+
+        // Manually mark e5 done -> 2 unwatched.
+        set_watched(&conn, "e5", Some("done")).unwrap();
+        assert_eq!(get_episode(&conn, "e5").unwrap().unwrap().watched_override.as_deref(), Some("done"));
+        assert_eq!(list_shows(&conn).unwrap()[0].unplayed, 2);
+
+        // Manually reset e3 to unseen -> progress resets to 0 and unplayed becomes 3.
+        set_watched(&conn, "e3", Some("unseen")).unwrap();
+        let e3 = get_episode(&conn, "e3").unwrap().unwrap();
+        assert_eq!(e3.progress, 0.0);
+        assert_eq!(e3.watched_override.as_deref(), Some("unseen"));
+        assert_eq!(list_shows(&conn).unwrap()[0].unplayed, 3);
+
+        // Playing e3 past 5 s clears the 'unseen' override so progress tracks normally.
+        set_progress(&conn, "e3", 20.0).unwrap();
+        assert_eq!(get_episode(&conn, "e3").unwrap().unwrap().watched_override, None);
+
+        // set_progress allows resetting cleanly to 0.
+        set_progress(&conn, "e2", 0.0).unwrap();
+        assert_eq!(get_episode(&conn, "e2").unwrap().unwrap().progress, 0.0);
+
+        // Mark entire show watched -> 3 episodes updated, unplayed becomes 0.
+        assert_eq!(mark_show_watched(&conn, "s1").unwrap(), 3);
+        assert_eq!(list_shows(&conn).unwrap()[0].unplayed, 0);
+
         drop(conn);
         let _ = std::fs::remove_file(&path);
     }

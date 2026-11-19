@@ -17,6 +17,7 @@ import { alignCurrent, toContent, toPlay } from "../lib/timemap";
 import { useJobs } from "../lib/jobs";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { playNext } from "../lib/library";
+import { markEnded, notePlaybackProgress } from "../lib/watched";
 
 const SAVE_EVERY = 10;
 /** Starts an episode as soon as its player exists: right away when it does, or when it appears (a YouTube
@@ -82,7 +83,11 @@ function track(ep: Episode, raw: number, length?: number): number | undefined {
   noteListening(ep, s.playing);
   const { at: time, gapEnd } = toContent(mapOf(ep.id), raw);
   s.set({ time, rawTime: raw, gapEnd: gapEnd ?? null, ...(length ? { length } : {}) });
-  if (Math.abs(time - lastSaved) > SAVE_EVERY) { lastSaved = time; void api.setProgress(ep.id, time); }
+  if (Math.abs(time - lastSaved) > SAVE_EVERY) {
+    lastSaved = time;
+    void api.setProgress(ep.id, time);
+    notePlaybackProgress(ep, time, length || ep.duration);
+  }
   return gapEnd;
 }
 
@@ -166,10 +171,12 @@ export function AudioEngine() {
         waiting(false);
         useStore.getState().set({ playing: false });
         // Progress is kept in subtitle time, like everything outside the player.
-        void api.setProgress(audio.id, toContent(mapOf(audio.id), e.currentTarget.currentTime).at);
+        const at = toContent(mapOf(audio.id), e.currentTarget.currentTime).at;
+        void api.setProgress(audio.id, at);
+        notePlaybackProgress(audio, at, e.currentTarget.duration || audio.duration);
         if (saved && src !== audioSrc(audio)) setSrc(audioSrc(audio));
       }}
-      onEnded={(e) => { void api.setProgress(audio.id, toContent(mapOf(audio.id), e.currentTarget.duration || e.currentTarget.currentTime).at); playNext(); }}
+      onEnded={(e) => { markEnded(audio, toContent(mapOf(audio.id), e.currentTarget.duration || e.currentTarget.currentTime).at); playNext(); }}
       onError={() => { waiting(false); useStore.getState().notify(t("音频加载失败，可能是网络问题或地址已失效")); }}
     />
   );
@@ -392,8 +399,8 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             if (e.data === 3) waiting(true); else if (e.data === 1 || e.data === 2 || e.data === 0) waiting(false);
             useStore.getState().set({ playing: e.data === 1 });
             if (e.data === 1) hideYouTubeCaptions(player);
-            if (e.data === 2) void api.setProgress(ep.id, player.getCurrentTime());
-            if (e.data === 0) { void api.setProgress(ep.id, player.getDuration?.() ?? player.getCurrentTime()); playNext(); }
+            if (e.data === 2) { const t = player.getCurrentTime(); void api.setProgress(ep.id, t); notePlaybackProgress(ep, t, player.getDuration?.() ?? ep.duration); }
+            if (e.data === 0) { markEnded(ep, player.getDuration?.() ?? player.getCurrentTime()); playNext(); }
           },
           onError: (e: any) => {
             // 101/150: the owner disallows embedding. 152/153 are player/referrer problems on this side, not the owner's choice.
@@ -484,8 +491,8 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
         onPlay={(e) => { setStarted(true); useStore.getState().set({ playing: true }); if (e.currentTarget.readyState < 3) waiting(true); }}
         onWaiting={() => waiting(true)}
         onPlaying={() => waiting(false)}
-        onPause={(e) => { waiting(false); useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); }}
-        onEnded={(e) => { void api.setProgress(ep.id, e.currentTarget.duration); playNext(); }} />
+        onPause={(e) => { waiting(false); useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); notePlaybackProgress(ep, e.currentTarget.currentTime, e.currentTarget.duration || ep.duration); }}
+        onEnded={(e) => { markEnded(ep, e.currentTarget.duration); playNext(); }} />
       <div className="video-shield" onClick={() => useStore.getState().player?.toggle()} onDoubleClick={onFullscreen} />
       <PlayHint ep={ep} show={!started} onClick={() => useStore.getState().player?.toggle()} />
     </>

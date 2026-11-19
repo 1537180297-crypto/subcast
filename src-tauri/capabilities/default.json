@@ -19,6 +19,8 @@
     "allow-get-episode",
     "allow-remove-show",
     "allow-set-progress",
+    "allow-set-watched",
+    "allow-mark-show-watched",
     "allow-search-podcasts",
     "allow-load-transcript",
     "allow-fetch-official-transcript",
