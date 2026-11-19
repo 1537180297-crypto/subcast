@@ -9,7 +9,7 @@ import { useStore } from "../store";
 import { t, tr } from "../lib/i18n";
 import { localInstalled, refreshLocalTts, useLocalTts } from "../lib/localTts";
 import { KeyField, NO_AUTO } from "./SettingsDialog";
-import { PreviewButton, isLocalEngine, useSystemVoices } from "./TtsSettings";
+import { PreviewButton, SHARED_KEY, isLocalEngine, useSystemVoices } from "./TtsSettings";
 import { RateControl, RatePicker } from "./RatePicker";
 
 export function ReadAloud({ text, title }: { text: () => string; title?: string }) {
@@ -52,8 +52,8 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
     setCustom(svc.group === "cloud" && svc.voices.length > 0 && !svc.voices.some((v) => v.id === svc.voice));
   }, [svc.id]);
 
-  // Quick-switch row: offline (System Enhanced / Melo / Kokoro) + Doubao + Edge + currently selected cloud engine.
-  const quickIds = ["local", "doubao", "edge"];
+  // Quick-switch row: offline (System Enhanced / Melo / Kokoro) + Doubao + DeepSeek + currently selected cloud engine.
+  const quickIds = ["local", "doubao", "deepseek"];
   if (!quickIds.includes(svc.id) && svc.id !== "system") quickIds.push(svc.id);
 
   const setVoice = (voice: string, extra?: Partial<typeof svc>, quiet = false) => {
@@ -176,7 +176,7 @@ export function ReadAloudSettings({ onClose }: { onClose?: () => void }) {
       {svc.needsKey && (
         <>
           <p className="setup-title">{t("{name} Key", { name: t(svc.name) })}</p>
-          <KeyField account={`tts.${svc.id}`} placeholder={svc.sharedKeyHint ? t(svc.sharedKeyHint) : undefined} />
+          <KeyField account={`tts.${svc.id}`} shared={SHARED_KEY[svc.id]} placeholder={svc.sharedKeyHint ? t(svc.sharedKeyHint) : undefined} />
           <div className="row-actions">
             {svc.keyUrl && (
               <button className="link-btn small" onClick={() => openUrl(svc.keyUrl!)}>
