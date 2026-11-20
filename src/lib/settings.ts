@@ -92,6 +92,8 @@ export interface Settings {
   autoUpdate: boolean;
   /** The Discover banner for our own show was closed by the user. */
   homeBannerHidden: boolean;
+  /** Where highlight clips are exported (empty: Downloads). */
+  clipExportDir?: string;
   /** List the 乔木精读 shows not yet followed under the sidebar's subscriptions. */
   sideCurated: boolean;
   /** English learning mode (设置 › 学英语). Off by default; everything below only applies when it is on. */

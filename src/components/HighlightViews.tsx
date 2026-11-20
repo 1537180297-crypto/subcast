@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, Loader2, LocateFixed, Play, RefreshCw, Scissors, Sparkles, Square } from "lucide-react";
-import { type Episode, type Segment } from "../lib/api";
+import { Check, Copy, Layers, Loader2, Play, RefreshCw, Scissors, Sparkles, Square } from "lucide-react";
+import { api, errorText, type Episode, type Segment } from "../lib/api";
 import { clock } from "../lib/format";
-import { clearHighlightsError, loadHighlights, previewEpisodeRange, runHighlights, stopHighlights, useHighlights, type HighlightClip } from "../lib/highlights";
+import { clearHighlightsError, loadHighlights, montageClip, polishClipCopy, previewEpisodeRange, runHighlights, saveClipCopy, stopHighlights, useHighlights, type HighlightClip } from "../lib/highlights";
 import { t, tk, useLang } from "../lib/i18n";
 import { useStore } from "../store";
 import { openVideoClipDialog } from "./VideoClipDialog";
@@ -12,6 +12,19 @@ const INTENT_SUGGESTIONS = [
   tk("实战方法与具体案例"),
   tk("争议判断与行业趋势"),
 ];
+
+/** Gets cutting ready for an episode with highlights: its video addresses are resolved in the background
+ *  (~30 s the first time), and the best two clips are fetched with the exact range the clip window asks for
+ *  (0.25 s before, 0.4 s after), so opening them plays the real cut at once. */
+export function useClipWarm(ep: Episode, segments: Segment[]) {
+  const bundle = useHighlights((s) => s.bundles[ep.id]);
+  const topRanges = useMemo(() => [...(bundle?.clips ?? [])].sort((a, b) => b.score - a.score).slice(0, 2)
+    .map((c) => [Math.max(0, (segments[c.startIdx]?.start ?? c.start) - 0.25), (segments[c.endIdx]?.end ?? c.end) + 0.4] as [number, number]), [bundle, segments]);
+  const key = topRanges.map((r) => r.join("-")).join("|");
+  useEffect(() => {
+    if (ep.videoId && bundle?.clips.length) void api.videoClipWarm(ep.videoId, topRanges).catch(() => {});
+  }, [ep.videoId, key]); // eslint-disable-line react-hooks/exhaustive-deps
+}
 
 export function HighlightsPanel({
   ep,
@@ -39,6 +52,12 @@ export function HighlightsPanel({
   useEffect(() => {
     void loadHighlights(ep.id);
   }, [ep.id]);
+  // Resolving the video's addresses takes ~30 s: done now, cutting a clip later only downloads its stretch.
+  useClipWarm(ep, segments);
+  const [copying, setCopying] = useState<string | null>(null);
+  // Picking clips for one montage (several stretches cut together, in time order).
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
 
   const clips = useMemo(() => {
     const list = bundle?.clips ?? [];
@@ -52,13 +71,44 @@ export function HighlightsPanel({
     void runHighlights(ep, segments, zh, customIntent ?? intent);
   };
 
+  /** Copies the model-written post for the clip, writing it first when the clip doesn't have one yet. */
   const copyShare = async (c: HighlightClip) => {
+    if (copying) return;
     try {
-      await navigator.clipboard.writeText([c.title, c.shareCopy].filter(Boolean).join("\n\n"));
+      let share = c.articleCopy ? c.shareCopy : "";
+      if (!share) {
+        setCopying(c.id);
+        const res = await polishClipCopy({ ep, segments, zh, startIdx: c.startIdx, endIdx: c.endIdx });
+        share = res.shareCopy;
+        void saveClipCopy(ep.id, c.id, { shareCopy: res.shareCopy, articleCopy: res.articleCopy });
+      }
+      await navigator.clipboard.writeText([c.title, share].filter(Boolean).join("\n\n"));
       notify(t("传播文案已复制"));
-    } catch {
-      notify(t("复制失败"));
+    } catch (e) {
+      notify(errorText(e));
+    } finally {
+      setCopying(null);
     }
+  };
+  const togglePick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const openMontage = (ids: string[]) => {
+    const chosen = (bundle?.clips ?? []).filter((c) => ids.includes(c.id));
+    if (chosen.length < 2) return;
+    setPicking(false);
+    setPicked([]);
+    openVideoClipDialog({ ep, segments, zh, clip: montageClip(chosen) });
+  };
+  // The best clips, in time order, up to about three minutes: a one-click "best of".
+  const bestOf = () => {
+    const ranked = [...(bundle?.clips ?? [])].sort((a, b) => b.score - a.score);
+    const out: HighlightClip[] = [];
+    let total = 0;
+    for (const c of ranked) {
+      if (out.length >= 5 || (out.length >= 2 && total + (c.end - c.start) > 200)) break;
+      out.push(c);
+      total += c.end - c.start;
+    }
+    openMontage(out.map((c) => c.id));
   };
 
   if (loading) {
@@ -123,6 +173,16 @@ export function HighlightsPanel({
       <div className="hl-toolbar">
         <span className="muted small">{t("共 {n} 段高光", { n: clips.length })}{bundle.intent ? ` · ${bundle.intent}` : ""}</span>
         <span className="spacer" />
+        {ep.videoId && clips.length > 1 && !picking && (
+          <>
+            <button type="button" className="link-btn" onClick={bestOf} title={t("把评分最高的几段按时间顺序剪成一条")}>
+              <Sparkles size={12} /> {t("精华合集")}
+            </button>
+            <button type="button" className="link-btn" onClick={() => { setPicking(true); setPicked([]); }}>
+              <Layers size={12} /> {t("自选拼接")}
+            </button>
+          </>
+        )}
         <button type="button" className="link-btn" onClick={() => setSortBy(sortBy === "score" ? "time" : "score")}>
           {sortBy === "score" ? t("按时间顺序") : t("按传播度")}
         </button>
@@ -143,6 +203,17 @@ export function HighlightsPanel({
         </div>
       )}
 
+      {picking && (
+        <div className="hl-pickbar">
+          <span className="small">{picked.length ? t("已选 {n} 段，会按时间顺序拼成一条", { n: picked.length }) : t("勾选要拼在一起的片段")}</span>
+          <span className="spacer" />
+          <button type="button" className="btn ghost sm" onClick={() => { setPicking(false); setPicked([]); }}>{t("取消")}</button>
+          <button type="button" className="btn primary sm" disabled={picked.length < 2} onClick={() => openMontage(picked)}>
+            <Scissors size={12} /> {t("拼成视频")}
+          </button>
+        </div>
+      )}
+
       {error && <p className="error-text hl-err">{error}</p>}
 
       <div className="hl-list">
@@ -151,12 +222,15 @@ export function HighlightsPanel({
           const previewOrig = segments[c.startIdx]?.text ?? "";
           const durSec = Math.max(1, Math.round(c.end - c.start));
           return (
-            <article key={c.id} className="hl-card">
+            <article key={c.id} className={`hl-card${picking ? " picking" : ""}${picked.includes(c.id) ? " picked" : ""}`} onClick={picking ? () => togglePick(c.id) : undefined}>
               <div className="hl-card-top">
+                {picking && <span className={`hl-check${picked.includes(c.id) ? " on" : ""}`}>{picked.includes(c.id) && <Check size={12} strokeWidth={3} />}</span>}
                 <span className="hl-score" title={t("传播潜力评分")}>✦ {c.score}</span>
                 <span className="num small muted">{clock(c.start)} – {clock(c.end)} · {durSec}s</span>
               </div>
-              <h4 className="hl-title">{c.title}</h4>
+              <h4 className="hl-title">
+                <button type="button" className="hl-title-btn" title={t("在字幕里找到这一段")} onClick={(e) => { if (picking) return; e.stopPropagation(); onJumpToTranscript(c.startIdx, c.start); }}>{c.title}</button>
+              </h4>
               {c.reason && <p className="hl-reason">{c.reason}</p>}
               <div className="hl-quote">
                 {previewZh && <p className="hl-qzh clamp2">{previewZh}</p>}
@@ -167,7 +241,7 @@ export function HighlightsPanel({
                   {c.tags.map((tag) => <span key={tag} className="hl-tag">{tag}</span>)}
                 </div>
               )}
-              <div className="hl-actions">
+              {!picking && <div className="hl-actions">
                 <button type="button" className="btn ghost sm" onClick={() => previewEpisodeRange(ep, c.start, c.end)}>
                   <Play size={12} fill="currentColor" /> {t("试看")}
                 </button>
@@ -176,13 +250,10 @@ export function HighlightsPanel({
                     <Scissors size={12} /> {t("剪成视频")}
                   </button>
                 )}
-                <button type="button" className="btn ghost sm" onClick={() => void copyShare(c)}>
-                  <Copy size={12} /> {t("文案")}
+                <button type="button" className="btn ghost sm" disabled={copying === c.id} onClick={() => void copyShare(c)} title={t("复制 AI 写的发布文案")}>
+                  {copying === c.id ? <Loader2 size={12} className="spin" /> : <Copy size={12} />} {t("复制文案")}
                 </button>
-                <button type="button" className="icon-btn sm" title={t("定位到字幕")} onClick={() => onJumpToTranscript(c.startIdx, c.start)}>
-                  <LocateFixed size={13} />
-                </button>
-              </div>
+              </div>}
             </article>
           );
         })}

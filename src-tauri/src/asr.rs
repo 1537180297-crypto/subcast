@@ -602,6 +602,13 @@ pub mod streams {
         map.get(key).filter(|(_, until)| *until > now()).map(|(u, _)| u.clone())
     }
 
+    pub fn forget(key: &str) {
+        let mut map = MAP.lock().unwrap();
+        if map.remove(key).is_some() {
+            if let (Some(f), Ok(b)) = (FILE.get(), serde_json::to_vec(&*map)) { let _ = std::fs::write(f, b); }
+        }
+    }
+
     pub fn put(key: &str, url: &str) {
         let t = now();
         let until = expiry(url).map(|e| e.saturating_sub(MARGIN)).unwrap_or(t + DEFAULT_LIFE);

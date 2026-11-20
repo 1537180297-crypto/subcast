@@ -46,9 +46,31 @@ pub struct CueOverlay {
     pub png_base64: String,
 }
 
+/// The output canvas and where the picture goes on it (computed by the dialog, which draws the overlays to match).
+/// `fit`: "fill" crops the picture to cover the canvas (panned by `crop_x`), "card" fits it into the box
+/// `vx,vy,vw,vh` over a blurred or plain background.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Frame {
+    pub w: u32,
+    pub h: u32,
+    pub fit: String,
+    #[serde(default)] pub vx: u32,
+    #[serde(default)] pub vy: u32,
+    #[serde(default)] pub vw: u32,
+    #[serde(default)] pub vh: u32,
+    /// Card only: crop the picture to the box's shape (panned by `crop_x`) instead of fitting it whole.
+    #[serde(default)] pub crop_box: bool,
+}
+
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderRequest {
+    #[serde(default)]
+    pub frame: Option<Frame>,
+    /// Where clips go unless the user picked a file (Settings › 存储); Downloads when empty.
+    #[serde(default)]
+    pub output_dir: Option<String>,
     pub raw_path: String,
     #[serde(default)]
     pub output_path: Option<String>,
@@ -551,6 +573,29 @@ async fn run_ffmpeg_with_progress(
     Ok(())
 }
 
+/// Separate video and audio (each starting a little before the stretch) as one exact-length MP4: one encode,
+/// hardware H.264 at a generous bitrate since the export encodes once more.
+pub async fn encode_exact(ffmpeg: &Path, video: &Path, v_ss: f64, audio: &Path, a_ss: f64, dur: f64, dest: &Path, cancel: &AtomicBool) -> Result<()> {
+    let tmp = dest.with_extension("part.mp4");
+    for hw in [has_videotoolbox(ffmpeg), false] {
+        let mut args: Vec<String> = vec![
+            "-y".into(), "-ss".into(), format!("{:.3}", v_ss.max(0.0)), "-i".into(), video.to_string_lossy().into_owned(),
+            "-ss".into(), format!("{:.3}", a_ss.max(0.0)), "-i".into(), audio.to_string_lossy().into_owned(),
+            "-t".into(), format!("{dur:.3}"), "-map".into(), "0:v:0".into(), "-map".into(), "1:a:0".into(),
+            "-vf".into(), "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p".into(),
+        ];
+        if hw { args.extend(["-c:v".into(), "h264_videotoolbox".into(), "-b:v".into(), "12M".into()]); }
+        else { args.extend(["-c:v".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "18".into()]); }
+        args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(), "-movflags".into(), "+faststart".into(), tmp.to_string_lossy().into_owned()]);
+        match run_ffmpeg_with_progress(ffmpeg, None, &args, dur, cancel, |_| {}).await {
+            Ok(()) => { tokio::fs::rename(&tmp, dest).await?; return Ok(()); }
+            Err(e) if cancel.load(Ordering::Relaxed) || !hw => { let _ = tokio::fs::remove_file(&tmp).await; return Err(e); }
+            Err(_) => { let _ = tokio::fs::remove_file(&tmp).await; }
+        }
+    }
+    unreachable!()
+}
+
 /// Encodes `input` (optionally trimmed by `trim_ss` / `trim_t`) into a standard H.264/yuv420p/AAC MP4.
 async fn normalize_mp4(
     ffmpeg: &Path,
@@ -684,6 +729,54 @@ async fn download_youtube_section_once(
     Err(anyhow!("没有找到下载的视频片段"))
 }
 
+/// Several stretches of one video cut together in order (a montage): each is fetched (and cached) on its own,
+/// then joined with one encode. Burned-in subtitle detection and frames come from the joined file.
+pub async fn prepare_montage(
+    data: &Path,
+    video_id: &str,
+    ranges: &[(f64, f64)],
+    cancel: Arc<AtomicBool>,
+    mut on_progress: impl FnMut(&str, f64, &str),
+) -> Result<PreparedClip> {
+    if ranges.len() < 2 { bail!("片段时间范围无效"); }
+    let dir = clips_work_dir(data, video_id);
+    tokio::fs::create_dir_all(&dir).await?;
+    let key: String = ranges.iter().map(|(a, b)| format!("{}-{}", (a * 1000.0).round() as u64, (b * 1000.0).round() as u64)).collect::<Vec<_>>().join("_");
+    let dest = dir.join(format!("montage-{:x}.mp4", { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); key.hash(&mut h); h.finish() }));
+    let total: f64 = ranges.iter().map(|(a, b)| b - a).sum();
+    let ffmpeg = ensure_ffmpeg(data, &cancel, |_, _| {}).await?;
+    if dest.is_file() && std::fs::metadata(&dest).map(|m| m.len() > 10_000).unwrap_or(false) {
+        on_progress("done", 1.0, "已复用缓存片段");
+        return Ok(finish_prepared(&ffmpeg, &dest, total, true).await);
+    }
+    let n = ranges.len() as f64;
+    let mut paths = Vec::new();
+    for (k, &(a, b)) in ranges.iter().enumerate() {
+        let base = k as f64 / n;
+        let part = prepare_segment(data, video_id, a, b, cancel.clone(), |stage, p, m| {
+            if stage != "done" { on_progress("download", (base + p / n) * 0.85, m); }
+        }).await?;
+        paths.push(PathBuf::from(part.path));
+    }
+    on_progress("trim", 0.88, "正在拼接片段…");
+    let tmp = dest.with_extension("part.mp4");
+    let mut args: Vec<String> = vec!["-y".into()];
+    for p in &paths { args.extend(["-i".into(), p.to_string_lossy().into_owned()]); }
+    // Same size for every part (they come from one video), then one concat.
+    let mut graph = String::new();
+    for k in 0..paths.len() { graph.push_str(&format!("[{k}:v]setsar=1,format=yuv420p[v{k}];")); }
+    for k in 0..paths.len() { graph.push_str(&format!("[v{k}][{k}:a]")); }
+    graph.push_str(&format!("concat=n={}:v=1:a=1[v][a]", paths.len()));
+    args.extend(["-filter_complex".into(), graph, "-map".into(), "[v]".into(), "-map".into(), "[a]".into()]);
+    if has_videotoolbox(&ffmpeg) { args.extend(["-c:v".into(), "h264_videotoolbox".into(), "-b:v".into(), "12M".into()]); }
+    else { args.extend(["-c:v".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "18".into()]); }
+    args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(), "-movflags".into(), "+faststart".into(), tmp.to_string_lossy().into_owned()]);
+    run_ffmpeg_with_progress(&ffmpeg, None, &args, total, &cancel, |p| on_progress("trim", 0.88 + p * 0.1, "正在拼接片段…")).await?;
+    tokio::fs::rename(&tmp, &dest).await?;
+    on_progress("done", 1.0, "片段已就绪");
+    Ok(finish_prepared(&ffmpeg, &dest, total, false).await)
+}
+
 /// Fetches (or reuses cached) `[start, end]` raw H.264 clip for `video_id`.
 pub async fn prepare_segment(
     data: &Path,
@@ -704,6 +797,12 @@ pub async fn prepare_segment(
     let dir = clips_work_dir(data, video_id);
     tokio::fs::create_dir_all(&dir).await?;
     let dest = dir.join(format!("{start_ms}-{end_ms}.mp4"));
+    // One fetch per file at a time: a background prefetch and the user's own click on the same clip share it.
+    let lock = {
+        static LOCKS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = once_cell::sync::Lazy::new(Default::default);
+        LOCKS.lock().unwrap().entry(dest.clone()).or_default().clone()
+    };
+    let _held = lock.lock().await;
 
     on_progress("ffmpeg", 0.05, "正在检查视频工具…");
     let ffmpeg = ensure_ffmpeg(data, &cancel, |got, total| {
@@ -726,6 +825,20 @@ pub async fn prepare_segment(
         return Ok(finish_prepared(&ffmpeg, &dest, dur, true).await);
     }
 
+    // Fast path: only this stretch's bytes, over parallel connections (fastclip.rs). Falls back to yt-dlp's own
+    // section download when the format has no index or anything else goes wrong.
+    on_progress("download", 0.1, "正在获取这一段原视频…");
+    if let Ok(bin) = asr::ytdlp(data).await {
+        let fast = crate::fastclip::fetch_section(data, &bin, &ffmpeg, video_id, start, end, &dest, cancel.clone(), |p, m| on_progress("download", 0.1 + p * 0.85, m)).await;
+        match fast {
+            Ok(()) => {
+                on_progress("done", 1.0, "片段已就绪");
+                return Ok(finish_prepared(&ffmpeg, &dest, dur, false).await);
+            }
+            Err(e) if cancel.load(Ordering::Relaxed) => return Err(e),
+            Err(e) => eprintln!("fast section download failed, using yt-dlp: {e}"),
+        }
+    }
     on_progress("download", 0.15, "正在获取这一段原视频…");
     let raw = asr::with_ytdlp(data, |bin| {
         let (ff, vid, d, c) = (ffmpeg.clone(), video_id.to_string(), dir.clone(), cancel.clone());
@@ -747,6 +860,7 @@ pub fn build_filter_script(
     layout: &str,
     card_bg: &str,
     crop_x: f64,
+    frame: Option<&Frame>,
     has_static: bool,
     cues: &[(f64, f64, i32)],
     cover_mode: &str,
@@ -755,13 +869,41 @@ pub fn build_filter_script(
 ) -> String {
     let cx = crop_x.clamp(0.0, 1.0);
     let mut parts: Vec<String> = Vec::new();
+    let even = |v: u32| (v / 2 * 2).max(2);
 
+    if let Some(f) = frame {
+        let (w, h) = (even(f.w), even(f.h));
+        if f.fit == "card" {
+            // Background blurred at quarter size (as good to the eye, ~7x cheaper than blurring the full frame).
+            let bg = match card_bg {
+                "blur" => format!("[bg]scale={qw}:{qh}:force_original_aspect_ratio=increase,crop={qw}:{qh},boxblur=6:2,eq=brightness=-0.22:saturation=0.85,scale={w}:{h},setsar=1[bg2]", qw = even(w / 4), qh = even(h / 4)),
+                other => {
+                    let hex = match other { "paper" => "#f5f2eb", "white" => "#ffffff", _ => "#141315" };
+                    format!("[bg]scale={w}:{h},drawbox=x=0:y=0:w=iw:h=ih:color={hex}:t=fill,setsar=1[bg2]")
+                }
+            };
+            let (vw, vh) = (even(f.vw.max(2)), even(f.vh.max(2)));
+            let fg = if f.crop_box {
+                format!("[fg]scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh}:(iw-{vw})*{cx:.4}:(ih-{vh})/2,setsar=1[fg2]")
+            } else {
+                format!("[fg]scale={vw}:{vh}:force_original_aspect_ratio=decrease,setsar=1[fg2]")
+            };
+            parts.push(format!(
+                "[0:v]split[fg][bg];{bg};{fg};[bg2][fg2]overlay={vx}+({vw}-w)/2:{vy}+({vh}-h)/2[base]",
+                vx = f.vx, vy = f.vy
+            ));
+        } else {
+            parts.push(format!(
+                "[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:(iw-{w})*{cx:.4}:(ih-{h})/2,setsar=1[base]"
+            ));
+        }
+    } else {
     match layout {
         "portrait_card" => {
             if card_bg == "blur" {
                 parts.push(
                     "[0:v]split[fg][bg];\
-                     [bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:6,eq=brightness=-0.22:saturation=0.85,setsar=1[bg2];\
+                     [bg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,eq=brightness=-0.22:saturation=0.85,scale=1080:1920,setsar=1[bg2];\
                      [fg]scale=1080:640:force_original_aspect_ratio=decrease,setsar=1[fg2];\
                      [bg2][fg2]overlay=(W-w)/2:560+(640-h)/2[base]".into()
                 );
@@ -785,6 +927,7 @@ pub fn build_filter_script(
                 "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,setsar=1[base]".into()
             );
         }
+    }
     }
 
     let mut cur = "base".to_string();
@@ -836,8 +979,12 @@ fn decode_png_base64(raw: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| anyhow!("PNG 解码失败：{e}")) // i18n-ignore
 }
 
-fn default_mp4_path(name: &str) -> Result<PathBuf> {
-    let dir = dirs::download_dir().or_else(dirs::desktop_dir).ok_or_else(|| anyhow!("找不到下载文件夹"))?;
+/// A free `<name>.mp4` in `dir` (the folder set in Settings), or else the Downloads folder.
+fn default_mp4_path(name: &str, dir: Option<&str>) -> Result<PathBuf> {
+    let dir = match dir.map(str::trim).filter(|d| !d.is_empty()).map(PathBuf::from).filter(|d| d.is_dir()) {
+        Some(d) => d,
+        None => dirs::download_dir().or_else(dirs::desktop_dir).ok_or_else(|| anyhow!("找不到下载文件夹"))?,
+    };
     let safe: String = name.chars().filter(|c| !"/\\:*?\"<>|\0".contains(*c)).take(80).collect();
     let safe = safe.trim();
     let base = if safe.is_empty() { "SubCast 切片" } else { safe }; // i18n-ignore
@@ -874,7 +1021,7 @@ pub async fn render_clip(
 
     let final_out = match req.output_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(p) => PathBuf::from(p),
-        None => default_mp4_path(&req.default_name)?,
+        None => default_mp4_path(&req.default_name, req.output_dir.as_deref())?,
     };
     if let Some(parent) = final_out.parent() { tokio::fs::create_dir_all(parent).await?; }
 
@@ -953,6 +1100,7 @@ async fn render_into(
         &req.layout,
         &req.card_bg,
         req.crop_x,
+        req.frame.as_ref(),
         has_static,
         &cue_meta,
         cover_mode,
@@ -963,7 +1111,7 @@ async fn render_into(
     let use_vt = has_videotoolbox(ffmpeg);
     let dur = req.duration.max(1.0) + if cover_input_idx.is_some() && cover_mode == "hold" { 1.0 } else { 0.0 };
 
-    on_progress("render", 0.12, "正在烧录双语字幕并合成 MP4…");
+    on_progress("render", 0.12, "正在合成视频…");
 
     for attempt in [use_vt, false] {
         let mut args: Vec<String> = vec!["-y".into(), "-i".into(), raw_path.to_string_lossy().into_owned()];
@@ -982,7 +1130,7 @@ async fn render_into(
             "-map".into(), audio_map.into(),
         ]);
         if attempt {
-            args.extend(["-c:v:0".into(), "h264_videotoolbox".into(), "-b:v:0".into(), "6000k".into()]);
+            args.extend(["-c:v:0".into(), "h264_videotoolbox".into(), "-b:v:0".into(), "10M".into(), "-maxrate:v:0".into(), "14M".into(), "-bufsize:v:0".into(), "20M".into()]);
         } else {
             args.extend(["-c:v:0".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "19".into()]);
         }
@@ -1001,7 +1149,7 @@ async fn render_into(
         ]);
 
         match run_ffmpeg_with_progress(ffmpeg, Some(work_dir), &args, dur, cancel, |p| {
-            on_progress("render", 0.12 + p * 0.85, "正在烧录双语字幕并合成 MP4…");
+            on_progress("render", 0.12 + p * 0.85, "正在合成视频…");
         }).await {
             Ok(()) => {
                 // Rename across directories falls back to copy + remove if final_out is on another volume.
@@ -1028,28 +1176,35 @@ mod tests {
 
     #[test]
     fn filter_script_variants() {
-        let l = build_filter_script("landscape", "blur", 0.5, true, &[(0.5, 2.0, 820)], "flash", Some(3), true);
+        let l = build_filter_script("landscape", "blur", 0.5, None, true, &[(0.5, 2.0, 820)], "flash", Some(3), true);
         assert!(l.contains("scale=1920:1080"));
         assert!(l.contains("[base][1:v]overlay=0:0:eof_action=repeat:format=auto[v0]"));
         assert!(l.contains("[v0][2:v]overlay=0:820:enable='between(t,0.500,2.000)'"));
         assert!(l.contains("[3:v]overlay=0:0:enable='lt(t,0.140)'"));
         assert!(l.ends_with("format=yuv420p[vout]"));
 
-        let c_blur = build_filter_script("portrait_card", "blur", 0.5, false, &[(0.0, 1.5, 1300)], "hold", Some(2), true);
-        assert!(c_blur.contains("boxblur=24:6"));
+        let c_blur = build_filter_script("portrait_card", "blur", 0.5, None, false, &[(0.0, 1.5, 1300)], "hold", Some(2), true);
+        assert!(c_blur.contains("boxblur=6:2"));
         assert!(c_blur.contains("[base][1:v]overlay=0:1300"));
         assert!(c_blur.contains("tpad=start_duration=1.000:start_mode=clone"));
         assert!(c_blur.contains("[0:a]adelay=1000:all=1[aout]"));
 
-        let c_hold_silent = build_filter_script("portrait_card", "night", 0.5, true, &[], "hold", Some(2), false);
+        let c_hold_silent = build_filter_script("portrait_card", "night", 0.5, None, true, &[], "hold", Some(2), false);
         assert!(c_hold_silent.contains("color=#141315:t=fill"));
         assert!(c_hold_silent.contains("tpad=start_duration=1.000"));
         assert!(!c_hold_silent.contains("adelay="));
 
-        let c_paper = build_filter_script("portrait_card", "paper", 0.5, false, &[], "none", None, false);
+        let c_paper = build_filter_script("portrait_card", "paper", 0.5, None, false, &[], "none", None, false);
         assert!(c_paper.contains("color=#f5f2eb:t=fill"));
 
-        let fill = build_filter_script("portrait_fill", "blur", 0.25, false, &[], "none", None, true);
+        let fill = build_filter_script("portrait_fill", "blur", 0.25, None, false, &[], "none", None, true);
+        let card = Frame { w: 1080, h: 1440, fit: "card".into(), vx: 0, vy: 380, vw: 1080, vh: 608, crop_box: false };
+        let g = build_filter_script("x", "blur", 0.5, Some(&card), false, &[], "none", None, true);
+        assert!(g.contains("scale=270:360") && g.contains("scale=1080:1440") && g.contains("overlay=0+(1080-w)/2:380+(608-h)/2[base]"), "{g}");
+        let sq = Frame { w: 1080, h: 1080, fit: "fill".into(), vx: 0, vy: 0, vw: 0, vh: 0, crop_box: false };
+        let zoomed = Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 560, vw: 1080, vh: 810, crop_box: true };
+        assert!(build_filter_script("x", "night", 0.7, Some(&zoomed), false, &[], "none", None, true).contains("crop=1080:810:(iw-1080)*0.7000"));
+        assert!(build_filter_script("x", "blur", 0.3, Some(&sq), false, &[], "none", None, true).contains("crop=1080:1080:(iw-1080)*0.3000"));
         assert!(fill.contains("crop=1080:1920:(iw-1080)*0.2500:(ih-1920)/2"));
     }
 
@@ -1166,7 +1321,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             .unwrap();
         assert!(mk.status.success(), "generate test source failed");
 
-        let req_flash = RenderRequest {
+        let req_flash = RenderRequest { frame: None, output_dir: None,
             raw_path: src.to_string_lossy().into_owned(),
             output_path: Some(out.to_string_lossy().into_owned()),
             default_name: "smoke".into(),
@@ -1199,7 +1354,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
         assert!(best < frames.len());
 
         let out_hold = data.join("out-hold.mp4");
-        let req_hold = RenderRequest {
+        let req_hold = RenderRequest { frame: None, output_dir: None,
             raw_path: src.to_string_lossy().into_owned(),
             output_path: Some(out_hold.to_string_lossy().into_owned()),
             default_name: "smoke-hold".into(),
@@ -1218,5 +1373,59 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
         let res_hold = render_clip(&data, req_hold, cancel, |_, _, _| {}).await.unwrap();
         assert!(std::fs::metadata(&res_hold.video_path).unwrap().len() > 10_000);
         let _ = std::fs::remove_dir_all(&data);
+    }
+}
+
+#[cfg(test)]
+mod render_live {
+    use super::*;
+    /// Montage from two stretches inside the cached clip (run with --ignored; no network: both come from the cache).
+    #[tokio::test]
+    #[ignore]
+    async fn montage_from_cache() {
+        let data = dirs::data_dir().unwrap().join("ai.qiaomu.subcast");
+        let t = std::time::Instant::now();
+        let p = prepare_montage(&data, "xgAJkGC89rM", &[(545.0, 560.0), (600.0, 615.0)], Arc::new(AtomicBool::new(false)), |s, p, m| eprintln!("{s} {p:.2} {m}")).await.unwrap();
+        eprintln!("montage took {:?}: {}x{} {:.2}s burned={} frames={}", t.elapsed(), p.width, p.height, p.duration, p.has_burned_subtitles, p.frames.len());
+        assert!((p.duration - 30.0).abs() < 0.3, "{}", p.duration);
+        assert_eq!((p.width, p.height), (1920, 1080));
+        // The second part starts at 15 s: its first frame is the source at 600 s.
+        let ff = find_ffmpeg(&data).unwrap();
+        let src = data.join("work/clips/xgAJkGC89rM/541390-646520.mp4");
+        for (file, at, name) in [(p.path.clone(), 15.2, "m15"), (src.to_string_lossy().into_owned(), 600.0 - 541.39 + 0.2, "s600")] {
+            std::process::Command::new(&ff).args(["-v", "error", "-y", "-ss", &format!("{at:.2}"), "-i", &file, "-frames:v", "1", "-vf", "scale=320:-1", &format!("/tmp/claude-501/{name}.png")]).status().unwrap();
+        }
+    }
+
+    /// Real render of the cached 105 s clip (run with --ignored): 9:16 card cropped to 4:3, blurred background,
+    /// a static layer and 20 subtitle bands. Prints the time and checks the output's size and length.
+    #[tokio::test]
+    #[ignore]
+    async fn renders_card_crop() {
+        let data = dirs::data_dir().unwrap().join("ai.qiaomu.subcast");
+        let src = data.join("work/clips/xgAJkGC89rM/541390-646520.mp4");
+        let ff = find_ffmpeg(&data).unwrap();
+        let png = |w: u32, h: u32| -> String {
+            let out = std::process::Command::new(&ff).args(["-v", "error", "-f", "lavfi", "-i", &format!("color=c=white@0.0:s={w}x{h},format=rgba,drawbox=x=100:y=20:w=600:h=60:color=white@0.9:t=fill"), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]).output().unwrap();
+            base64::engine::general_purpose::STANDARD.encode(out.stdout)
+        };
+        let band = { let out = std::process::Command::new(&ff).args(["-v", "error", "-f", "lavfi", "-i", "color=c=red:s=1080x120", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]).output().unwrap(); base64::engine::general_purpose::STANDARD.encode(out.stdout) };
+        let cues = (0..20).map(|k| CueOverlay { start: k as f64 * 5.0, end: k as f64 * 5.0 + 4.5, y: 1500, png_base64: band.clone() }).collect();
+        let out = std::env::temp_dir().join("subcast-render-test.mp4");
+        let _ = std::fs::remove_file(&out);
+        let req = RenderRequest {
+            output_dir: None,
+            frame: Some(Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: true }),
+            raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
+            layout: "frame".into(), card_bg: "blur".into(), crop_x: 0.7, duration: 105.16,
+            static_overlay_png: Some(png(1080, 1920)), cues, cover_png: None, cover_mode: "none".into(),
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
+        };
+        let t = std::time::Instant::now();
+        render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
+        let (dur, w, h, audio) = probe_video_meta(&ff, &out, 0.0).await;
+        eprintln!("render took {:?}: {w}x{h}, {dur:.2}s, audio={audio}", t.elapsed());
+        assert_eq!((w, h), (1080, 1920));
+        assert!((dur - 105.16).abs() < 0.3 && audio);
     }
 }

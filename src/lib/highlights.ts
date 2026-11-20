@@ -20,6 +20,31 @@ export interface HighlightClip {
   end: number;
   score: number;
   tags: string[];
+  /** A montage: several stretches cut together in this order (start/end above span them all). */
+  parts?: ClipPart[];
+}
+
+export interface ClipPart { startIdx: number; endIdx: number; start: number; end: number }
+
+/** Several highlights as one montage, in time order, led by the best one's title and cover lines. */
+export function montageClip(clips: HighlightClip[]): HighlightClip {
+  const parts = [...clips].sort((a, b) => a.start - b.start);
+  const best = [...clips].sort((a, b) => b.score - a.score)[0];
+  return {
+    id: `montage-${parts.map((p) => p.startIdx).join("-")}`,
+    title: best.title,
+    coverHook: best.coverHook,
+    coverSub: best.coverSub,
+    reason: "",
+    shareCopy: "",
+    startIdx: parts[0].startIdx,
+    endIdx: parts[parts.length - 1].endIdx,
+    start: parts[0].start,
+    end: parts[parts.length - 1].end,
+    score: best.score,
+    tags: [...new Set(parts.flatMap((p) => p.tags))].slice(0, 4),
+    parts: parts.map((p) => ({ startIdx: p.startIdx, endIdx: p.endIdx, start: p.start, end: p.end })),
+  };
 }
 
 export interface HighlightBundle {
@@ -550,18 +575,21 @@ export async function polishClipCopy(opts: {
   zh?: (string | null | undefined)[];
   startIdx: number;
   endIdx: number;
+  /** A montage's stretches (their lines are read in this order, the gaps left out). */
+  ranges?: { startIdx: number; endIdx: number }[];
   signal?: AbortSignal;
 }): Promise<PolishedClipCopy> {
   const { ep, segments, zh, startIdx, endIdx, signal } = opts;
+  const ranges = opts.ranges?.length ? opts.ranges : [{ startIdx, endIdx }];
   const ready = await llmReady("chat");
   const provider = providerFor(useStore.getState().settings, "chat");
   if (!ready || !provider?.model) {
     throw Object.assign(new Error(t("请先在设置里连接 AI 模型")), { setup: true });
   }
-  const lines = segments
-    .slice(startIdx, endIdx + 1)
-    .map((s, k) => `${clock(s.start)} | ${s.text}${zh?.[startIdx + k] ? ` ｜ ${zh[startIdx + k]}` : ""}`)
-    .join("\n");
+  const lines = ranges.map((r) => segments
+    .slice(r.startIdx, r.endIdx + 1)
+    .map((s, k) => `${clock(s.start)} | ${s.text}${zh?.[r.startIdx + k] ? ` ｜ ${zh[r.startIdx + k]}` : ""}`)
+    .join("\n")).join("\n……\n");
   const outLang = OUTPUT_LANG[lang()];
   // i18n-ignore-start (prompt sent to the model)
   const system = `你是顶级播客内容包装主编，请为这段播客切片提炼高点击、高传播的封面标题与全平台发布文案。
