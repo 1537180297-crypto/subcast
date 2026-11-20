@@ -1660,15 +1660,16 @@ const dict: Record<string, string> = {
   "正在合成视频…": "Making the video…",
   "正在生成封面和画面图层…": "Drawing the cover and layers…",
   "封面文字": "Cover text",
-  "黑体": "Sans",
-  "宋体": "Serif",
-  "标题大小": "Title size",
   "高亮色": "Highlight colour",
   "跟随样式": "Style's own",
   "成片倍速": "Clip speed",
   "成片按这个速度导出": "The clip is exported at this speed",
   "字幕大小": "Subtitle size",
   "正在合成片段…": "Putting the clip together…",
+  "字体：跟随样式": "Typeface: style's own",
+  "苹方 / 系统黑体": "PingFang / system sans",
+  "字间距": "Letter spacing",
+  "点这里开声音": "Click for sound",
 };
 
 export default dict;

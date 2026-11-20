@@ -11,6 +11,7 @@ import { t, tk, tr, tx, useLang } from "../lib/i18n";
 import { showName } from "../lib/picks";
 import { aiLineBreaks, textsToBreak } from "../lib/clipLines";
 import { buildClipCues, canvasToPngBase64, clipGeometry, fromOldLayout, renderCueBand, renderStaticOverlay, type CardBg, type CardCrop, type ClipAspect, type ClipFit, type ClipLayout, type ClipVisualConfig, type SubStyleId } from "../lib/videoClipCanvas";
+import { type CoverFontId } from "../lib/webfonts";
 import { renderCoverCanvas, subjectCenterX, type CoverAspect, type CoverTemplateId } from "../lib/videoCoverCanvas";
 import { type SubContent } from "../lib/subexport";
 import { useStore } from "../store";
@@ -47,8 +48,9 @@ interface ClipPrefs {
   speed?: number;
   subScale?: number;
   coverAccent?: string;
-  coverFont?: "" | "sans" | "serif";
+  coverFont?: CoverFontId;
   coverScale?: number;
+  coverTracking?: number;
   brandText?: string;
   watermark?: boolean;
   cardBg?: CardBg;
@@ -89,6 +91,15 @@ const COVER_TEMPLATES: { id: CoverTemplateId; name: string }[] = [
 ];
 
 const DOWNLOADS_DIR = /^.*\/(Downloads|下载)\//; // i18n-ignore
+/** Cover typefaces: the style's own, system faces, and open-licence faces loaded when picked. */
+const COVER_FONTS: [CoverFontId, string][] = [
+  ["", tk("字体：跟随样式")],
+  ["noto-sans", tk("思源黑体")],
+  ["noto-serif", tk("思源宋体")],
+  ["wenkai", tk("霞鹜文楷")],
+  ["sans", tk("苹方 / 系统黑体")],
+  ["serif", tk("系统宋体")],
+];
 /** Highlight colours for the cover toolbar ("" = each style's own). */
 const ACCENTS = ["", "#ffd23f", "#ff5a36", "#22c55e", "#3b82f6", "#ec4899"];
 /** Speeds a clip can be exported at (the preview plays at the chosen one). */
@@ -145,9 +156,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const [subScale, setSubScale] = useState(() => prefs.subScale ?? 1);
   // Quick cover overrides (the toolbar under the cover preview); empty = the style's own.
   const [coverAccent, setCoverAccent] = useState(() => prefs.coverAccent ?? "");
-  const [coverFont, setCoverFont] = useState<"" | "sans" | "serif">(() => prefs.coverFont ?? "");
+  const [coverFont, setCoverFont] = useState<CoverFontId>(() => prefs.coverFont ?? "");
   const [coverScale, setCoverScale] = useState(() => prefs.coverScale ?? 1);
-  const coverStyle = { accent: coverAccent || undefined, font: coverFont || undefined, titleScale: coverScale };
+  const [coverTracking, setCoverTracking] = useState(() => prefs.coverTracking ?? 0);
+  const [coverAdvanced, setCoverAdvanced] = useState(false);
+  const coverStyle = { accent: coverAccent || undefined, font: coverFont || undefined, titleScale: coverScale, tracking: coverTracking };
   const [cropX, setCropXRaw] = useState(0.5);
   // Framing follows the speaker (found in the clip's best frame) until the user moves it.
   const cropTouched = useRef(false);
@@ -196,6 +209,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const [pvPlaying, setPvPlaying] = useState(false);
   // Plays on its own, with sound (it's what the clip sounds like).
   const [pvMuted, setPvMuted] = useState(false);
+  const [soundBlocked, setSoundBlocked] = useState(false);
+  // The clip's preview is the one making sound: the episode player pauses while the window is open.
+  useEffect(() => { const st = useStore.getState(); if (st.playing) st.player?.toggle(); }, []);
   const [pvTime, setPvTime] = useState(0);
 
   useEffect(() => {
@@ -208,6 +224,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       coverAccent,
       coverFont,
       coverScale,
+      coverTracking,
       brandText,
       watermark,
       cardBg,
@@ -221,7 +238,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       saveCoverSidecar,
       extraLandscapeCover,
     });
-  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover]);
+  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, coverTracking, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover]);
 
   useEffect(() => {
     if (!busyJob) return;
@@ -366,7 +383,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       if (live) setCoverPreviewUrl(c.toDataURL("image/png"));
     }).catch(() => {});
     return () => { live = false; };
-  }, [coverTpl, effectiveCoverAspect, coverHook, coverSub, coverKicker, showDisplay, clipDur, speed, activeCoverBackdrop, brandText, coverAccent, coverFont, coverScale]);
+  }, [coverTpl, effectiveCoverAspect, coverHook, coverSub, coverKicker, showDisplay, clipDur, speed, activeCoverBackdrop, brandText, coverAccent, coverFont, coverScale, coverTracking]);
 
   // Real previews of every style with this clip's words and picture (only while the cover tab is open).
   const [tplThumbs, setTplThumbs] = useState<Partial<Record<CoverTemplateId, string>>>({});
@@ -385,7 +402,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       }
     }, 350);
     return () => { live = false; window.clearTimeout(timer); };
-  }, [sideTab, coverHook, coverKicker, showDisplay, activeCoverBackdrop, brandText, coverAccent, coverFont, coverScale]);
+  }, [sideTab, coverHook, coverKicker, showDisplay, activeCoverBackdrop, brandText, coverAccent, coverFont, coverScale, coverTracking]);
 
   const generatedPost = useMemo(
     () => buildPlatformPost(postPlatform, {
@@ -721,7 +738,15 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     autoPlay
                     playsInline
                     muted={pvMuted}
-                    onLoadedMetadata={(e) => { e.currentTarget.currentTime = prepared.lead; e.currentTarget.playbackRate = speed; }}
+                    onLoadedMetadata={(e) => {
+                      const v = e.currentTarget;
+                      v.currentTime = prepared.lead;
+                      v.playbackRate = speed;
+                      // With sound; where the system won't autoplay sound, it plays muted and says so.
+                      v.muted = pvMuted;
+                      v.volume = 1;
+                      void v.play().catch(() => { v.muted = true; setPvMuted(true); setSoundBlocked(true); void v.play().catch(() => {}); });
+                    }}
                     style={mediaStyle}
                     onTimeUpdate={(e) => {
                       // The file starts `lead` early (a stream copy); the clip loops within its own span.
@@ -748,7 +773,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                         title={t("预览")}
                         style={ytFrameStyle}
                         allow="autoplay; encrypted-media"
-                        src={`https://www.youtube.com/embed/${ep.videoId}?start=${Math.floor(clipStart)}&end=${Math.ceil(clipEnd)}&autoplay=1&mute=1&controls=0&playsinline=1&rel=0&modestbranding=1&loop=1&playlist=${ep.videoId}&disablekb=1&iv_load_policy=3&cc_load_policy=0&origin=${encodeURIComponent(location.origin)}`}
+                        src={`https://www.youtube.com/embed/${ep.videoId}?start=${Math.floor(clipStart)}&end=${Math.ceil(clipEnd)}&autoplay=1&mute=0&controls=0&playsinline=1&rel=0&modestbranding=1&loop=1&playlist=${ep.videoId}&disablekb=1&iv_load_policy=3&cc_load_policy=0&origin=${encodeURIComponent(location.origin)}`}
                       />
                     ) : posterBackdrop ? <img src={posterBackdrop} alt="" style={mediaStyle} /> : null}
                   </div>
@@ -770,31 +795,34 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
 
           <div className="vclip-pv-bar">
             {pvView === "cover" ? (
+              <>
               <div className="vclip-cover-tools" role="toolbar" aria-label={t("封面文字")}>
-                <div className="vclip-seg-mini" role="group" aria-label={t("字体")}>
-                  {([["", t("默认")], ["sans", t("黑体")], ["serif", t("宋体")]] as const).map(([v, label]) => (
-                    <button key={v} type="button" className={coverFont === v ? "on" : ""} onClick={() => setCoverFont(v)}>{label}</button>
-                  ))}
-                </div>
-                <label className="vclip-size" title={t("标题大小")}>
-                  <span aria-hidden>A</span>
-                  <input type="range" min={0.8} max={1.25} step={0.05} value={coverScale} onChange={(e) => setCoverScale(Number(e.target.value))} aria-label={t("标题大小")} />
-                  <span aria-hidden className="big">A</span>
-                </label>
+                <select className="vclip-font-select" value={coverFont} onChange={(e) => setCoverFont(e.target.value as CoverFontId)} aria-label={t("字体")}>
+                  {COVER_FONTS.map(([v, label]) => <option key={v} value={v}>{t(label)}</option>)}
+                </select>
                 <div className="vclip-swatches" role="radiogroup" aria-label={t("高亮色")}>
                   {ACCENTS.map((c) => (
                     <button key={c || "auto"} type="button" role="radio" aria-checked={coverAccent === c} className={`sw${coverAccent === c ? " on" : ""}${c ? "" : " auto"}`}
                       style={c ? { background: c } : undefined} title={c ? c : t("跟随样式")} onClick={() => setCoverAccent(c)} />
                   ))}
                 </div>
+                <button type="button" className={`link-btn small${coverAdvanced ? " on" : ""}`} aria-expanded={coverAdvanced} onClick={() => setCoverAdvanced(!coverAdvanced)}>{t("高级")}</button>
               </div>
+              {coverAdvanced && (
+                <div className="vclip-cover-adv">
+                  <label><span>{t("字号")}</span><input type="range" min={0.8} max={1.25} step={0.05} value={coverScale} onChange={(e) => setCoverScale(Number(e.target.value))} /><span className="num">{Math.round(coverScale * 100)}%</span></label>
+                  <label><span>{t("字间距")}</span><input type="range" min={-0.05} max={0.2} step={0.01} value={coverTracking} onChange={(e) => setCoverTracking(Number(e.target.value))} /><span className="num">{Math.round(coverTracking * 100)}</span></label>
+                  {(coverScale !== 1 || coverTracking !== 0) && <button type="button" className="link-btn small" onClick={() => { setCoverScale(1); setCoverTracking(0); }}>{t("还原")}</button>}
+                </div>
+              )}
+              </>
             ) : preparedValid ? (
               <>
                 <button type="button" className="icon-btn sm" onClick={togglePreviewPlay} title={pvPlaying ? t("暂停") : t("播放")}>
                   {pvPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
                 </button>
-                <button type="button" className="icon-btn sm" onClick={() => setPvMuted(!pvMuted)} title={pvMuted ? t("取消静音") : t("静音")}>
-                  {pvMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                <button type="button" className={`icon-btn sm${soundBlocked && pvMuted ? " vclip-unmute" : ""}`} onClick={() => { setSoundBlocked(false); setPvMuted(!pvMuted); if (videoRef.current) { videoRef.current.muted = !pvMuted; void videoRef.current.play().catch(() => {}); } }} title={pvMuted ? t("取消静音") : t("静音")}>
+                  {pvMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}{soundBlocked && pvMuted && <span>{t("点这里开声音")}</span>}
                 </button>
                 <span className="num small muted nowrap">{clock(pvTime / speed)} / {clock(clipDur / speed)}</span>
                 <div className="vclip-speed" role="group" aria-label={t("成片倍速")}>
