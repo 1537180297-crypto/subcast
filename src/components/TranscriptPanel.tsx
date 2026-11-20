@@ -23,7 +23,7 @@ import { looksEnglish } from "../lib/dict";
 import { EpisodeWords, LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget, type LearnMarks } from "./Learn";
 import { ShadowBar, useShadowing } from "./Shadowing";
 import { loadHighlights, previewEpisodeRange, useHighlights, type HighlightClip } from "../lib/highlights";
-import { HighlightsPanel } from "./HighlightViews";
+import { HighlightsPanel, useClipWarm } from "./HighlightViews";
 import { openVideoClipDialog } from "./VideoClipDialog";
 
 const SOURCE_LABEL: Record<string, string> = { youtube: tk("YouTube 字幕"), "youtube-auto": tk("YouTube 自动字幕"), rss: tk("节目方文字稿"), whisper: tk("本机识别"), cloud: tk("云端识别"), qiaomu: tk("精读站原文 · 时间为估算"), podscribe: tk("Podscribe 文字稿") };
@@ -291,6 +291,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   // Leaving the episode stops reading it.
   useEffect(() => () => { if (useZhRead.getState().epId === ep.id) stopZhRead(); }, [ep.id]);
   // Highlight headings: stable callbacks, so the memoised rows don't re-render every tick.
+  useClipWarm(ep, segments);
   const onHlPreview = useCallback((c: HighlightClip) => previewEpisodeRange(ep, c.start, c.end), [ep]);
   const onHlClip = useCallback((c: HighlightClip) => openVideoClipDialog({ ep, segments, zh: zhItems, clip: c }), [ep, segments, zhItems]);
   // ⌘F searches the transcript; Enter / ⇧Enter step through matches.

@@ -1111,7 +1111,7 @@ async fn render_into(
     let use_vt = has_videotoolbox(ffmpeg);
     let dur = req.duration.max(1.0) + if cover_input_idx.is_some() && cover_mode == "hold" { 1.0 } else { 0.0 };
 
-    on_progress("render", 0.12, "正在烧录双语字幕并合成 MP4…");
+    on_progress("render", 0.12, "正在合成视频…");
 
     for attempt in [use_vt, false] {
         let mut args: Vec<String> = vec!["-y".into(), "-i".into(), raw_path.to_string_lossy().into_owned()];
@@ -1149,7 +1149,7 @@ async fn render_into(
         ]);
 
         match run_ffmpeg_with_progress(ffmpeg, Some(work_dir), &args, dur, cancel, |p| {
-            on_progress("render", 0.12 + p * 0.85, "正在烧录双语字幕并合成 MP4…");
+            on_progress("render", 0.12 + p * 0.85, "正在合成视频…");
         }).await {
             Ok(()) => {
                 // Rename across directories falls back to copy + remove if final_out is on another volume.

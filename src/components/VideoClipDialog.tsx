@@ -528,7 +528,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     if (!prep) return;
 
     const jobId = `vclip-render-${Date.now()}`;
-    setBusyJob({ id: jobId, stage: "render", progress: 0.05, message: t("正在生成封面与双语字幕图层…") });
+    setBusyJob({ id: jobId, stage: "render", progress: 0.05, message: t("正在生成封面和画面图层…") });
     try {
       const subsOn = addSubsPick ?? !(prep.hasBurnedSubtitles && fit === "card");
       const staticCanvas = renderStaticOverlay({ ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop, subsOn) });
@@ -629,7 +629,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const card = geo.fit === "card";
   const stageBgClass = card ? (cardBg === "paper" ? "bg-paper" : cardBg === "night" ? "bg-night" : "bg-blur") : "bg-dark";
   // The preview places the picture with the same geometry the export uses.
-  const stageStyle = { aspectRatio: `${geo.W} / ${geo.H}` } as React.CSSProperties;
+  // A definite size (fitted into 440 × 560): absolutely placed layers give the box no size of their own.
+  const pvScale = Math.min(440 / geo.W, 520 / geo.H);
+  const stageStyle: React.CSSProperties = { width: Math.round(geo.W * pvScale), height: Math.round(geo.H * pvScale), flex: "none" };
   const boxStyle: React.CSSProperties = {
     left: `${(geo.video.x / geo.W) * 100}%`, top: `${(geo.video.y / geo.H) * 100}%`,
     width: `${(geo.video.w / geo.W) * 100}%`, height: `${(geo.video.h / geo.H) * 100}%`,
@@ -639,13 +641,15 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const srcRatio = (prepared?.width || 1920) / (prepared?.height || 1080);
   const boxRatio = geo.video.w / geo.video.h;
   const coverIt = !(card && !geo.cropBox);
-  const ytFrameStyle: React.CSSProperties = coverIt && srcRatio > boxRatio
+  const ytFrameBase: React.CSSProperties = coverIt && srcRatio > boxRatio
     ? { width: `${(srcRatio / boxRatio) * 100}%`, height: "100%", left: `${(1 - srcRatio / boxRatio) * cropX * 100}%`, top: 0 }
     : coverIt
       ? { width: "100%", height: `${(boxRatio / srcRatio) * 100}%`, top: `${((1 - boxRatio / srcRatio) / 2) * 100}%`, left: 0 }
       : srcRatio > boxRatio
         ? { width: "100%", height: `${(boxRatio / srcRatio) * 100}%`, top: `${((1 - boxRatio / srcRatio) / 2) * 100}%`, left: 0 }
         : { height: "100%", width: `${(srcRatio / boxRatio) * 100}%`, left: `${((1 - srcRatio / boxRatio) / 2) * 100}%`, top: 0 };
+  // Scaled up so YouTube's own title bar and controls fall outside the box (a stand-in until the cut is ready).
+  const ytFrameStyle: React.CSSProperties = { ...ytFrameBase, transform: "scale(1.35)", transformOrigin: "center" };
   const preparing = !!busyJob && ["download", "ffmpeg", "trim"].includes(busyJob.stage);
 
   return (
@@ -744,10 +748,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               <span className="small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span>
             )}
             <span className="spacer" />
+            {prepared?.hasBurnedSubtitles && pvView === "video" && (
+              <span className="small muted clamp1" title={addSubs ? t("原视频底部已有字幕，加的字幕会抬高避开。") : t("原视频底部已有字幕，所以没有再加字幕。")}>{addSubs ? t("已避开原字幕") : t("原视频自带字幕")}</span>
+            )}
           </div>
-          {prepared?.hasBurnedSubtitles && pvView === "video" && (
-            <p className="vclip-hint small">{addSubs ? t("原视频底部已有字幕，加的字幕会抬高避开。") : t("原视频底部已有字幕，所以没有再加字幕。")}</p>
-          )}
+
         </div>
 
         {/* Right: 3 clean studio tabs */}

@@ -289,6 +289,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line-strong); flex: none; }
 .radio.on { border: 5px solid var(--accent); }
 .dl { display: flex; align-items: center; gap: 8px; }
+/* With a dialog open the bottom is its buttons: the toast moves to the top. */
+body:has(.modal-back) .toast { bottom: auto; top: 24px; }
 .toast.has-action { display: flex; align-items: center; gap: 14px; }
 .toast-action { all: unset; cursor: pointer; font-weight: 600; color: var(--accent); white-space: nowrap; }
 .toast-action:hover { text-decoration: underline; }
@@ -2303,9 +2305,9 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .vclip-layout + .modal-foot { flex: none; align-items: center; }
 
 .vclip-preview-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; align-items: center; }
-.vclip-stage { position: relative; overflow: hidden; border-radius: 12px; background: #141315; box-shadow: var(--shadow); width: 100%; }
-.vclip-stage.is-port { aspect-ratio: 9 / 16; max-height: 550px; width: auto; max-width: 100%; }
-.vclip-stage.is-land { aspect-ratio: 16 / 9; margin-top: auto; margin-bottom: auto; }
+.vclip-stage { position: relative; overflow: hidden; border-radius: 12px; background: #141315; box-shadow: var(--shadow); }
+.vclip-stage.is-port { align-self: center; }
+.vclip-stage.is-land { align-self: center; margin-top: auto; margin-bottom: auto; }
 .vclip-stage.bg-night { background: #141315; }
 .vclip-stage.bg-paper { background: #f5f2eb; border: 1px solid var(--line); }
 .vclip-blur-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(22px) brightness(0.68) saturate(0.85); transform: scale(1.16); pointer-events: none; }

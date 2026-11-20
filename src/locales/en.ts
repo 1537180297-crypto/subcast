@@ -1507,7 +1507,6 @@ const dict: Record<string, string> = {
   "当前单集没有可用视频源": "This episode has no video stream available",
   "正在获取这一段原视频…": "Fetching this video segment…",
   "SubCast 切片": "SubCast Clip",
-  "正在生成封面与双语字幕图层…": "Generating cover and bilingual subtitle layers…",
   "视频切片已导出到 {path}": "Video clip exported to {path}",
   "发布文案已复制": "Post copy copied",
   "前一句": "Add prev",
@@ -1552,7 +1551,6 @@ const dict: Record<string, string> = {
   "找不到源视频片段，请先重新获取": "Source clip not found. Please prepare it again.",
   "正在准备视频导出组件…": "Preparing video exporter…",
   "导出完成": "Export complete",
-  "正在烧录双语字幕并合成 MP4…": "Burning bilingual subtitles and encoding MP4…",
   "暗幕金句": "Dark Hero",
   "杂志大字": "Magazine",
   "荧光重点": "Marker",
@@ -1663,6 +1661,10 @@ const dict: Record<string, string> = {
   "第 1/2 步 · 获取画面": "Step 1 of 2 · Getting the footage",
   "已导出": "Exported",
   "第一次剪这个视频，正在解析视频地址…": "First clip from this video: getting its address…",
+  "已避开原字幕": "Kept clear of the source's subtitles",
+  "原视频自带字幕": "Source has its own subtitles",
+  "正在合成视频…": "Making the video…",
+  "正在生成封面和画面图层…": "Drawing the cover and layers…",
 };
 
 export default dict;

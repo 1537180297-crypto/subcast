@@ -13,6 +13,19 @@ const INTENT_SUGGESTIONS = [
   tk("争议判断与行业趋势"),
 ];
 
+/** Gets cutting ready for an episode with highlights: its video addresses are resolved in the background
+ *  (~30 s the first time), and the best two clips are fetched with the exact range the clip window asks for
+ *  (0.25 s before, 0.4 s after), so opening them plays the real cut at once. */
+export function useClipWarm(ep: Episode, segments: Segment[]) {
+  const bundle = useHighlights((s) => s.bundles[ep.id]);
+  const topRanges = useMemo(() => [...(bundle?.clips ?? [])].sort((a, b) => b.score - a.score).slice(0, 2)
+    .map((c) => [Math.max(0, (segments[c.startIdx]?.start ?? c.start) - 0.25), (segments[c.endIdx]?.end ?? c.end) + 0.4] as [number, number]), [bundle, segments]);
+  const key = topRanges.map((r) => r.join("-")).join("|");
+  useEffect(() => {
+    if (ep.videoId && bundle?.clips.length) void api.videoClipWarm(ep.videoId, topRanges).catch(() => {});
+  }, [ep.videoId, key]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 export function HighlightsPanel({
   ep,
   segments,
@@ -40,13 +53,7 @@ export function HighlightsPanel({
     void loadHighlights(ep.id);
   }, [ep.id]);
   // Resolving the video's addresses takes ~30 s: done now, cutting a clip later only downloads its stretch.
-  // The best two clips are fetched too, with the exact range the clip dialog will ask for (0.25 s before,
-  // 0.4 s after), so opening them plays the real cut at once.
-  const topRanges = useMemo(() => [...(bundle?.clips ?? [])].sort((a, b) => b.score - a.score).slice(0, 2)
-    .map((c) => [Math.max(0, (segments[c.startIdx]?.start ?? c.start) - 0.25), (segments[c.endIdx]?.end ?? c.end) + 0.4] as [number, number]), [bundle, segments]);
-  useEffect(() => {
-    if (ep.videoId) void api.videoClipWarm(ep.videoId, topRanges).catch(() => {});
-  }, [ep.videoId, topRanges.map((r) => r.join("-")).join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  useClipWarm(ep, segments);
   const [copying, setCopying] = useState<string | null>(null);
   // Picking clips for one montage (several stretches cut together, in time order).
   const [picking, setPicking] = useState(false);
