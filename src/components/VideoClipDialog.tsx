@@ -796,7 +796,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <button type="button" className="icon-btn sm" onClick={() => setPvMuted(!pvMuted)} title={pvMuted ? t("取消静音") : t("静音")}>
                   {pvMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
                 </button>
-                <span className="num small muted">{clock(pvTime / speed)} / {clock(clipDur / speed)}</span>
+                <span className="num small muted nowrap">{clock(pvTime / speed)} / {clock(clipDur / speed)}</span>
                 <div className="vclip-speed" role="group" aria-label={t("成片倍速")}>
                   {SPEEDS.map((r) => (
                     <button key={r} type="button" className={r === speed ? "on" : ""} onClick={() => setSpeed(r)} title={t("成片按这个速度导出")}>{r}×</button>
@@ -807,9 +807,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               <span className="small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span>
             )}
             <span className="spacer" />
-            {prepared?.hasBurnedSubtitles && pvView === "video" && (
-              <span className="small muted clamp1" title={addSubs ? t("原视频底部已有字幕，加的字幕会抬高避开。") : t("原视频底部已有字幕，所以没有再加字幕。")}>{addSubs ? t("已避开原字幕") : t("原视频自带字幕")}</span>
-            )}
+
           </div>
 
         </div>
