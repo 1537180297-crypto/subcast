@@ -41,6 +41,8 @@ export interface ClipVisualConfig {
   brandText: string;
   watermark: boolean;
   liftForBurnedSub: boolean;
+  /** Subtitle size, relative to the default (0.7–1.5). */
+  subScale?: number;
 }
 
 export interface RenderedCueBand {
@@ -336,7 +338,7 @@ export function renderCueBand(cue: Pick<Cue, "orig" | "zh">, config: ClipVisualC
   const { W, H, video, vertical } = geo;
   const unit = Math.min(W, H) / 1080;
   const card = geo.fit === "card";
-  const scale = W > H ? 1.12 : 1;
+  const scale = (W > H ? 1.12 : 1) * (config.subScale ?? 1);
   const zhSize = Math.round((card ? 54 : 60) * unit * scale);
   const origSize = Math.round((card ? 34 : 38) * unit * scale);
   const zhLH = Math.round(zhSize * 1.3);

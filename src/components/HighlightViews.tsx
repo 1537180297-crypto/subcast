@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, Layers, Loader2, Play, RefreshCw, Scissors, Sparkles, Square } from "lucide-react";
 import { api, errorText, type Episode, type Segment } from "../lib/api";
 import { clock } from "../lib/format";
-import { clearHighlightsError, loadHighlights, montageClip, polishClipCopy, previewEpisodeRange, runHighlights, saveClipCopy, stopHighlights, useHighlights, type HighlightClip } from "../lib/highlights";
+import { buildPlatformPost, clearHighlightsError, loadHighlights, montageClip, polishClipCopy, previewEpisodeRange, runHighlights, saveClipCopy, stopHighlights, useHighlights, type HighlightClip } from "../lib/highlights";
 import { t, tk, useLang } from "../lib/i18n";
 import { useStore } from "../store";
 import { openVideoClipDialog } from "./VideoClipDialog";
@@ -82,7 +82,8 @@ export function HighlightsPanel({
         share = res.shareCopy;
         void saveClipCopy(ep.id, c.id, { shareCopy: res.shareCopy, articleCopy: res.articleCopy });
       }
-      await navigator.clipboard.writeText([c.title, share].filter(Boolean).join("\n\n"));
+      // The same short-video post the clip window shows (title, text, tags, source).
+      await navigator.clipboard.writeText(buildPlatformPost("short", { ep, title: c.title, coverHook: c.coverHook, coverSub: c.coverSub, shareCopy: share, tags: c.tags, segments, zh, startIdx: c.startIdx, endIdx: c.endIdx, clipStart: c.start }));
       notify(t("传播文案已复制"));
     } catch (e) {
       notify(errorText(e));

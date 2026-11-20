@@ -72,7 +72,7 @@ export interface Saved { episodeId: string; path: string; bytes: number; savedAt
 
 export interface AsrEvent { episodeId: string; stage: "download" | "transcribe" | "segment" | "done" | "error"; progress: number; message?: string; segment?: Segment }
 export interface FfmpegStatus { installed: boolean; path?: string | null; hardwareH264: boolean }
-export interface PreparedClip { path: string; duration: number; width: number; height: number; hasBurnedSubtitles: boolean; cached: boolean; frames: string[]; bestFrame: number }
+export interface PreparedClip { path: string; duration: number; /** Seconds before the clip in the file (stream copy from a keyframe). */ lead: number; width: number; height: number; hasBurnedSubtitles: boolean; cached: boolean; frames: string[]; bestFrame: number }
 export interface CueOverlay { start: number; end: number; y: number; pngBase64: string }
 export interface RenderVideoClipRequest {
   rawPath: string;
@@ -82,6 +82,10 @@ export interface RenderVideoClipRequest {
   layout: "frame" | "landscape" | "portrait_card" | "portrait_fill";
   /** The export folder from Settings (empty: Downloads). */
   outputDir?: string | null;
+  /** Seconds to skip at the start of the fetched file. */
+  lead?: number;
+  /** Playback speed of the export (cue times already on that clock). */
+  speed?: number;
   frame?: { w: number; h: number; fit: "card" | "fill"; vx: number; vy: number; vw: number; vh: number; cropBox: boolean };
   cardBg: "blur" | "night" | "paper";
   cropX: number;

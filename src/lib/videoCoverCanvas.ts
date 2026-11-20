@@ -1,6 +1,7 @@
 // Share covers: 8 styles at any of 9:16 / 3:4 / 1:1 / 16:9, with `【keyword】` highlighting. Everything is sized
 // from the canvas, so a style looks the same at every aspect. No product branding: the footer is the user's own.
 import { clock } from "./format";
+import { ensureFont, familyOf, type CoverFontId } from "./webfonts";
 
 export type CoverTemplateId = "impact" | "marker" | "split" | "bold" | "quote" | "magazine" | "cinema" | "minimal";
 export type CoverAspect = "9:16" | "16:9" | "3:4" | "1:1";
@@ -18,7 +19,22 @@ export interface CoverConfig {
   brand?: string;
   /** Share of the picture's bottom to leave out (burned-in subtitles there). */
   cropBottom?: number;
+  /** The highlight colour for 【】 words, labels and marks (each style has its own otherwise). */
+  accent?: string;
+  /** Typeface for the cover's words (each style has its own otherwise); web faces load on demand. */
+  font?: CoverFontId;
+  /** Title size, relative to what fits (0.8–1.25). */
+  titleScale?: number;
+  /** Extra space between characters, as a share of the type size (-0.05–0.2). */
+  tracking?: number;
 }
+
+/** Dark ink on a light highlight, white on a dark one. */
+const inkOn = (hex: string) => {
+  const n = parseInt(hex.replace("#", "").slice(0, 6), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#141416" : "#ffffff";
+};
 
 const SANS = '-apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif';
 const SERIF = '"Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", Georgia, serif';
@@ -307,8 +323,8 @@ function fitTitle(g: CanvasRenderingContext2D, text: string, font: (s: number) =
   return { size: min, rows: wrapRichLines(g, text, maxW, lines) };
 }
 
-function pill(g: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, bg: string, ink: string, align: "left" | "right" = "left") {
-  g.font = `600 ${size}px ${SANS}`;
+function pill(g: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, bg: string, ink: string, align: "left" | "right" = "left", family = SANS) {
+  g.font = `600 ${size}px ${family}`;
   const w = g.measureText(text).width + size * 1.2;
   const h = size * 1.9;
   const px = align === "right" ? x - w : x;
@@ -380,6 +396,9 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
   const g = c.getContext("2d")!;
   g.textBaseline = "alphabetic";
   const img = await loadImageSafe(config.backdropUrl);
+  // A web face is fetched (only the characters used) before drawing; on failure the system face is used.
+  const face = config.font ?? "";
+  const faceReady = await ensureFont(face, [config.hookTitle, config.subTitle, config.kicker, config.showName, config.brand ?? ""].join(""));
   const subjectX = img ? subjectCenterX(img, config.cropBottom ?? 0) : 0.5;
   const u = Math.min(W, H) / 1080;
   const land = W > H * 1.2;
@@ -392,14 +411,25 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
   const padX = Math.round((land ? 110 : 76) * u);
   const maxW = W - padX * 2;
   const titleLines = land ? 2 : tall ? 4 : 3;
+  // The user's quick overrides (cover toolbar): highlight colour, title face, title size.
+  const HOT = (fallback: string) => config.accent || fallback;
+  const TF = (fallback: string) => {
+    if (face === "serif") return SERIF;
+    if (face === "sans") return SANS;
+    if (face && faceReady) return familyOf(face, fallback);
+    return fallback;
+  };
+  // Tracking for every line of the cover (canvas letter-spacing), in pixels of the title scale.
+  if (config.tracking) (g as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${Math.round(config.tracking * 64 * u)}px`;
+  const ts = Math.min(1.25, Math.max(0.8, config.titleScale ?? 1));
   // A wide canvas is measured by its short side: titles there get more room to stay prominent.
-  const fit = (text: string, font: (s: number) => string, width: number, lines: number, max: number, min: number) => fitTitle(g, text, font, width, lines, Math.round(max * (land ? 1.3 : 1)), Math.round(min * (land ? 1.2 : 1)));
+  const fit = (text: string, font: (s: number) => string, width: number, lines: number, max: number, min: number) => fitTitle(g, text, font, width, lines, Math.round(max * ts * (land ? 1.3 : 1)), Math.round(min * ts * (land ? 1.2 : 1)));
   const photo = (x: number, y: number, w: number, h: number, focus = 0.4) => { if (img) drawCoverImage(g, img, x, y, w, h, focus, config.cropBottom ?? 0, subjectX); else { g.save(); g.translate(x, y); drawFallbackBackdrop(g, w, h); g.restore(); } };
   const footer = (color: string, y: number, align: "center" | "left" = "center") => {
     const text = [brand, !brand ? config.showName : ""].filter(Boolean).join(" · ");
     if (!text) return;
     // Seen at feed size (about an eighth): small print needs size and weight, and a shadow on photos.
-    g.font = `600 ${Math.round(28 * u)}px ${SANS}`;
+    g.font = `600 ${Math.round(28 * u)}px ${TF(SANS)}`;
     g.fillStyle = color;
     g.save();
     if (color.startsWith("rgba(255")) { g.shadowColor = "rgba(0,0,0,0.6)"; g.shadowBlur = 8 * u; }
@@ -419,16 +449,16 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
       if (land) g.fillRect(bx, 0, W - bx, H); else g.fillRect(0, ph, W, H - ph);
       const left = (land ? bx : 0) + padX;
       const width = (land ? W - bx : W) - padX * 2;
-      const { size, rows } = fit(title, (s) => `700 ${s}px ${SANS}`, width, land ? 3 : 4, Math.round((tall ? 112 : 96) * u), Math.round(56 * u));
-      const slPre = subLines(`600 ${Math.round(40 * u)}px ${SANS}`, width);
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${TF(SANS)}`, width, land ? 3 : 4, Math.round((tall ? 112 : 96) * u), Math.round(56 * u));
+      const slPre = subLines(`600 ${Math.round(40 * u)}px ${TF(SANS)}`, width);
       // The words sit in the middle of their block.
       const blockH = (kicker ? Math.round(84 * u) : 0) + rows.length * Math.round(size * 1.22) + (slPre.length ? Math.round(28 * u) + slPre.length * Math.round(56 * u) : 0);
       const areaTop = land ? 0 : ph, areaH = (land ? H : H - ph) - Math.round(90 * u);
       let y = areaTop + Math.max(Math.round(50 * u), Math.round((areaH - blockH) / 2));
-      if (kicker) { pill(g, kicker, left, y, Math.round(28 * u), "#ffd23f", "#141416"); y += Math.round(84 * u); }
-      g.font = `700 ${size}px ${SANS}`;
-      rows.forEach((r) => { y += Math.round(size * 1.22); drawHeavyLine(g, r, left, y, size, "#ffffff", "#ffd23f"); });
-      const sl = subLines(`600 ${Math.round(40 * u)}px ${SANS}`, width);
+      if (kicker) { pill(g, kicker, left, y, Math.round(28 * u), HOT("#ffd23f"), inkOn(HOT("#ffd23f"))); y += Math.round(84 * u); }
+      g.font = `700 ${size}px ${TF(SANS)}`;
+      rows.forEach((r) => { y += Math.round(size * 1.22); drawHeavyLine(g, r, left, y, size, "#ffffff", HOT("#ffd23f")); });
+      const sl = subLines(`600 ${Math.round(40 * u)}px ${TF(SANS)}`, width);
       y += Math.round(28 * u);
       g.fillStyle = "rgba(255,255,255,0.86)";
       sl.forEach((l) => { y += Math.round(56 * u); g.fillText(l, left, y); });
@@ -440,17 +470,17 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
       // 大字报: full picture, huge white words with a thick black outline across the middle, keyword in yellow.
       photo(0, 0, W, H, 0.38);
       shade(g, W, 0, H, "rgba(0,0,0,0.12)", "rgba(0,0,0,0.32)");
-      const { size, rows } = fit(title, (s) => `700 ${s}px ${SANS}`, maxW, titleLines, Math.round((land ? 120 : 118) * u), Math.round(64 * u));
-      g.font = `700 ${size}px ${SANS}`;
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${TF(SANS)}`, maxW, titleLines, Math.round((land ? 120 : 118) * u), Math.round(64 * u));
+      g.font = `700 ${size}px ${TF(SANS)}`;
       const lh = Math.round(size * 1.18);
       // Lower half: the face stays visible above the words.
       let y = Math.round(H * (land ? 0.52 : tall ? 0.64 : 0.6) - (rows.length * lh) / 2);
-      rows.forEach((r) => { y += lh; const w = measureRichLine(g, r, size, false); drawHeavyLine(g, r, (W - w) / 2, y, size, "#ffffff", "#ffe14d", { outline: "#111", outlineW: size * 0.2 }); });
-      const sl = subLines(`600 ${Math.round(44 * u)}px ${SANS}`, maxW);
+      rows.forEach((r) => { y += lh; const w = measureRichLine(g, r, size, false); drawHeavyLine(g, r, (W - w) / 2, y, size, "#ffffff", HOT("#ffe14d"), { outline: "#111", outlineW: size * 0.2 }); });
+      const sl = subLines(`600 ${Math.round(44 * u)}px ${TF(SANS)}`, maxW);
       if (sl.length) {
         y += Math.round(30 * u);
         sl.forEach((l) => {
-          g.font = `600 ${Math.round(44 * u)}px ${SANS}`;
+          g.font = `600 ${Math.round(44 * u)}px ${TF(SANS)}`;
           const w = g.measureText(l).width + 40 * u;
           y += Math.round(72 * u);
           g.fillStyle = "rgba(0,0,0,0.8)";
@@ -460,7 +490,7 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
           g.fillText(l, (W - w) / 2 + 20 * u, y);
         });
       }
-      if (kicker) pill(g, kicker, padX, Math.round(56 * u), Math.round(28 * u), "rgba(0,0,0,0.66)", "#ffe14d");
+      if (kicker) pill(g, kicker, padX, Math.round(56 * u), Math.round(28 * u), "rgba(0,0,0,0.66)", HOT("#ffe14d"));
       footer("rgba(255,255,255,0.8)", H - Math.round(60 * u));
       return c;
     }
@@ -471,9 +501,9 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
       const r = Math.round((land ? 170 : tall ? 120 : 96) * u);
       const left = padX;
       const width = land ? W - padX * 3 - r * 2 : maxW;
-      const { size, rows } = fit(title, (s) => `700 ${s}px ${SERIF}`, width, titleLines, Math.round((tall ? 96 : 80) * u), Math.round(48 * u));
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${TF(SERIF)}`, width, titleLines, Math.round((tall ? 96 : 80) * u), Math.round(48 * u));
       const lh = Math.round(size * 1.38);
-      const sl = subLines(`500 ${Math.round(38 * u)}px ${SANS}`, width);
+      const sl = subLines(`500 ${Math.round(38 * u)}px ${TF(SANS)}`, width);
       const markH = Math.round(110 * u);
       const blockH = (land ? 0 : r * 2 + Math.round(60 * u)) + markH + rows.length * lh + (sl.length ? Math.round(30 * u) + sl.length * Math.round(54 * u) : 0);
       let y = Math.max(Math.round(60 * u), Math.round((H - Math.round(140 * u) - blockH) / 2));
@@ -488,22 +518,22 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
         g.restore();
       }
       if (!land) y += r * 2 + Math.round(60 * u);
-      g.font = `700 ${Math.round(160 * u)}px ${SERIF}`;
-      g.fillStyle = "#d9480f";
+      g.font = `700 ${Math.round(160 * u)}px ${TF(SERIF)}`;
+      g.fillStyle = HOT("#d9480f");
       g.fillText("“", left - 8 * u, y + Math.round(120 * u));
       y += markH;
-      g.font = `700 ${size}px ${SERIF}`;
-      rows.forEach((row) => { y += lh; drawRichLine(g, row, left, y - lh * 0.2, size, "#18181b", "#d9480f"); });
+      g.font = `700 ${size}px ${TF(SERIF)}`;
+      rows.forEach((row) => { y += lh; drawRichLine(g, row, left, y - lh * 0.2, size, "#18181b", HOT("#d9480f")); });
       y += Math.round(30 * u);
-      g.font = `500 ${Math.round(38 * u)}px ${SANS}`;
+      g.font = `500 ${Math.round(38 * u)}px ${TF(SANS)}`;
       g.fillStyle = "#44403c";
       sl.forEach((l) => { y += Math.round(54 * u); g.fillText(l, left, y); });
       g.fillStyle = "rgba(24,24,27,0.16)";
       g.fillRect(left, H - Math.round(118 * u), Math.round(80 * u), Math.max(2, 3 * u));
-      g.font = `600 ${Math.round(30 * u)}px ${SANS}`;
+      g.font = `600 ${Math.round(30 * u)}px ${TF(SANS)}`;
       g.fillStyle = "#3f3f46";
       g.fillText(kicker, left, H - Math.round(70 * u));
-      if (brand) { g.font = `600 ${Math.round(28 * u)}px ${SANS}`; g.fillStyle = "#57534e"; const w = g.measureText(brand).width; g.fillText(brand, W - padX - w, H - Math.round(70 * u)); }
+      if (brand) { g.font = `600 ${Math.round(28 * u)}px ${TF(SANS)}`; g.fillStyle = "#57534e"; const w = g.measureText(brand).width; g.fillText(brand, W - padX - w, H - Math.round(70 * u)); }
       return c;
     }
     case "magazine": {
@@ -514,13 +544,13 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
       shade(g, W, ph - 90 * u, ph, "rgba(250,247,242,0)", "#faf7f2");
       if (dur) pill(g, dur, W - padX, Math.round(44 * u), Math.round(26 * u), "rgba(18,18,22,0.72)", "#fff", "right");
       let y = ph + Math.round((land ? 40 : 64) * u);
-      g.font = `700 ${Math.round(30 * u)}px ${SANS}`;
-      g.fillStyle = "#d9481a";
+      g.font = `700 ${Math.round(30 * u)}px ${TF(SANS)}`;
+      g.fillStyle = HOT("#d9481a");
       if (kicker) { g.fillText(kicker, padX, y); y += Math.round(20 * u); }
-      const { size, rows } = fit(title, (s) => `700 ${s}px ${SANS}`, maxW, land ? 2 : 3, Math.round(82 * u), Math.round(52 * u));
-      g.font = `700 ${size}px ${SANS}`;
-      rows.forEach((r) => { y += Math.round(size * 1.24); drawHeavyLine(g, r, padX, y, size, "#18181b", "#d9481a"); });
-      const sl = subLines(`500 ${Math.round(38 * u)}px ${SANS}`, maxW);
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${TF(SANS)}`, maxW, land ? 2 : 3, Math.round(82 * u), Math.round(52 * u));
+      g.font = `700 ${size}px ${TF(SANS)}`;
+      rows.forEach((r) => { y += Math.round(size * 1.24); drawHeavyLine(g, r, padX, y, size, "#18181b", HOT("#d9481a")); });
+      const sl = subLines(`500 ${Math.round(38 * u)}px ${TF(SANS)}`, maxW);
       y += Math.round(20 * u);
       g.fillStyle = "#44403c";
       sl.forEach((l) => { y += Math.round(54 * u); g.fillText(l, padX, y); });
@@ -535,19 +565,19 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
       const fw = W - padX * 2;
       const fh = Math.round(land ? H * 0.52 : (fw * 9) / 16);
       const top = Math.round(land ? 96 * u : H * (tall ? 0.16 : 0.12));
-      g.font = `600 ${Math.round(28 * u)}px ${SANS}`;
+      g.font = `600 ${Math.round(28 * u)}px ${TF(SANS)}`;
       g.fillStyle = "rgba(255,255,255,0.82)";
       if (kicker) g.fillText(kicker, padX, top - 26 * u);
       if (dur) { const dw = g.measureText(dur).width; g.fillStyle = "#f5a623"; g.fillText(dur, W - padX - dw, top - 26 * u); }
       photo(padX, top, fw, fh, 0.42);
-      const { size, rows } = fit(title, (s) => `700 ${s}px ${SERIF}`, fw, titleLines, Math.round((tall ? 92 : 80) * u), Math.round(48 * u));
-      const slPre = subLines(`500 ${Math.round(38 * u)}px ${SANS}`, fw);
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${TF(SERIF)}`, fw, titleLines, Math.round((tall ? 92 : 80) * u), Math.round(48 * u));
+      const slPre = subLines(`500 ${Math.round(38 * u)}px ${TF(SANS)}`, fw);
       const blockH = rows.length * Math.round(size * 1.32) + (slPre.length ? Math.round(18 * u) + slPre.length * Math.round(54 * u) : 0);
       const below = H - (top + fh) - Math.round(100 * u);
       let y = top + fh + Math.max(Math.round((land ? 20 : 50) * u), Math.round((below - blockH) / 2));
-      g.font = `700 ${size}px ${SERIF}`;
-      rows.forEach((r) => { y += Math.round(size * 1.32); const w = measureRichLine(g, r, size, false); drawRichLine(g, r, (W - w) / 2, y, size, "#f5f2eb", "#fbbf24"); });
-      const sl = subLines(`500 ${Math.round(38 * u)}px ${SANS}`, fw);
+      g.font = `700 ${size}px ${TF(SERIF)}`;
+      rows.forEach((r) => { y += Math.round(size * 1.32); const w = measureRichLine(g, r, size, false); drawRichLine(g, r, (W - w) / 2, y, size, "#f5f2eb", HOT("#fbbf24")); });
+      const sl = subLines(`500 ${Math.round(38 * u)}px ${TF(SANS)}`, fw);
       y += Math.round(18 * u);
       g.fillStyle = "rgba(245,242,235,0.88)";
       sl.forEach((l) => { y += Math.round(54 * u); g.fillText(l, (W - g.measureText(l).width) / 2, y); });
@@ -558,20 +588,20 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
       // Quiet: the picture, a soft bottom shade, a modest serif title bottom-left.
       photo(0, 0, W, H, 0.4);
       shade(g, W, H * 0.4, H, "rgba(0,0,0,0)", "rgba(0,0,0,0.88)");
-      const { size, rows } = fit(title, (s) => `600 ${s}px ${SERIF}`, maxW, land ? 2 : 3, Math.round(84 * u), Math.round(48 * u));
-      g.font = `600 ${size}px ${SERIF}`;
-      const sl = subLines(`500 ${Math.round(36 * u)}px ${SANS}`, maxW);
+      const { size, rows } = fit(title, (s) => `600 ${s}px ${TF(SERIF)}`, maxW, land ? 2 : 3, Math.round(84 * u), Math.round(48 * u));
+      g.font = `600 ${size}px ${TF(SERIF)}`;
+      const sl = subLines(`500 ${Math.round(36 * u)}px ${TF(SANS)}`, maxW);
       const lh = Math.round(size * 1.34);
       let y = H - Math.round((brand || config.showName ? 130 : 90) * u) - rows.length * lh - sl.length * Math.round(52 * u);
       g.shadowColor = "rgba(0,0,0,0.5)"; g.shadowBlur = 12 * u;
-      g.font = `600 ${size}px ${SERIF}`;
-      rows.forEach((r) => { y += lh; drawRichLine(g, r, padX, y, size, "#ffffff", "#ffd27a"); });
-      g.font = `500 ${Math.round(36 * u)}px ${SANS}`;
+      g.font = `600 ${size}px ${TF(SERIF)}`;
+      rows.forEach((r) => { y += lh; drawRichLine(g, r, padX, y, size, "#ffffff", HOT("#ffd27a")); });
+      g.font = `500 ${Math.round(36 * u)}px ${TF(SANS)}`;
       g.fillStyle = "rgba(255,255,255,0.9)";
       y += Math.round(10 * u);
       sl.forEach((l) => { y += Math.round(52 * u); g.fillText(l, padX, y); });
       g.shadowColor = "transparent"; g.shadowBlur = 0;
-      if (kicker) { g.font = `600 ${Math.round(28 * u)}px ${SANS}`; g.fillStyle = "rgba(255,255,255,0.88)"; g.fillText(kicker.toUpperCase(), padX, Math.round(80 * u)); }
+      if (kicker) { g.font = `600 ${Math.round(28 * u)}px ${TF(SANS)}`; g.fillStyle = "rgba(255,255,255,0.88)"; g.fillText(kicker.toUpperCase(), padX, Math.round(80 * u)); }
       footer("rgba(255,255,255,0.78)", H - Math.round(56 * u), "left");
       return c;
     }
@@ -582,21 +612,21 @@ export async function renderCoverCanvas(config: CoverConfig): Promise<HTMLCanvas
       shade(g, W, 0, H * 0.3, "rgba(8,8,12,0.55)", "rgba(8,8,12,0)");
       shade(g, W, H * 0.38, H, "rgba(8,8,12,0)", "rgba(8,8,12,0.92)");
       const top = Math.round(56 * u);
-      if (kicker) pill(g, kicker, padX, top, Math.round(28 * u), "rgba(18,18,22,0.74)", "#ffd23f");
+      if (kicker) pill(g, kicker, padX, top, Math.round(28 * u), "rgba(18,18,22,0.74)", HOT("#ffd23f"));
       if (dur) pill(g, dur, W - padX, top, Math.round(28 * u), "rgba(18,18,22,0.74)", "#fff", "right");
-      const { size, rows } = fit(title, (s) => `700 ${s}px ${SANS}`, maxW, titleLines, Math.round((land ? 96 : 100) * u), Math.round(56 * u));
-      const sl = subLines(`600 ${Math.round(44 * u)}px ${SANS}`, maxW);
+      const { size, rows } = fit(title, (s) => `700 ${s}px ${TF(SANS)}`, maxW, titleLines, Math.round((land ? 96 : 100) * u), Math.round(56 * u));
+      const sl = subLines(`600 ${Math.round(44 * u)}px ${TF(SANS)}`, maxW);
       const lh = Math.round(size * 1.26);
       const subH = sl.length ? sl.length * Math.round(60 * u) + Math.round(26 * u) : 0;
       let y = H - Math.round((land ? 100 : tall ? 220 : 130) * u) - rows.length * lh - subH;
-      g.font = `700 ${size}px ${SANS}`;
+      g.font = `700 ${size}px ${TF(SANS)}`;
       g.shadowColor = "rgba(0,0,0,0.6)"; g.shadowBlur = 20 * u; g.shadowOffsetY = 3 * u;
       rows.forEach((r) => {
         y += lh;
         const w = measureRichLine(g, r, size, marker);
-        drawHeavyLine(g, r, (W - w) / 2, y, size, "#ffffff", "#ffd23f", marker ? { marker: "#ffd23f", markerInk: "#141416" } : {});
+        drawHeavyLine(g, r, (W - w) / 2, y, size, "#ffffff", HOT("#ffd23f"), marker ? { marker: HOT("#ffd23f"), markerInk: inkOn(HOT("#ffd23f")) } : {});
       });
-      g.font = `600 ${Math.round(44 * u)}px ${SANS}`;
+      g.font = `600 ${Math.round(44 * u)}px ${TF(SANS)}`;
       g.fillStyle = "rgba(255,255,255,0.94)";
       g.shadowBlur = 12 * u; g.shadowOffsetY = 2 * u;
       y += Math.round(26 * u);

@@ -135,7 +135,7 @@ async fn range(url: &str, headers: &[(String, String)], a: u64, b: u64, cancel: 
                 Ok(bytes) => last = Some(anyhow!("片段不完整（{} / {}）", bytes.len(), b - a + 1)),
                 Err(e) => last = Some(anyhow!(net::describe(e))),
             },
-            Ok(r) if r.status().as_u16() == 403 => { eprintln!("403 on bytes={a}-{b}"); bail!("视频地址已失效") }
+            Ok(r) if r.status().as_u16() == 403 => bail!("视频地址已失效"),
             Ok(r) => last = Some(anyhow!("请求失败（{}）", r.status().as_u16())),
             Err(e) => last = Some(net::describe(e)),
         }
@@ -183,7 +183,9 @@ pub async fn warm(data: &Path, video_id: &str) -> Result<()> {
     resolve(&bin, video_id, 1080).await.map(|_| ())
 }
 
-/// `[start, end]` of `video_id` as an exact-length H.264/AAC MP4 at `dest` (one encode, hardware when available).
+/// `[start, end]` of `video_id` at `dest`: the picture copied from the keyframe before `start` (see
+/// `mux_copy`), with the lead recorded beside it. An address that answers 403 (YouTube sometimes hands out
+/// ones that can't be fetched directly) is resolved again once before giving up.
 pub async fn fetch_section(
     data: &Path,
     ytdlp: &Path,
@@ -194,6 +196,26 @@ pub async fn fetch_section(
     dest: &Path,
     cancel: Arc<AtomicBool>,
     mut on_progress: impl FnMut(f64, &str),
+) -> Result<()> {
+    match fetch_once(data, ytdlp, ffmpeg, video_id, start, end, dest, cancel.clone(), &mut on_progress).await {
+        Err(e) if !cancel.load(Ordering::Relaxed) && e.to_string().contains("视频地址已失效") => {
+            fetch_once(data, ytdlp, ffmpeg, video_id, start, end, dest, cancel, &mut on_progress).await
+        }
+        r => r,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_once(
+    data: &Path,
+    ytdlp: &Path,
+    ffmpeg: &Path,
+    video_id: &str,
+    start: f64,
+    end: f64,
+    dest: &Path,
+    cancel: Arc<AtomicBool>,
+    on_progress: &mut impl FnMut(f64, &str),
 ) -> Result<()> {
     // Resolving can take ~30 s the first time: the bar keeps creeping (a slowing curve) instead of sitting at 0.
     let pair = {
@@ -235,8 +257,8 @@ pub async fn fetch_section(
         };
         let (fetched, ()) = tokio::join!(fetch, report);
         let (v0, a0) = fetched?;
-        on_progress(0.9, "正在剪出精确片段…");
-        crate::videoclip::encode_exact(ffmpeg, &vp, start - v0, &ap, start - a0, end - start, dest, &cancel).await
+        on_progress(0.92, "正在合成片段…");
+        crate::videoclip::mux_copy(ffmpeg, &vp, v0, &ap, a0, start, end, dest, &cancel).await
     }.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
     if res.is_err() && !cancel.load(Ordering::Relaxed) {

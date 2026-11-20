@@ -28,7 +28,10 @@ pub struct FfmpegStatus {
 #[serde(rename_all = "camelCase")]
 pub struct PreparedClip {
     pub path: String,
+    /// The clip's own length (the file may start `lead` seconds earlier).
     pub duration: f64,
+    /// Seconds before the clip starts in the file: a stream copy begins at a keyframe; the export trims it.
+    pub lead: f64,
     pub width: u32,
     pub height: u32,
     pub has_burned_subtitles: bool,
@@ -68,6 +71,12 @@ pub struct Frame {
 pub struct RenderRequest {
     #[serde(default)]
     pub frame: Option<Frame>,
+    /// Seconds to skip at the start of `raw_path` (see PreparedClip::lead).
+    #[serde(default)]
+    pub lead: f64,
+    /// Playback speed of the export (0.5–2); cue times arrive already on the sped-up clock.
+    #[serde(default)]
+    pub speed: f64,
     /// Where clips go unless the user picked a file (Settings › 存储); Downloads when empty.
     #[serde(default)]
     pub output_dir: Option<String>,
@@ -455,7 +464,13 @@ pub async fn extract_candidate_frames(ffmpeg: &Path, path: &Path, duration: f64)
     (frames, best_idx)
 }
 
+/// Seconds before the clip proper in a fetched file (a `.lead` file beside it; none means 0).
+pub fn read_lead(path: &Path) -> f64 {
+    std::fs::read_to_string(path.with_extension("lead")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0)
+}
+
 async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: bool) -> PreparedClip {
+    let lead = read_lead(dest);
     let meta_path = dest.with_extension("meta.json");
     let frames_path = dest.with_extension("frames.json");
 
@@ -497,7 +512,8 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
 
     PreparedClip {
         path: dest.to_string_lossy().into_owned(),
-        duration,
+        duration: (duration - lead).max(0.1),
+        lead,
         width,
         height,
         has_burned_subtitles,
@@ -573,8 +589,27 @@ async fn run_ffmpeg_with_progress(
     Ok(())
 }
 
-/// Separate video and audio (each starting a little before the stretch) as one exact-length MP4: one encode,
-/// hardware H.264 at a generous bitrate since the export encodes once more.
+/// Separate video and audio as one MP4 without re-encoding the picture: the video is copied from its first
+/// keyframe (`v0`, a little before the stretch), the audio (cheap to encode) is aligned to it. The export trims
+/// the lead exactly, so the picture is encoded once in all. Writes `<dest>.lead`.
+pub async fn mux_copy(ffmpeg: &Path, video: &Path, v0: f64, audio: &Path, a0: f64, start: f64, end: f64, dest: &Path, cancel: &AtomicBool) -> Result<()> {
+    let tmp = dest.with_extension("part.mp4");
+    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), video.to_string_lossy().into_owned()];
+    // Audio starting before the video is cut to it; starting after, it is delayed (inside the lead).
+    if a0 < v0 { args.extend(["-ss".into(), format!("{:.3}", v0 - a0)]); } else if a0 > v0 { args.extend(["-itsoffset".into(), format!("{:.3}", a0 - v0)]); }
+    args.extend(["-i".into(), audio.to_string_lossy().into_owned()]);
+    args.extend([
+        "-t".into(), format!("{:.3}", end - v0), "-map".into(), "0:v:0".into(), "-map".into(), "1:a:0".into(),
+        "-c:v".into(), "copy".into(), "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(),
+        "-movflags".into(), "+faststart".into(), tmp.to_string_lossy().into_owned(),
+    ]);
+    run_ffmpeg_with_progress(ffmpeg, None, &args, end - v0, cancel, |_| {}).await?;
+    tokio::fs::rename(&tmp, dest).await?;
+    tokio::fs::write(dest.with_extension("lead"), format!("{:.3}", (start - v0).max(0.0))).await?;
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub async fn encode_exact(ffmpeg: &Path, video: &Path, v_ss: f64, audio: &Path, a_ss: f64, dur: f64, dest: &Path, cancel: &AtomicBool) -> Result<()> {
     let tmp = dest.with_extension("part.mp4");
     for hw in [has_videotoolbox(ffmpeg), false] {
@@ -756,12 +791,13 @@ pub async fn prepare_montage(
         let part = prepare_segment(data, video_id, a, b, cancel.clone(), |stage, p, m| {
             if stage != "done" { on_progress("download", (base + p / n) * 0.85, m); }
         }).await?;
-        paths.push(PathBuf::from(part.path));
+        paths.push((PathBuf::from(part.path), part.lead, part.duration));
     }
     on_progress("trim", 0.88, "正在拼接片段…");
     let tmp = dest.with_extension("part.mp4");
     let mut args: Vec<String> = vec!["-y".into()];
-    for p in &paths { args.extend(["-i".into(), p.to_string_lossy().into_owned()]); }
+    // Each part from its own lead, for its own length.
+    for (p, lead, d) in &paths { args.extend(["-ss".into(), format!("{lead:.3}"), "-t".into(), format!("{d:.3}"), "-i".into(), p.to_string_lossy().into_owned()]); }
     // Same size for every part (they come from one video), then one concat.
     let mut graph = String::new();
     for k in 0..paths.len() { graph.push_str(&format!("[{k}:v]setsar=1,format=yuv420p[v{k}];")); }
@@ -816,7 +852,7 @@ pub async fn prepare_segment(
     }
 
     if let Some((parent, cs, _ce)) = find_covering_cache(&dir, start_ms, end_ms) {
-        let ss = (start_ms - cs) as f64 / 1000.0;
+        let ss = (start_ms - cs) as f64 / 1000.0 + read_lead(&parent);
         on_progress("trim", 0.3, "正在从缓存片段截取…");
         normalize_mp4(&ffmpeg, &parent, &dest, Some((ss, dur)), dur, &cancel, |p| {
             on_progress("trim", 0.3 + p * 0.65, "正在整理视频画面…");
@@ -873,7 +909,17 @@ pub fn build_filter_script(
 
     if let Some(f) = frame {
         let (w, h) = (even(f.w), even(f.h));
-        if f.fit == "card" {
+        if f.fit == "card" && card_bg != "blur" {
+            // A plain colour around the picture: pad it (no full-frame drawing per frame, ~40% faster).
+            let hex = match card_bg { "paper" => "#f5f2eb", "white" => "#ffffff", _ => "#141315" };
+            let (vw, vh) = (even(f.vw.max(2)), even(f.vh.max(2)));
+            let fit_box = if f.crop_box {
+                format!("scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh}:(iw-{vw})*{cx:.4}:(ih-{vh})/2")
+            } else {
+                format!("scale={vw}:{vh}:force_original_aspect_ratio=decrease,pad={vw}:{vh}:(ow-iw)/2:(oh-ih)/2:color={hex}")
+            };
+            parts.push(format!("[0:v]{fit_box},setsar=1,pad={w}:{h}:{vx}:{vy}:color={hex}[base]", vx = f.vx, vy = f.vy));
+        } else if f.fit == "card" {
             // Background blurred at quarter size (as good to the eye, ~7x cheaper than blurring the full frame).
             let bg = match card_bg {
                 "blur" => format!("[bg]scale={qw}:{qh}:force_original_aspect_ratio=increase,crop={qw}:{qh},boxblur=6:2,eq=brightness=-0.22:saturation=0.85,scale={w}:{h},setsar=1[bg2]", qw = even(w / 4), qh = even(h / 4)),
@@ -971,6 +1017,18 @@ pub fn build_filter_script(
     }
 
     parts.join(";")
+}
+
+/// Plays the source at `speed`: picture timestamps divided, audio through atempo; the rest of the graph
+/// reads the sped-up streams.
+pub fn with_speed(filter: &str, speed: f64, has_audio: bool) -> String {
+    if (speed - 1.0).abs() < 0.001 { return filter.to_string(); }
+    let mut f = format!("[0:v]setpts=PTS/{speed:.4}[sv];") + &filter.replace("[0:v]", "[sv]");
+    if has_audio {
+        if f.contains("[0:a]") { f = format!("[0:a]atempo={speed:.4}[sa];") + &f.replace("[0:a]", "[sa]"); }
+        else { f.push_str(&format!(";[0:a]atempo={speed:.4}[aout]")); }
+    }
+    f
 }
 
 fn decode_png_base64(raw: &str) -> Result<Vec<u8>> {
@@ -1109,17 +1167,20 @@ async fn render_into(
     );
     let tmp_out = work_dir.join("out.mp4");
     let use_vt = has_videotoolbox(ffmpeg);
-    let dur = req.duration.max(1.0) + if cover_input_idx.is_some() && cover_mode == "hold" { 1.0 } else { 0.0 };
+    let speed = if req.speed > 0.0 { req.speed.clamp(0.5, 2.0) } else { 1.0 };
+    let filter = with_speed(&filter, speed, has_audio);
+    let dur = req.duration.max(1.0) / speed + if cover_input_idx.is_some() && cover_mode == "hold" { 1.0 } else { 0.0 };
 
     on_progress("render", 0.12, "正在合成视频…");
 
     for attempt in [use_vt, false] {
-        let mut args: Vec<String> = vec!["-y".into(), "-i".into(), raw_path.to_string_lossy().into_owned()];
+        // The clip proper (after the stream copy's lead), exactly.
+        let mut args: Vec<String> = vec!["-y".into(), "-ss".into(), format!("{:.3}", req.lead.max(0.0)), "-t".into(), format!("{:.3}", req.duration), "-i".into(), raw_path.to_string_lossy().into_owned()];
         for name in &input_names {
             args.push("-i".into());
             args.push(name.clone());
         }
-        let audio_map = if cover_input_idx.is_some() && cover_mode == "hold" && has_audio {
+        let audio_map = if has_audio && filter.contains("[aout]") {
             "[aout]"
         } else {
             "0:a?"
@@ -1321,7 +1382,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             .unwrap();
         assert!(mk.status.success(), "generate test source failed");
 
-        let req_flash = RenderRequest { frame: None, output_dir: None,
+        let req_flash = RenderRequest { frame: None, output_dir: None, lead: 0.0, speed: 1.0,
             raw_path: src.to_string_lossy().into_owned(),
             output_path: Some(out.to_string_lossy().into_owned()),
             default_name: "smoke".into(),
@@ -1354,7 +1415,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
         assert!(best < frames.len());
 
         let out_hold = data.join("out-hold.mp4");
-        let req_hold = RenderRequest { frame: None, output_dir: None,
+        let req_hold = RenderRequest { frame: None, output_dir: None, lead: 0.0, speed: 1.0,
             raw_path: src.to_string_lossy().into_owned(),
             output_path: Some(out_hold.to_string_lossy().into_owned()),
             default_name: "smoke-hold".into(),
@@ -1413,7 +1474,7 @@ mod render_live {
         let cues = (0..20).map(|k| CueOverlay { start: k as f64 * 5.0, end: k as f64 * 5.0 + 4.5, y: 1500, png_base64: band.clone() }).collect();
         let out = std::env::temp_dir().join("subcast-render-test.mp4");
         let _ = std::fs::remove_file(&out);
-        let req = RenderRequest {
+        let req = RenderRequest { lead: 0.0, speed: 1.0,
             output_dir: None,
             frame: Some(Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: true }),
             raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
@@ -1427,5 +1488,29 @@ mod render_live {
         eprintln!("render took {:?}: {w}x{h}, {dur:.2}s, audio={audio}", t.elapsed());
         assert_eq!((w, h), (1080, 1920));
         assert!((dur - 105.16).abs() < 0.3 && audio);
+    }
+
+    /// 1.5× export of the cached clip on a solid card (run with --ignored): shorter by a third, audio kept.
+    #[tokio::test]
+    #[ignore]
+    async fn renders_faster_speed() {
+        let data = dirs::data_dir().unwrap().join("ai.qiaomu.subcast");
+        let src = data.join("work/clips/xgAJkGC89rM/541390-646520.mp4");
+        let ff = find_ffmpeg(&data).unwrap();
+        let out = std::env::temp_dir().join("subcast-render-speed.mp4");
+        let _ = std::fs::remove_file(&out);
+        let req = RenderRequest {
+            lead: 0.0, speed: 1.5, output_dir: None,
+            frame: Some(Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: true }),
+            raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
+            layout: "frame".into(), card_bg: "night".into(), crop_x: 0.5, duration: 105.16,
+            static_overlay_png: None, cues: vec![], cover_png: None, cover_mode: "none".into(),
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
+        };
+        let t = std::time::Instant::now();
+        render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
+        let (dur, w, h, audio) = probe_video_meta(&ff, &out, 0.0).await;
+        eprintln!("speed render took {:?}: {w}x{h}, {dur:.2}s, audio={audio}", t.elapsed());
+        assert!((dur - 105.16 / 1.5).abs() < 0.4 && audio, "{dur}");
     }
 }
