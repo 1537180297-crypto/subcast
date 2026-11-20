@@ -1565,7 +1565,6 @@ const dict: Record<string, string> = {
   "封面预览": "Cover preview",
   "随视频": "Match video",
   "正在生成封面…": "Rendering cover…",
-  "支持【】高亮关键词": "Wrap keywords in 【】 to highlight",
   "封面视觉模板": "Cover template",
   "用【】包住关键词自动高亮": "Wrap in 【】 to highlight",
   "封面大字标题，如：未来三年，【会提问的人】胜出": "Cover headline, e.g. Why 【Great Questions】 Beat Code",
@@ -1647,7 +1646,6 @@ const dict: Record<string, string> = {
   "视频没有分段索引": "The video has no segment index",
   "找不到这一段": "Couldn't find this part",
   "正在下载这一段画面…": "Downloading this part…",
-  "正在剪出精确片段…": "Cutting the exact clip…",
   "正在拼接片段…": "Joining the parts…",
   "高光剪辑导出到": "Export highlight clips to",
   "「下载」文件夹": "The Downloads folder",
@@ -1665,6 +1663,16 @@ const dict: Record<string, string> = {
   "原视频自带字幕": "Source has its own subtitles",
   "正在合成视频…": "Making the video…",
   "正在生成封面和画面图层…": "Drawing the cover and layers…",
+  "封面文字": "Cover text",
+  "黑体": "Sans",
+  "宋体": "Serif",
+  "标题大小": "Title size",
+  "高亮色": "Highlight colour",
+  "跟随样式": "Style's own",
+  "成片倍速": "Clip speed",
+  "成片按这个速度导出": "The clip is exported at this speed",
+  "字幕大小": "Subtitle size",
+  "正在合成片段…": "Putting the clip together…",
 };
 
 export default dict;

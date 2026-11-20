@@ -577,6 +577,8 @@ export async function polishClipCopy(opts: {
   endIdx: number;
   /** A montage's stretches (their lines are read in this order, the gaps left out). */
   ranges?: { startIdx: number; endIdx: number }[];
+  /** The version shown now: "another version" asks for a different angle, not a reword of it. */
+  previous?: string;
   signal?: AbortSignal;
 }): Promise<PolishedClipCopy> {
   const { ep, segments, zh, startIdx, endIdx, signal } = opts;
@@ -611,7 +613,9 @@ export async function polishClipCopy(opts: {
   const once = (maxTokens: number) => llmChat({
     provider,
     system,
-    messages: [{ role: "user", content: lines }],
+    messages: [{ role: "user", content: opts.previous?.trim()
+      ? `${lines}\n\n---\n上一版文案（这次换一个切入角度和写法，标题、开头和正文都不要与它雷同）：\n${opts.previous.trim()}` // i18n-ignore (prompt)
+      : lines }],
     maxTokens,
     jsonMode: provider.protocol === "openai",
     quick: true,
@@ -661,8 +665,10 @@ export function buildPlatformPost(
   const tagLine = tags?.length ? tags.map((x) => (x.startsWith("#") ? x : `#${x}`)).join(" ") : `#${t("播客切片")} #${t("双语字幕")}`;
 
   if (platform === "short") {
+    // The post's own title (the cover's words are made for the picture, not the caption).
+    const head = (title || coverHook || "").replace(/[【】]/g, "").trim();
     const body = shareCopy?.trim() || [coverSub?.trim(), tagLine].filter(Boolean).join("\n\n");
-    return [cleanHook, body, showLabel ? `${t("来源")}：${showLabel}${ep.title}` : ""].filter(Boolean).join("\n\n");
+    return [head, body, showLabel ? `${t("来源")}：${showLabel}${ep.title}` : ""].filter(Boolean).join("\n\n");
   }
 
   // Pick up to 3 representative lines from the clip for bilingual quotes.

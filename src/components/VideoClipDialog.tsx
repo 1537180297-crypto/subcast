@@ -44,6 +44,11 @@ interface ClipPrefs {
   aspect?: ClipAspect;
   fit?: ClipFit;
   cardCrop?: CardCrop;
+  speed?: number;
+  subScale?: number;
+  coverAccent?: string;
+  coverFont?: "" | "sans" | "serif";
+  coverScale?: number;
   brandText?: string;
   watermark?: boolean;
   cardBg?: CardBg;
@@ -84,11 +89,17 @@ const COVER_TEMPLATES: { id: CoverTemplateId; name: string }[] = [
 ];
 
 const DOWNLOADS_DIR = /^.*\/(Downloads|下载)\//; // i18n-ignore
+/** Highlight colours for the cover toolbar ("" = each style's own). */
+const ACCENTS = ["", "#ffd23f", "#ff5a36", "#22c55e", "#3b82f6", "#ec4899"];
+/** Speeds a clip can be exported at (the preview plays at the chosen one). */
+const SPEEDS = [1, 1.25, 1.5, 2];
 
 interface PreparedState {
   /** Which stretches it holds (the dialog's `rangesKey`). */
   key: string;
   path: string;
+  /** Seconds before the clip in the file. */
+  lead: number;
   start: number;
   end: number;
   duration: number;
@@ -129,6 +140,14 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const [watermark, setWatermark] = useState(() => prefs.watermark ?? true);
   const [cardBg, setCardBg] = useState<CardBg>(() => prefs.cardBg ?? "blur");
   const [cardCrop, setCardCrop] = useState<CardCrop>(() => prefs.cardCrop ?? "4:3");
+  const [speed, setSpeed] = useState(() => prefs.speed ?? 1);
+  useEffect(() => { if (videoRef.current) videoRef.current.playbackRate = speed; }, [speed]);
+  const [subScale, setSubScale] = useState(() => prefs.subScale ?? 1);
+  // Quick cover overrides (the toolbar under the cover preview); empty = the style's own.
+  const [coverAccent, setCoverAccent] = useState(() => prefs.coverAccent ?? "");
+  const [coverFont, setCoverFont] = useState<"" | "sans" | "serif">(() => prefs.coverFont ?? "");
+  const [coverScale, setCoverScale] = useState(() => prefs.coverScale ?? 1);
+  const coverStyle = { accent: coverAccent || undefined, font: coverFont || undefined, titleScale: coverScale };
   const [cropX, setCropXRaw] = useState(0.5);
   // Framing follows the speaker (found in the clip's best frame) until the user moves it.
   const cropTouched = useRef(false);
@@ -175,8 +194,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const [pvPlaying, setPvPlaying] = useState(false);
-  // Plays on its own, quietly; one click for sound.
-  const [pvMuted, setPvMuted] = useState(true);
+  // Plays on its own, with sound (it's what the clip sounds like).
+  const [pvMuted, setPvMuted] = useState(false);
   const [pvTime, setPvTime] = useState(0);
 
   useEffect(() => {
@@ -184,6 +203,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       aspect,
       fit,
       cardCrop,
+      speed,
+      subScale,
+      coverAccent,
+      coverFont,
+      coverScale,
       brandText,
       watermark,
       cardBg,
@@ -197,7 +221,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       saveCoverSidecar,
       extraLandscapeCover,
     });
-  }, [aspect, fit, cardCrop, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover]);
+  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover]);
 
   useEffect(() => {
     if (!busyJob) return;
@@ -291,7 +315,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     brandText,
     watermark,
     liftForBurnedSub: liftBurned,
-  }), [geo, cardBg, subStyle, subLang, showTitle, title, showSource, showDisplay, ep.title, brandText, watermark, liftBurned]);
+    subScale,
+  }), [geo, cardBg, subStyle, subLang, showTitle, title, showSource, showDisplay, ep.title, brandText, watermark, liftBurned, subScale]);
 
   const staticOverlayUrl = useMemo(() => {
     const c = renderStaticOverlay(visualConfig);
@@ -334,14 +359,14 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       subTitle: coverSub,
       kicker: coverKicker,
       showName: showDisplay,
-      durationSec: clipDur,
+      durationSec: clipDur / speed,
       backdropUrl: activeCoverBackdrop,
-      brand: brandText, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
+      brand: brandText, ...coverStyle, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
     }).then((c) => {
       if (live) setCoverPreviewUrl(c.toDataURL("image/png"));
     }).catch(() => {});
     return () => { live = false; };
-  }, [coverTpl, effectiveCoverAspect, coverHook, coverSub, coverKicker, showDisplay, clipDur, activeCoverBackdrop, brandText]);
+  }, [coverTpl, effectiveCoverAspect, coverHook, coverSub, coverKicker, showDisplay, clipDur, speed, activeCoverBackdrop, brandText, coverAccent, coverFont, coverScale]);
 
   // Real previews of every style with this clip's words and picture (only while the cover tab is open).
   const [tplThumbs, setTplThumbs] = useState<Partial<Record<CoverTemplateId, string>>>({});
@@ -350,7 +375,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     let live = true;
     const timer = window.setTimeout(async () => {
       for (const tpl of COVER_TEMPLATES) {
-        const c = await renderCoverCanvas({ template: tpl.id, aspect: "3:4", hookTitle: coverHook, subTitle: "", kicker: coverKicker, showName: showDisplay, durationSec: 0, backdropUrl: activeCoverBackdrop, brand: brandText, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0 });
+        const c = await renderCoverCanvas({ template: tpl.id, aspect: "3:4", hookTitle: coverHook, subTitle: "", kicker: coverKicker, showName: showDisplay, durationSec: 0, backdropUrl: activeCoverBackdrop, brand: brandText, ...coverStyle, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0 });
         if (!live) return;
         const small = document.createElement("canvas");
         small.width = 180; small.height = 240;
@@ -360,7 +385,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       }
     }, 350);
     return () => { live = false; window.clearTimeout(timer); };
-  }, [sideTab, coverHook, coverKicker, showDisplay, activeCoverBackdrop, brandText]);
+  }, [sideTab, coverHook, coverKicker, showDisplay, activeCoverBackdrop, brandText, coverAccent, coverFont, coverScale]);
 
   const generatedPost = useMemo(
     () => buildPlatformPost(postPlatform, {
@@ -399,6 +424,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       const next: PreparedState = {
         key: rangesKey,
         path: res.path,
+        lead: res.lead ?? 0,
         start: clipStart,
         end: clipEnd,
         duration: res.duration || clipDur,
@@ -428,16 +454,18 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   }, [rangesKey, preparedValid, !!busyJob]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
-  /** `fill`: only the copy that's missing (opening a highlight that came without it), quietly. */
-  const runAiPolish = async (fill = false) => {
+  /** `fill`: only the copy that's missing (opening a highlight that came without it), quietly.
+   *  `again`: a new take on the post (title and text) that differs from the one shown; the cover stays. */
+  const runAiPolish = async (fill = false, again = false) => {
     if (polishing) return;
     setPolishing(true);
     setError(null);
     setNeedsSetup(false);
     try {
-      const res = await polishClipCopy({ ep, segments: effectiveSegments, zh: effectiveZh, startIdx, endIdx, ranges: montage ? parts : undefined });
+      const res = await polishClipCopy({ ep, segments: effectiveSegments, zh: effectiveZh, startIdx, endIdx, ranges: montage ? parts : undefined, previous: again ? currentPostText : undefined });
       // A clip that came without title or cover lines (a montage, a hand-picked stretch) takes the model's.
-      if (!fill || !clip.coverHook) {
+      if (again) setTitle(res.title);
+      else if (!fill || !clip.coverHook) {
         setTitle(res.title);
         setCoverHook(res.coverHook);
         setCoverSub(res.coverSub);
@@ -471,9 +499,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         subTitle: coverSub,
         kicker: coverKicker,
         showName: showDisplay,
-        durationSec: clipDur,
+        durationSec: clipDur / speed,
         backdropUrl: activeCoverBackdrop,
-      brand: brandText, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
+      brand: brandText, ...coverStyle, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
       });
       const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
       if (!blob) throw new Error("blob");
@@ -494,9 +522,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         subTitle: coverSub,
         kicker: coverKicker,
         showName: showDisplay,
-        durationSec: clipDur,
+        durationSec: clipDur / speed,
         backdropUrl: activeCoverBackdrop,
-      brand: brandText, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
+      brand: brandText, ...coverStyle, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
       });
       const safeTitle = (title.trim() || ep.title).replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").trim().slice(0, 50);
       const name = `${safeTitle || t("SubCast 切片")}-${t("封面")}-${targetAspect.replace(":", "x")}`;
@@ -540,7 +568,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       const eg = exportConfig.geo;
       const renderedCues = exportCues.map((cue) => {
         const band = renderCueBand(cue, exportConfig);
-        return { start: cue.start, end: cue.end, y: band.y, pngBase64: canvasToPngBase64(band.canvas) };
+        return { start: cue.start / speed, end: cue.end / speed, y: band.y, pngBase64: canvasToPngBase64(band.canvas) };
       });
 
       const bestIdx = selectedFrame != null && prep.frames[selectedFrame] ? selectedFrame : prep.bestFrame;
@@ -557,9 +585,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           subTitle: coverSub,
           kicker: coverKicker,
           showName: showDisplay,
-          durationSec: prep.duration,
+          durationSec: prep.duration / speed,
           backdropUrl: backdropForExport,
-          brand: brandText, cropBottom: prep.hasBurnedSubtitles ? 0.2 : 0,
+          brand: brandText, ...coverStyle, cropBottom: prep.hasBurnedSubtitles ? 0.2 : 0,
         });
         coverPng = canvasToPngBase64(coverCanvas);
       }
@@ -573,9 +601,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           subTitle: coverSub,
           kicker: coverKicker,
           showName: showDisplay,
-          durationSec: prep.duration,
+          durationSec: prep.duration / speed,
           backdropUrl: backdropForExport,
-          brand: brandText, cropBottom: prep.hasBurnedSubtitles ? 0.2 : 0,
+          brand: brandText, ...coverStyle, cropBottom: prep.hasBurnedSubtitles ? 0.2 : 0,
         });
         landscapeCoverPng = canvasToPngBase64(landCanvas);
       }
@@ -590,6 +618,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         cardBg,
         cropX,
         duration: prep.duration,
+        lead: prep.lead,
+        speed,
         staticOverlayPng,
         cues: renderedCues,
         coverPng,
@@ -688,12 +718,19 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                   <video
                     ref={videoRef}
                     src={convertFileSrc(prepared.path)}
-                    loop
                     autoPlay
                     playsInline
                     muted={pvMuted}
+                    onLoadedMetadata={(e) => { e.currentTarget.currentTime = prepared.lead; e.currentTarget.playbackRate = speed; }}
                     style={mediaStyle}
-                    onTimeUpdate={(e) => setPvTime(e.currentTarget.currentTime)}
+                    onTimeUpdate={(e) => {
+                      // The file starts `lead` early (a stream copy); the clip loops within its own span.
+                      const v = e.currentTarget;
+                      const at = v.currentTime - prepared.lead;
+                      if (at >= prepared.duration - 0.05 || v.ended) { v.currentTime = prepared.lead; void v.play().catch(() => {}); }
+                      setPvTime(Math.max(0, at));
+                    }}
+                    onEnded={(e) => { e.currentTarget.currentTime = prepared.lead; void e.currentTarget.play().catch(() => {}); }}
                     onPlay={() => {
                       setPvPlaying(true);
                       const s = useStore.getState();
@@ -733,7 +770,24 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
 
           <div className="vclip-pv-bar">
             {pvView === "cover" ? (
-              <span className="small muted">{effectiveCoverAspect} · {t("支持【】高亮关键词")}</span>
+              <div className="vclip-cover-tools" role="toolbar" aria-label={t("封面文字")}>
+                <div className="vclip-seg-mini" role="group" aria-label={t("字体")}>
+                  {([["", t("默认")], ["sans", t("黑体")], ["serif", t("宋体")]] as const).map(([v, label]) => (
+                    <button key={v} type="button" className={coverFont === v ? "on" : ""} onClick={() => setCoverFont(v)}>{label}</button>
+                  ))}
+                </div>
+                <label className="vclip-size" title={t("标题大小")}>
+                  <span aria-hidden>A</span>
+                  <input type="range" min={0.8} max={1.25} step={0.05} value={coverScale} onChange={(e) => setCoverScale(Number(e.target.value))} aria-label={t("标题大小")} />
+                  <span aria-hidden className="big">A</span>
+                </label>
+                <div className="vclip-swatches" role="radiogroup" aria-label={t("高亮色")}>
+                  {ACCENTS.map((c) => (
+                    <button key={c || "auto"} type="button" role="radio" aria-checked={coverAccent === c} className={`sw${coverAccent === c ? " on" : ""}${c ? "" : " auto"}`}
+                      style={c ? { background: c } : undefined} title={c ? c : t("跟随样式")} onClick={() => setCoverAccent(c)} />
+                  ))}
+                </div>
+              </div>
             ) : preparedValid ? (
               <>
                 <button type="button" className="icon-btn sm" onClick={togglePreviewPlay} title={pvPlaying ? t("暂停") : t("播放")}>
@@ -742,7 +796,12 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <button type="button" className="icon-btn sm" onClick={() => setPvMuted(!pvMuted)} title={pvMuted ? t("取消静音") : t("静音")}>
                   {pvMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
                 </button>
-                <span className="num small muted">{clock(pvTime)} / {clock(clipDur)}</span>
+                <span className="num small muted">{clock(pvTime / speed)} / {clock(clipDur / speed)}</span>
+                <div className="vclip-speed" role="group" aria-label={t("成片倍速")}>
+                  {SPEEDS.map((r) => (
+                    <button key={r} type="button" className={r === speed ? "on" : ""} onClick={() => setSpeed(r)} title={t("成片按这个速度导出")}>{r}×</button>
+                  ))}
+                </div>
               </>
             ) : (
               <span className="small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span>
@@ -836,6 +895,15 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     </button>
                   ))}
                 </div>}
+                {addSubs && (
+                  <div className="reading-row">
+                    <span>{t("字幕大小")}</span>
+                    <div className="vclip-crop-row">
+                      <input type="range" min={0.7} max={1.5} step={0.05} value={subScale} onChange={(e) => setSubScale(Number(e.target.value))} />
+                      <span className="num small muted">{Math.round(subScale * 100)}%</span>
+                    </div>
+                  </div>
+                )}
                 <div className="vclip-toggles">
                   <label><input type="checkbox" checked={showTitle} onChange={(e) => setShowTitle(e.target.checked)} /> {t("顶部金句标题")}</label>
                   <label><input type="checkbox" checked={showSource} onChange={(e) => setShowSource(e.target.checked)} /> {t("节目出处")}</label>
@@ -879,7 +947,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                         onClick={() => {
                           setActivePreviewIdx(idx);
                           if (preparedValid && videoRef.current) {
-                            videoRef.current.currentTime = toClipTime(idx, seg.start) + 0.05;
+                            videoRef.current.currentTime = (prepared?.lead ?? 0) + toClipTime(idx, seg.start) + 0.05;
                           }
                         }}
                       >
@@ -1024,7 +1092,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               {polishing ? (
                 <p className="vclip-writing small"><Loader2 size={12} className="spin" /> {t("AI 正在写发布文案…")}</p>
               ) : (
-                <button type="button" className="link-btn small vclip-again" onClick={() => void runAiPolish(true)}>{t("换一版")}</button>
+                <button type="button" className="link-btn small vclip-again" onClick={() => void runAiPolish(true, true)}>{t("换一版")}</button>
               )}
               <p className="muted small">
                 {postPlatform === "short"
