@@ -170,11 +170,29 @@ async fn fetch_input(state: &AppState, input: &str) -> Res<Fetched> {
     Ok(Fetched::Show(show, eps))
 }
 
+/// YouTube's feed only carries a video thumbnail. The sidebar should show the channel picture instead.
+/// Once that picture is stored, later refreshes keep it and do not download the channel page again.
+async fn with_channel_avatar(mut show: Show, existing: Option<String>) -> Show {
+    if show.kind != "youtube" { return show; }
+    if existing.as_deref().is_some_and(|c| c.starts_with("data:image/")) {
+        show.cover = existing;
+        return show;
+    }
+    if let Ok(Some(avatar)) = tokio::time::timeout(std::time::Duration::from_secs(8), feeds::youtube_channel_avatar(&show.feed_url)).await {
+        show.cover = Some(avatar);
+    }
+    show
+}
+
 #[tauri::command]
 async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Added> {
     match fetch_input(&state, &input).await? {
         Fetched::Single(ep) => Ok(Added { show: None, episode: Some(ep) }),
-        Fetched::Show(show, eps) => { store(&state, &show, &eps)?; Ok(Added { show: Some(show), episode: None }) }
+        Fetched::Show(show, eps) => {
+            let show = with_channel_avatar(show, None).await;
+            store(&state, &show, &eps)?;
+            Ok(Added { show: Some(show), episode: None })
+        }
     }
 }
 
@@ -224,8 +242,10 @@ async fn preview_show(state: State<'_, AppState>, input: String) -> Res<Preview>
 #[tauri::command]
 async fn refresh_show(state: State<'_, AppState>, id: String) -> Res<Show> {
     let show = db::get_show(&state.db.lock().unwrap(), &id).map_err(e)?.ok_or("节目不存在")?;
+    let existing = show.cover.clone();
     let (fresh, eps) = fetch_any(&state, &show.feed_url, &show.kind).await.map_err(e)?;
     let fresh = Show { id: show.id.clone(), kind: show.kind.clone(), ..fresh };
+    let fresh = with_channel_avatar(fresh, existing).await;
     store(&state, &fresh, &eps)?;
     Ok(fresh)
 }
@@ -262,6 +282,7 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
                     eps.iter().filter(|x| ids.contains(&x.id)).count()
                 };
                 let fresh = Show { id: s.id.clone(), kind: s.kind.clone(), ..fresh };
+                let fresh = with_channel_avatar(fresh, s.cover.clone()).await;
                 if store(&state, &fresh, &eps).is_ok() { ok += 1; fresh_eps += eps.len() - known; }
             }
         }
