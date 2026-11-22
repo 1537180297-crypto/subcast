@@ -71,8 +71,12 @@ async fn recognize_chunk(cfg: &CloudAsr, key: &str, wav: Vec<u8>, offset: f64, l
                 .timeout(std::time::Duration::from_secs(180)).send().await
         } else {
             let part = reqwest::multipart::Part::bytes(wav.clone()).file_name("chunk.wav").mime_str("audio/wav")?;
-            let mut form = reqwest::multipart::Form::new().text("model", cfg.model.clone()).text("response_format", "verbose_json").text("timestamp_granularities[]", "segment");
-            if language != "auto" { form = form.text("language", language.to_string()); }
+            let mut form = reqwest::multipart::Form::new().text("model", cfg.model.clone());
+            // SiliconFlow documents only model and file for this endpoint, returning text without timestamps.
+            if cfg.id != "siliconflow" {
+                form = form.text("response_format", "verbose_json").text("timestamp_granularities[]", "segment");
+                if language != "auto" { form = form.text("language", language.to_string()); }
+            }
             // Only services seen to use it (OpenAI, Groq); others ignore it or reject extra text.
             if !ctx.prompt.is_empty() && (base.contains("openai.com") || base.contains("groq.com")) { form = form.text("prompt", ctx.prompt.clone()); }
             let b = client().post(format!("{base}/audio/transcriptions")).multipart(form.part("file", part)).timeout(std::time::Duration::from_secs(180));
@@ -219,4 +223,72 @@ pub async fn list_models(p: &crate::llm::Provider) -> Result<Vec<String>> {
     ids.sort();
     ids.dedup();
     Ok(ids)
+}
+
+#[cfg(test)]
+mod asr_request_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    // Exercise the real multipart request and response parser without a cloud account or real audio.
+    async fn run_request(provider: &str) -> (Result<Vec<Segment>>, String) {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", server.server_addr());
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut request = server.recv_timeout(std::time::Duration::from_secs(15)).unwrap().expect("request");
+            assert_eq!(request.url(), "/audio/transcriptions");
+            let mut body = Vec::new();
+            request.as_reader().read_to_end(&mut body).unwrap();
+            let body = String::from_utf8_lossy(&body).into_owned();
+            let verbose = body.contains("name=\"response_format\"");
+            let timestamps = body.contains("name=\"timestamp_granularities[]\"");
+            let language = body.contains("name=\"language\"");
+            let is_siliconflow = body.contains("Qwen/Qwen3-ASR-1.7B");
+            let response = if is_siliconflow && (verbose || timestamps || language) {
+                tiny_http::Response::from_string("").with_status_code(400)
+            } else if is_siliconflow {
+                tiny_http::Response::from_string(r#"{"text":"Synthetic speech sample."}"#)
+            } else {
+                tiny_http::Response::from_string(r#"{"segments":[{"text":"Timed control.","start":0.25,"end":1.5}]}"#)
+            };
+            request.respond(response).unwrap();
+            tx.send(body).unwrap();
+        });
+        let cfg = CloudAsr {
+            id: provider.to_string(), protocol: "openai".to_string(), base_url,
+            model: if provider == "siliconflow" { "Qwen/Qwen3-ASR-1.7B" } else { "whisper-1" }.to_string(),
+            chunk_secs: None, needs_key: Some(false),
+        };
+        let result = recognize_chunk(&cfg, "", wav_bytes(&[0.0; 160], RATE), 5.0, 2.0, "en", &crate::asr::AsrContext::default()).await;
+        let body = rx.recv_timeout(std::time::Duration::from_secs(15)).unwrap();
+        worker.join().unwrap();
+        (result, body)
+    }
+
+    #[tokio::test]
+    async fn siliconflow_text_only_response() {
+        let (result, body) = run_request("siliconflow").await;
+        let segments = result.expect("SiliconFlow-style endpoint accepts the request");
+        assert!(!body.contains("name=\"response_format\""));
+        assert!(!body.contains("name=\"timestamp_granularities[]\""));
+        assert!(!body.contains("name=\"language\""));
+        assert!(body.contains("RIFF"));
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Synthetic speech sample.");
+        assert_eq!((segments[0].start, segments[0].end), (5.0, 7.0));
+    }
+
+    #[tokio::test]
+    async fn openai_keeps_timestamp_request_and_response() {
+        let (result, body) = run_request("openai").await;
+        let segments = result.unwrap();
+        assert!(body.contains("name=\"response_format\""));
+        assert!(body.contains("verbose_json"));
+        assert!(body.contains("name=\"timestamp_granularities[]\""));
+        assert!(body.contains("name=\"language\""));
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Timed control.");
+        assert_eq!((segments[0].start, segments[0].end), (5.25, 6.5));
+    }
 }
