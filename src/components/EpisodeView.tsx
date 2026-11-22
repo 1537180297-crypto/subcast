@@ -39,6 +39,7 @@ import { YtVideoStrip } from "./YtPromo";
 import { SubtitleTune } from "./SubtitleTune";
 import { pieceAt, pieces } from "../lib/pieces";
 import { setSubLift } from "../lib/reading";
+import { subtitleModeFor } from "../lib/settings";
 import { activeIndex, TranscriptPanel } from "./TranscriptPanel";
 
 type Tab = "transcript" | "deep" | "chat" | "summary";
@@ -57,7 +58,7 @@ function pieceIndex(ps: string[], progress: number): number {
 function AudioSubtitles({ ep }: { ep: Episode }) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const items = useJobs((s) => s.translations[ep.id]?.items);
-  const mode = useStore((s) => s.settings.subtitleMode);
+  const mode = useStore((s) => subtitleModeFor(s.settings, ep));
   // Something only this audio has (an ad, most likely): say so instead of holding a line that isn't being said.
   const gapLeft = useStore((s) => (s.current?.id === ep.id && s.gapEnd && s.rawTime != null ? Math.ceil(s.gapEnd - s.rawTime) : 0));
   const segs = transcript?.segments;
@@ -72,7 +73,7 @@ function AudioSubtitles({ ep }: { ep: Episode }) {
     const origPs = pieces(seg.text, cjk);
     return { i, k: pieceIndex(origPs, progress) };
   }));
-  if (!transcript) return null;
+  if (!transcript || mode === "off") return null;
   if (gapLeft > 0) return (
     <div className="asub asub-gap" aria-live="off">
       <p>{t("这一段只在你的音频里，多半是广告，{n} 秒后回到正文", { n: gapLeft })}</p>
@@ -107,7 +108,7 @@ function AudioSubtitles({ ep }: { ep: Episode }) {
 function SubtitleOverlay({ ep }: { ep: Episode }) {
   const has = useJobs((s) => !!s.transcripts[ep.id]);
   if (!has) return null;
-  return <><SubtitleLine ep={ep} /><SubtitleTune /></>;
+  return <><SubtitleLine ep={ep} /><SubtitleTune ep={ep} /></>;
 }
 
 /** The line being spoken, over the video. Dragging it moves the subtitles up or down (kept for every video); a
@@ -115,7 +116,7 @@ function SubtitleOverlay({ ep }: { ep: Episode }) {
 function SubtitleLine({ ep }: { ep: Episode }) {
   const transcript = useJobs((s) => s.transcripts[ep.id]);
   const items = useJobs((s) => s.translations[ep.id]?.items);
-  const mode = useStore((s) => s.settings.subtitleMode);
+  const mode = useStore((s) => subtitleModeFor(s.settings, ep));
   const drag = useRef<{ y: number; lift: number; h: number; moved: boolean } | null>(null);
   const [dragging, setDragging] = useState(false);
   // A click plays or pauses a moment later, so a double-click (back to the usual place) doesn't do both.
@@ -138,7 +139,7 @@ function SubtitleLine({ ep }: { ep: Episode }) {
       zh: zhRaw ? pieceAt(zhRaw, true, progress) : "",
     };
   }));
-  if (cue.i < 0) return null;
+  if (mode === "off" || cue.i < 0) return null;
   const down = (e: React.PointerEvent<HTMLDivElement>) => {
     const video = e.currentTarget.closest<HTMLElement>(".video");
     if (e.button !== 0 || !video) return;
@@ -327,7 +328,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   const watched = useEpisodeWatch(ep).status === "watched";
   // Translate foreign-language subtitles whichever tab is open: the video's subtitles need the Chinese too.
   const transcript = useJobs((s) => s.transcripts[ep.id]);
-  const mode = useStore((s) => s.settings.subtitleMode);
+  const mode = useStore((s) => subtitleModeFor(s.settings, ep));
   useEffect(() => { if (transcript) autoTranslate(ep); }, [transcript, mode]);
   const coverToggle = () => {
     if (isCurrent) { useStore.getState().player?.toggle(); return; }
@@ -360,6 +361,8 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
   const showVideo = !!ep.videoId && !audioMode;
   const ytPromo = useStore((s) => s.settings.youtubePromo);
   const epShow = useStore((s) => s.shows.find((x) => x.id === ep.showId));
+  const showAlias = useStore((s) => (ep.showId && ep.showId !== "single" ? s.settings.showAliases?.[ep.showId]?.trim() : undefined));
+  const showDisplay = showAlias || (ep.showTitle ? showName(ep.showTitle) : "");
   const ytChannel = showLinks(epShow?.feedUrl).youtube;
   const switchTo = (audio: boolean, why?: string) => {
     const s = useStore.getState();
@@ -388,7 +391,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
         <section className="ep-left" ref={leftRef}>
           <div className="ep-title-block">
             <div className="ep-title">
-              <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? (hasShow ? <button key="s" className="show-link" title={t("查看这档节目的全部单集")} onClick={() => go({ kind: "show", id: ep.showId })}>{showName(ep.showTitle)}</button> : <span key="s">{showName(ep.showTitle)}</span>) : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
+              <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? (hasShow ? <button key="s" className="show-link" title={t("查看这档节目的全部单集")} onClick={() => go({ kind: "show", id: ep.showId })}>{showDisplay}</button> : <span key="s">{showDisplay}</span>) : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
               <h1>{titleZh ?? ep.title}</h1>
               {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
             </div>

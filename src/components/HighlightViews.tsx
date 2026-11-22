@@ -1,11 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
-import { Check, Copy, Layers, Loader2, Play, RefreshCw, Scissors, Sparkles, Square } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, Copy, Layers, Loader2, Pause, Play, RefreshCw, Scissors, Sparkles, Square } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { api, errorText, type Episode, type Segment } from "../lib/api";
 import { clock } from "../lib/format";
 import { buildPlatformPost, clearHighlightsError, loadHighlights, montageClip, polishClipCopy, previewEpisodeRange, runHighlights, saveClipCopy, stopHighlights, useHighlights, type HighlightClip } from "../lib/highlights";
 import { t, tk, useLang } from "../lib/i18n";
+import { useJobs } from "../lib/jobs";
+import { isZh, useZh } from "../lib/zh";
 import { useStore } from "../store";
 import { openVideoClipDialog } from "./VideoClipDialog";
+
+/** Renders a highlight card's opening quote, automatically fetching a Chinese translation for English lines. */
+function HighlightQuote({ zh, orig }: { zh?: string; orig: string }) {
+  const autoZh = useZh(!zh && orig && !isZh(orig) ? orig : null);
+  const shownZh = zh || autoZh;
+  return (
+    <div className="hl-quote">
+      {shownZh && <p className="hl-qzh clamp2">{shownZh}</p>}
+      {orig && <p className="hl-qorig clamp2">{orig}</p>}
+    </div>
+  );
+}
 
 const INTENT_SUGGESTIONS = [
   tk("犀利观点与金句"),
@@ -42,12 +57,22 @@ export function HighlightsPanel({
   const loading = useHighlights((s) => !!s.loading[ep.id]);
   const error = useHighlights((s) => s.error[ep.id]);
   const needsSetup = useHighlights((s) => !!s.needsSetup[ep.id]);
-  const notify = useStore((s) => s.notify);
-  const openSettings = useStore((s) => s.openSettings);
+  const liveZh = useJobs((s) => s.translations[ep.id]?.items);
+  const mergedZh = liveZh ?? zh;
+  const { notify, openSettings, isCurrent, playing, playTime } = useStore(useShallow((s) => ({
+    notify: s.notify,
+    openSettings: s.openSettings,
+    isCurrent: s.current?.id === ep.id,
+    playing: s.playing,
+    playTime: s.current?.id === ep.id ? Math.floor(s.time) : -1,
+  })));
 
   const [intent, setIntent] = useState(bundle?.intent ?? "");
   const [sortBy, setSortBy] = useState<"score" | "time">("score");
   const [reasking, setReasking] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   useEffect(() => {
     void loadHighlights(ep.id);
@@ -68,7 +93,7 @@ export function HighlightsPanel({
   const startRun = (customIntent?: string) => {
     clearHighlightsError(ep.id);
     setReasking(false);
-    void runHighlights(ep, segments, zh, customIntent ?? intent);
+    void runHighlights(ep, segments, mergedZh, customIntent ?? intent);
   };
 
   /** Copies the model-written post for the clip, writing it first when the clip doesn't have one yet. */
@@ -78,12 +103,15 @@ export function HighlightsPanel({
       let share = c.articleCopy ? c.shareCopy : "";
       if (!share) {
         setCopying(c.id);
-        const res = await polishClipCopy({ ep, segments, zh, startIdx: c.startIdx, endIdx: c.endIdx });
+        const res = await polishClipCopy({ ep, segments, zh: mergedZh, startIdx: c.startIdx, endIdx: c.endIdx });
         share = res.shareCopy;
         void saveClipCopy(ep.id, c.id, { shareCopy: res.shareCopy, articleCopy: res.articleCopy });
       }
       // The same short-video post the clip window shows (title, text, tags, source).
-      await navigator.clipboard.writeText(buildPlatformPost("short", { ep, title: c.title, coverHook: c.coverHook, coverSub: c.coverSub, shareCopy: share, tags: c.tags, segments, zh, startIdx: c.startIdx, endIdx: c.endIdx, clipStart: c.start }));
+      await navigator.clipboard.writeText(buildPlatformPost("short", { ep, title: c.title, coverHook: c.coverHook, coverSub: c.coverSub, shareCopy: share, tags: c.tags, segments, zh: mergedZh, startIdx: c.startIdx, endIdx: c.endIdx, clipStart: c.start }));
+      setCopiedId(c.id);
+      window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopiedId((cur) => (cur === c.id ? null : cur)), 1600);
       notify(t("传播文案已复制"));
     } catch (e) {
       notify(errorText(e));
@@ -97,7 +125,7 @@ export function HighlightsPanel({
     if (chosen.length < 2) return;
     setPicking(false);
     setPicked([]);
-    openVideoClipDialog({ ep, segments, zh, clip: montageClip(chosen) });
+    openVideoClipDialog({ ep, segments, zh: mergedZh, clip: montageClip(chosen) });
   };
   // The best clips, in time order, up to about three minutes: a one-click "best of".
   const bestOf = () => {
@@ -219,11 +247,13 @@ export function HighlightsPanel({
 
       <div className="hl-list">
         {clips.map((c) => {
-          const previewZh = zh?.[c.startIdx]?.trim();
+          const previewZh = mergedZh?.[c.startIdx]?.trim();
           const previewOrig = segments[c.startIdx]?.text ?? "";
           const durSec = Math.max(1, Math.round(c.end - c.start));
+          const isPlayingThis = isCurrent && playing && playTime >= Math.floor(c.start) && playTime <= Math.ceil(c.end);
+          const isCopied = copiedId === c.id;
           return (
-            <article key={c.id} className={`hl-card${picking ? " picking" : ""}${picked.includes(c.id) ? " picked" : ""}`} onClick={picking ? () => togglePick(c.id) : undefined}>
+            <article key={c.id} className={`hl-card${picking ? " picking" : ""}${picked.includes(c.id) ? " picked" : ""}${isPlayingThis ? " playing" : ""}`} onClick={picking ? () => togglePick(c.id) : undefined}>
               <div className="hl-card-top">
                 {picking && <span className={`hl-check${picked.includes(c.id) ? " on" : ""}`}>{picked.includes(c.id) && <Check size={12} strokeWidth={3} />}</span>}
                 <span className="hl-score" title={t("传播潜力评分")}>✦ {c.score}</span>
@@ -233,26 +263,30 @@ export function HighlightsPanel({
                 <button type="button" className="hl-title-btn" title={t("在字幕里找到这一段")} onClick={(e) => { if (picking) return; e.stopPropagation(); onJumpToTranscript(c.startIdx, c.start); }}>{c.title}</button>
               </h4>
               {c.reason && <p className="hl-reason">{c.reason}</p>}
-              <div className="hl-quote">
-                {previewZh && <p className="hl-qzh clamp2">{previewZh}</p>}
-                {previewOrig && <p className="hl-qorig clamp2">{previewOrig}</p>}
-              </div>
+              <HighlightQuote zh={previewZh} orig={previewOrig} />
               {c.tags.length > 0 && (
                 <div className="hl-tags">
                   {c.tags.map((tag) => <span key={tag} className="hl-tag">{tag}</span>)}
                 </div>
               )}
               {!picking && <div className="hl-actions">
-                <button type="button" className="btn ghost sm" onClick={() => previewEpisodeRange(ep, c.start, c.end)}>
-                  <Play size={12} fill="currentColor" /> {t("试看")}
+                <button
+                  type="button"
+                  className={`btn ghost sm${isPlayingThis ? " on" : ""}`}
+                  onClick={() => {
+                    if (isPlayingThis) useStore.getState().player?.toggle();
+                    else previewEpisodeRange(ep, c.start, c.end);
+                  }}
+                >
+                  {isPlayingThis ? <><Pause size={12} fill="currentColor" /> {t("暂停")}</> : <><Play size={12} fill="currentColor" /> {t("试看")}</>}
                 </button>
                 {ep.videoId && (
-                  <button type="button" className="btn primary sm" onClick={() => openVideoClipDialog({ ep, segments, zh, clip: c })}>
+                  <button type="button" className="btn primary sm" onClick={() => openVideoClipDialog({ ep, segments, zh: mergedZh, clip: c })}>
                     <Scissors size={12} /> {t("剪成视频")}
                   </button>
                 )}
                 <button type="button" className="btn ghost sm" disabled={copying === c.id} onClick={() => void copyShare(c)} title={t("复制 AI 写的发布文案")}>
-                  {copying === c.id ? <Loader2 size={12} className="spin" /> : <Copy size={12} />} {t("复制文案")}
+                  {copying === c.id ? <Loader2 size={12} className="spin" /> : isCopied ? <Check size={12} /> : <Copy size={12} />} {isCopied ? t("已复制") : t("复制文案")}
                 </button>
               </div>}
             </article>

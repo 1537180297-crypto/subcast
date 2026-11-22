@@ -52,10 +52,14 @@ export function ReadingSettings() {
     <div className="reading">
       <div className={`reading-preview look-${settings.subtitleLook ?? "outline"}`} aria-hidden>
         <div className="subtitle-overlay">
-          <div className="sub-box">
-            {settings.subtitleMode !== "original" && <p className="sub-zh">{zh}</p>}
-            {settings.subtitleMode !== "translation" && <p className="sub-orig">{orig}</p>}
-          </div>
+          {settings.subtitleMode === "off" ? (
+            <p className="muted small">{t("画面不显示字幕")}</p>
+          ) : (
+            <div className="sub-box">
+              {settings.subtitleMode !== "original" && <p className="sub-zh">{zh}</p>}
+              {settings.subtitleMode !== "translation" && <p className="sub-orig">{orig}</p>}
+            </div>
+          )}
         </div>
       </div>
 
@@ -63,7 +67,7 @@ export function ReadingSettings() {
         <p className="setup-title">{t("字幕")}</p>
         {/* Same choice as the video's "Aa" and the C key: the preview above follows it. */}
         <div className="reading-row"><span>{t("显示")}</span>
-          <Seg value={settings.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")]]} onChange={(v) => save({ subtitleMode: v })} />
+          <Seg value={settings.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")], ["off", t("关闭")]]} onChange={(v) => save({ subtitleMode: v })} />
         </div>
         <div className="reading-row"><span>{t("字号")}</span>
           <div className="reading-sizes"><SubSizeSliders /></div>

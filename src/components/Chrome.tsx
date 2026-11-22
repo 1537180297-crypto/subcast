@@ -67,9 +67,9 @@ export function Sidebar() {
       </div>
       <div className="show-list">
         {shows.map((s) => (
-          <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={rail ? showName(s.title) : s.title}>
+          <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={useStore.getState().settings.showAliases?.[s.id]?.trim() || (rail ? showName(s.title) : s.title)}>
             <span className="show-cover">{showIcon(s)}{rail && s.unplayed > 0 && <span className="rail-dot" />}</span>
-            <SideName title={s.title} />
+            <SideName id={s.id} title={s.title} />
             {s.unplayed > 0 && <span className="unplayed">{s.unplayed > 99 ? "99+" : s.unplayed}</span>}
           </button>
         ))}
@@ -199,8 +199,8 @@ export function TopBar() {
   );
 }
 
-function SideName({ title }: { title: string }) {
-  const { zh, orig } = useShowName(title);
+function SideName({ id, title }: { id: string; title: string }) {
+  const { zh, orig } = useShowName(title, id);
   return (
     <span className="show-names">
       <span className="show-title">{zh ?? orig}</span>

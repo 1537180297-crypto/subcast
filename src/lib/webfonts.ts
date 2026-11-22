@@ -42,7 +42,7 @@ export async function ensureFont(id: CoverFontId, text: string): Promise<boolean
     document.head.appendChild(link);
     await new Promise<void>((resolve) => { link.onload = () => resolve(); link.onerror = () => resolve(); window.setTimeout(resolve, 4000); });
   }
-  const sample = text.replace(/\s+/g, "") || "字";
+  const sample = text.replace(/\s+/g, "") || "字"; // i18n-ignore (CJK font probe glyph)
   const weights = id === "wenkai" ? ["400", "700"] : ["500", "700"];
   try {
     await Promise.race([

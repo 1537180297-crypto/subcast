@@ -1,19 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { Check, Copy, FolderOpen, Image as ImageIcon, Loader2, Minus, Pause, Play, Plus, RotateCcw, Scissors, Volume2, VolumeX } from "lucide-react";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { api, errorText, rawErrorText, type Episode, type RenderVideoClipResult, type Segment, type VideoClipProgress } from "../lib/api";
+import { ask } from "../lib/confirm";
 import { clock } from "../lib/format";
 import { buildPlatformPost, polishClipCopy, saveClipCopy, type HighlightClip, type PostPlatform } from "../lib/highlights";
-import { t, tk, tr, tx, useLang } from "../lib/i18n";
+import { kbd, t, tk, tr, tx, useLang } from "../lib/i18n";
+import { useJobs } from "../lib/jobs";
 import { showName } from "../lib/picks";
 import { aiLineBreaks, textsToBreak } from "../lib/clipLines";
 import { buildClipCues, canvasToPngBase64, clipGeometry, fromOldLayout, renderCueBand, renderStaticOverlay, type CardBg, type CardCrop, type ClipAspect, type ClipFit, type ClipLayout, type ClipVisualConfig, type SubStyleId } from "../lib/videoClipCanvas";
 import { type CoverFontId } from "../lib/webfonts";
 import { renderCoverCanvas, subjectCenterX, type CoverAspect, type CoverTemplateId } from "../lib/videoCoverCanvas";
 import { type SubContent } from "../lib/subexport";
+import { isZh } from "../lib/zh";
 import { useStore } from "../store";
 import { Modal } from "./Chrome";
 import { Seg } from "./ReadingSettings";
@@ -129,11 +133,20 @@ export function VideoClipDialog() {
 }
 
 function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
-  useLang((s) => s.lang);
+  const uiLang = useLang((s) => s.lang);
+  const zhTarget = uiLang === "zh-TW" ? "zh-TW" : "zh-CN";
   const { ep, segments, zh, clip } = target;
-  const notify = useStore((s) => s.notify);
-  const openSettings = useStore((s) => s.openSettings);
-  const hasZh = useMemo(() => !!zh?.some((x) => !!x?.trim()), [zh]);
+  const { notify, openSettings } = useStore(useShallow((s) => ({ notify: s.notify, openSettings: s.openSettings })));
+  const liveZh = useJobs((s) => s.translations[ep.id]?.items);
+  const initialForeign = useMemo(() => {
+    const s = Math.max(0, Math.min(segments.length - 1, clip.startIdx));
+    const e = Math.max(s, Math.min(segments.length - 1, clip.endIdx));
+    for (let i = s; i <= e; i++) {
+      const text = segments[i]?.text?.trim();
+      if (text && !isZh(text)) return true;
+    }
+    return false;
+  }, [segments, clip.startIdx, clip.endIdx]);
   const prefs = useMemo(readPrefs, []);
   const showDisplay = useMemo(() => (ep.showTitle ? showName(ep.showTitle) : ""), [ep.showTitle]);
 
@@ -166,7 +179,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const cropTouched = useRef(false);
   const setCropX = (v: number) => { cropTouched.current = true; setCropXRaw(v); };
   const [subStyle, setSubStyle] = useState<SubStyleId>(() => prefs.subStyle ?? "cinema");
-  const [subLang, setSubLang] = useState<SubContent>(() => (hasZh ? (prefs.subLang ?? "bilingual") : "original"));
+  const [subLang, setSubLang] = useState<SubContent>(() => (
+    initialForeign || liveZh?.some((x) => !!x?.trim()) || zh?.some((x) => !!x?.trim())
+      ? (prefs.subLang ?? "bilingual")
+      : "original"
+  ));
   const [showTitle, setShowTitle] = useState(() => prefs.showTitle ?? true);
   const [showSource, setShowSource] = useState(() => prefs.showSource ?? true);
   const [title, setTitle] = useState(() => clip.title);
@@ -195,17 +212,28 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const [polishing, setPolishing] = useState(false);
 
   const [zhEdits, setZhEdits] = useState<Record<number, string>>({});
+  const [autoZh, setAutoZh] = useState<Record<number, string>>({});
+  const [translatingClip, setTranslatingClip] = useState(false);
   const [origEdits, setOrigEdits] = useState<Record<number, string>>({});
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [activePreviewIdx, setActivePreviewIdx] = useState(startIdx);
 
   const [prepared, setPrepared] = useState<PreparedState | null>(null);
   const [busyJob, setBusyJob] = useState<{ id: string; stage: string; progress: number; message: string } | null>(null);
-  const [exported, setExported] = useState<RenderVideoClipResult | null>(null);
+  const [exported, setExported] = useState<(RenderVideoClipResult & { elapsedSec?: number }) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [copiedFlag, setCopiedFlag] = useState<"post" | "cover" | null>(null);
+  const copiedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+  const flashCopied = (kind: "post" | "cover") => {
+    setCopiedFlag(kind);
+    window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = window.setTimeout(() => setCopiedFlag((c) => (c === kind ? null : c)), 1600);
+  };
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const linesRef = useRef<HTMLDivElement>(null);
   const [pvPlaying, setPvPlaying] = useState(false);
   // Plays on its own, with sound (it's what the clip sounds like).
   const [pvMuted, setPvMuted] = useState(false);
@@ -282,12 +310,44 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     [segments, origEdits],
   );
   const effectiveZh = useMemo(
-    () => segments.map((_, i) => (zhEdits[i] !== undefined ? zhEdits[i] : zh?.[i] ?? null)),
-    [segments, zh, zhEdits],
+    () => segments.map((_, i) => (zhEdits[i] !== undefined ? zhEdits[i] : liveZh?.[i] ?? zh?.[i] ?? autoZh[i] ?? null)),
+    [segments, liveZh, zh, zhEdits, autoZh],
+  );
+  const isForeignClip = useMemo(
+    () => clipLineIdx.some((i) => { const text = effectiveSegments[i]?.text?.trim(); return !!text && !isZh(text); }),
+    [clipLineIdx, effectiveSegments],
+  );
+  const hasZh = useMemo(
+    () => isForeignClip || clipLineIdx.some((i) => !!effectiveZh[i]?.trim()),
+    [isForeignClip, clipLineIdx, effectiveZh],
   );
 
+  // Automatically fetch Chinese translations for any untranslated English/foreign lines in this clip.
+  useEffect(() => {
+    const missing = clipLineIdx.filter((i) => {
+      const orig = effectiveSegments[i]?.text?.trim();
+      return !!orig && !isZh(orig) && !effectiveZh[i]?.trim();
+    });
+    if (!missing.length) return;
+    let live = true;
+    setTranslatingClip(true);
+    const texts = missing.map((i) => effectiveSegments[i].text.trim());
+    void api.translateTexts(texts, zhTarget).then((out) => {
+      if (!live) return;
+      setAutoZh((prev) => {
+        const next = { ...prev };
+        missing.forEach((idx, k) => { if (out[k]?.trim()) next[idx] = out[k].trim(); });
+        return next;
+      });
+    }).catch(() => {}).finally(() => {
+      if (live) setTranslatingClip(false);
+    });
+    return () => { live = false; };
+  }, [clipLineIdx, zhTarget, effectiveSegments, liveZh, zh]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // A filled frame crops the source's own subtitles off the sides, so ours go on there.
-  const addSubs = addSubsPick ?? !(prepared?.hasBurnedSubtitles && fit === "card");
+  // For foreign/English clips in card layout, our bilingual/Chinese subtitles sit cleanly under the video, so keep them on by default.
+  const addSubs = addSubsPick ?? (isForeignClip && fit === "card" ? true : !(prepared?.hasBurnedSubtitles && fit === "card"));
   // Short subtitle lines: split here at once, then the model's punctuated breaks replace them when they arrive.
   // The picture's size is known once the stretch is fetched; YouTube is 16:9 until then.
   const geo = useMemo(() => clipGeometry(aspect, fit, prepared?.width || 1920, prepared?.height || 1080, cardCrop, addSubs), [aspect, fit, cardCrop, prepared?.width, prepared?.height, addSubs]);
@@ -523,6 +583,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
       if (!blob) throw new Error("blob");
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      flashCopied("cover");
       notify(t("封面图已复制到剪贴板"));
     } catch {
       notify(t("复制失败，请用「保存封面」"));
@@ -573,20 +634,52 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     if (!prep) return;
 
     const jobId = `vclip-render-${Date.now()}`;
-    setBusyJob({ id: jobId, stage: "render", progress: 0.05, message: t("正在生成封面和画面图层…") });
+    const startedAt = performance.now();
+    setBusyJob({ id: jobId, stage: "render", progress: 0.03, message: t("正在生成封面和画面图层…") });
     try {
-      const subsOn = addSubsPick ?? !(prep.hasBurnedSubtitles && fit === "card");
+      const subsOn = addSubsPick ?? (isForeignClip && fit === "card" ? true : !(prep.hasBurnedSubtitles && fit === "card"));
+      // Guarantee English/foreign highlight clips always have Chinese translations ready before burning subtitles.
+      let exportZh = effectiveZh;
+      if (subsOn && subLang !== "original") {
+        const missing = clipLineIdx.filter((i) => {
+          const orig = effectiveSegments[i]?.text?.trim();
+          return !!orig && !isZh(orig) && !exportZh[i]?.trim();
+        });
+        if (missing.length) {
+          setBusyJob({ id: jobId, stage: "render", progress: 0.04, message: t("正在补充中文字幕翻译…") });
+          try {
+            const out = await api.translateTexts(missing.map((i) => effectiveSegments[i].text.trim()), zhTarget);
+            const nextZh = [...exportZh];
+            const patch: Record<number, string> = {};
+            missing.forEach((idx, k) => {
+              const translated = out[k]?.trim();
+              if (translated) { nextZh[idx] = translated; patch[idx] = translated; }
+            });
+            exportZh = nextZh;
+            if (Object.keys(patch).length) setAutoZh((prev) => ({ ...prev, ...patch }));
+          } catch { /* fall back to whatever is available */ }
+        }
+      }
       const staticCanvas = renderStaticOverlay({ ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop, subsOn) });
       const staticOverlayPng = staticCanvas ? canvasToPngBase64(staticCanvas) : null;
       // Decided again from what preparing found: an export started before any preview still skips doubled subtitles.
-      const exportCues = subsOn ? (cues.length ? cues : buildAllCues()) : [];
+      const exportCues = subsOn
+        ? parts.flatMap((p) => buildClipCues(effectiveSegments, exportZh, p.startIdx, p.endIdx, p.a, p.b, subLang, lineBreaks, maxCjk)
+            .map((c) => ({ ...c, start: c.start + p.offset, end: c.end + p.offset })))
+        : [];
       // The fetched picture's real size decides the layout (an export can start before any preview).
       const exportConfig: ClipVisualConfig = { ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop, subsOn) };
       const eg = exportConfig.geo;
-      const renderedCues = exportCues.map((cue) => {
+      const renderedCues: { start: number; end: number; y: number; pngBase64: string }[] = [];
+      for (let i = 0; i < exportCues.length; i++) {
+        const cue = exportCues[i];
         const band = renderCueBand(cue, exportConfig);
-        return { start: cue.start / speed, end: cue.end / speed, y: band.y, pngBase64: canvasToPngBase64(band.canvas) };
-      });
+        renderedCues.push({ start: cue.start / speed, end: cue.end / speed, y: band.y, pngBase64: canvasToPngBase64(band.canvas) });
+        if ((i + 1) % 6 === 0 && i + 1 < exportCues.length) {
+          setBusyJob({ id: jobId, stage: "render", progress: 0.04 + ((i + 1) / exportCues.length) * 0.07, message: t("正在生成封面和画面图层…") });
+          await new Promise((r) => window.setTimeout(r, 0));
+        }
+      }
 
       const bestIdx = selectedFrame != null && prep.frames[selectedFrame] ? selectedFrame : prep.bestFrame;
       const backdropForExport = prep.frames[bestIdx] || posterBackdrop || null;
@@ -645,7 +738,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         saveCoverSidecar,
         landscapeCoverPng,
       });
-      setExported(result);
+      const elapsedSec = Math.max(0.1, (performance.now() - startedAt) / 1000);
+      setExported({ ...result, elapsedSec });
       notify(t("视频切片已导出到 {path}", { path: result.videoPath.replace(DOWNLOADS_DIR, tx("folder", "下载") + "/") }), {
         label: t("打开文件夹"),
         run: () => void api.revealFile(result.videoPath).catch(() => {}),
@@ -660,18 +754,83 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const copyCurrentPost = async () => {
     try {
       await navigator.clipboard.writeText(currentPostText);
+      flashCopied("post");
       notify(t("发布文案已复制"));
     } catch {
       notify(t("复制失败"));
     }
   };
 
-  const togglePreviewPlay = () => {
+  const togglePreviewPlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) void v.play().catch(() => {});
     else v.pause();
-  };
+  }, []);
+
+  // Sync active transcript line highlight while preview video plays.
+  useEffect(() => {
+    if (!preparedValid || !pvPlaying) return;
+    let match = clipLineIdx[0] ?? startIdx;
+    for (const idx of clipLineIdx) {
+      const seg = effectiveSegments[idx];
+      if (!seg) continue;
+      const s = toClipTime(idx, seg.start);
+      const e = toClipTime(idx, seg.end);
+      if (pvTime >= s - 0.05) match = idx;
+      if (pvTime <= e) break;
+    }
+    setActivePreviewIdx((cur) => {
+      if (cur === match) return cur;
+      const el = linesRef.current?.querySelector<HTMLElement>(`[data-vclip-i="${match}"]`);
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      return match;
+    });
+  }, [preparedValid, pvPlaying, pvTime, clipLineIdx, startIdx, effectiveSegments]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const requestClose = useCallback(() => {
+    if (busyJob?.stage === "render") {
+      void ask({
+        title: t("正在导出视频切片，确定取消并关闭？"),
+        message: t("关闭后当前导出任务会立即中止。"),
+        ok: t("取消导出"),
+        danger: true,
+      }).then((yes) => {
+        if (!yes) return;
+        if (activeJobId.current) void api.cancelJob(activeJobId.current);
+        closeVideoClipDialog();
+      });
+      return;
+    }
+    closeVideoClipDialog();
+  }, [busyJob?.stage]);
+
+  // Modal-scoped keyboard shortcuts: Space play/pause, ←/→ seek 2s, ⌘/Ctrl+Enter export.
+  const runExportRef = useRef(runExport);
+  runExportRef.current = runExport;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (!busyJob) void runExportRef.current(false);
+        return;
+      }
+      const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]");
+      if (typing) return;
+      if (e.code === "Space" && pvView === "video" && preparedValid) {
+        e.preventDefault();
+        togglePreviewPlay();
+      } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && pvView === "video" && preparedValid && prepared && videoRef.current) {
+        e.preventDefault();
+        const delta = (e.key === "ArrowLeft" ? -2 : 2) * speed;
+        const nextAt = Math.max(0, Math.min(prepared.duration, (videoRef.current.currentTime - prepared.lead) + delta));
+        videoRef.current.currentTime = prepared.lead + nextAt;
+        setPvTime(nextAt);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busyJob, pvView, preparedValid, prepared, speed, togglePreviewPlay]);
 
   const card = geo.fit === "card";
   const stageBgClass = card ? (cardBg === "paper" ? "bg-paper" : cardBg === "night" ? "bg-night" : "bg-blur") : "bg-dark";
@@ -700,7 +859,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const preparing = !!busyJob && ["download", "ffmpeg", "trim"].includes(busyJob.stage);
 
   return (
-    <Modal title={t("剪成视频")} onClose={closeVideoClipDialog} wide>
+    <Modal title={t("剪成视频")} onClose={requestClose} wide>
       <div className="vclip-layout">
         {/* Left: live WYSIWYG video / cover preview */}
         <div className="vclip-preview-col">
@@ -790,6 +949,25 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               {cueBandPreview && (
                 <img src={cueBandPreview.url} alt="" className="vclip-cue-img" style={{ top: `${cueBandPreview.topPct}%` }} />
               )}
+            </div>
+          )}
+
+          {pvView === "video" && preparedValid && prepared && (
+            <div className="vclip-scrub">
+              <input
+                type="range"
+                className="vclip-seek"
+                min={0}
+                max={Math.max(0.1, prepared.duration || clipDur)}
+                step={0.05}
+                value={Math.min(pvTime, prepared.duration || clipDur)}
+                aria-label={t("预览进度")}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  setPvTime(next);
+                  if (videoRef.current) videoRef.current.currentTime = prepared.lead + next;
+                }}
+              />
             </div>
           )}
 
@@ -903,7 +1081,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <label className="vclip-sub-toggle">
                   <input type="checkbox" checked={addSubs} onChange={(e) => setAddSubsPick(e.target.checked)} />
                   {t("加字幕")}
-                  {prepared?.hasBurnedSubtitles && <span className="muted small">{t("原视频已有字幕，默认不加")}</span>}
+                  {translatingClip && <span className="muted small"><Loader2 size={11} className="spin" /> {t("正在补充中文翻译…")}</span>}
+                  {!translatingClip && prepared?.hasBurnedSubtitles && !isForeignClip && <span className="muted small">{t("原视频已有字幕，默认不加")}</span>}
                 </label>
                 {addSubs && <div className="reading-row">
                   <span>{t("字幕语言")}</span>
@@ -958,7 +1137,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                   <label className="small muted">{t("开头留白")} <input type="range" min={-0.3} max={1.0} step={0.05} value={padBefore} onChange={(e) => setPadBefore(Number(e.target.value))} /><span className="num">{padBefore.toFixed(2)}s</span></label>
                   <label className="small muted">{t("结尾留白")} <input type="range" min={-0.3} max={1.2} step={0.05} value={padAfter} onChange={(e) => setPadAfter(Number(e.target.value))} /><span className="num">{padAfter.toFixed(2)}s</span></label>
                 </div>
-                <div className="vclip-lines">
+                <div className="vclip-lines" ref={linesRef}>
                   {clipLineIdx.map((idx, k) => {
                     const seg = segments[idx];
                     const partBreak = montage && k > 0 && clipLineIdx[k - 1] !== idx - 1;
@@ -969,11 +1148,14 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     return (
                       <div
                         key={idx}
+                        data-vclip-i={idx}
                         className={`vclip-line ${isActive ? "on" : ""}${partBreak ? " part-start" : ""}`}
                         onClick={() => {
                           setActivePreviewIdx(idx);
                           if (preparedValid && videoRef.current) {
-                            videoRef.current.currentTime = (prepared?.lead ?? 0) + toClipTime(idx, seg.start) + 0.05;
+                            const at = toClipTime(idx, seg.start) + 0.05;
+                            videoRef.current.currentTime = (prepared?.lead ?? 0) + at;
+                            setPvTime(at);
                           }
                         }}
                       >
@@ -1088,7 +1270,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                   )}
                 </div>
                 <div className="vclip-cover-actions">
-                  <button type="button" className="btn ghost sm" onClick={() => void copyCoverImage()}><Copy size={12} /> {t("复制封面图")}</button>
+                  <button type="button" className="btn ghost sm" onClick={() => void copyCoverImage()}>
+                    {copiedFlag === "cover" ? <><Check size={12} /> {t("已复制")}</> : <><Copy size={12} /> {t("复制封面图")}</>}
+                  </button>
                   <button type="button" className="btn ghost sm" onClick={() => void saveCoverImage()}><ImageIcon size={12} /> {t("保存当前封面")}</button>
                   <button type="button" className="btn ghost sm" onClick={() => void saveCoverImage("3:4")}><ImageIcon size={12} /> {t("保存 3:4 小红书封面")}</button>
                 </div>
@@ -1105,13 +1289,14 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                   onChange={setPostPlatform}
                 />
                 <div className="row-actions tight">
+                  <span className="num small muted">{t("{n} 字", { n: currentPostText.trim().length })}</span>
                   {postEdits[postPlatform] !== undefined && (
                     <button type="button" className="link-btn" onClick={() => setPostEdits((m) => { const n = { ...m }; delete n[postPlatform]; return n; })}>
                       {t("还原")}
                     </button>
                   )}
                   <button type="button" className="btn sm" onClick={() => void copyCurrentPost()}>
-                    <Copy size={12} /> {t("复制文案")}
+                    {copiedFlag === "post" ? <><Check size={12} /> {t("已复制")}</> : <><Copy size={12} /> {t("复制文案")}</>}
                   </button>
                 </div>
               </div>
@@ -1159,24 +1344,31 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           </div>
         ) : exported ? (
           <div className="vclip-foot-done">
-            <span className="vclip-done-mark"><Check size={14} strokeWidth={3} /> {t("已导出")}</span>
+            <span className="vclip-done-mark">
+              <Check size={14} strokeWidth={3} /> {t("已导出")}
+              {exported.elapsedSec != null && <span className="vclip-elapsed num">· {exported.elapsedSec.toFixed(1)}s</span>}
+            </span>
             <button type="button" className="btn sm" onClick={() => void api.revealFile(exported.videoPath).catch((e) => notify(errorText(e)))}>
               <FolderOpen size={13} /> {t("在文件夹中显示")}
             </button>
-            <button type="button" className="btn ghost sm" onClick={() => void copyCurrentPost()}><Copy size={13} /> {t("复制文案")}</button>
-            <button type="button" className="btn ghost sm" onClick={() => void copyCoverImage()}><ImageIcon size={13} /> {t("复制封面")}</button>
+            <button type="button" className="btn ghost sm" onClick={() => void copyCurrentPost()}>
+              {copiedFlag === "post" ? <><Check size={13} /> {t("已复制")}</> : <><Copy size={13} /> {t("复制文案")}</>}
+            </button>
+            <button type="button" className="btn ghost sm" onClick={() => void copyCoverImage()}>
+              {copiedFlag === "cover" ? <><Check size={13} /> {t("已复制")}</> : <><ImageIcon size={13} /> {t("复制封面")}</>}
+            </button>
           </div>
         ) : (
           <button type="button" className="btn ghost" onClick={() => void copyCurrentPost()}>
-            <Copy size={14} /> {t("复制发布文案")}
+            {copiedFlag === "post" ? <><Check size={14} /> {t("已复制")}</> : <><Copy size={14} /> {t("复制发布文案")}</>}
           </button>
         )}
         <span className="spacer" />
-        <button type="button" className="btn ghost" onClick={closeVideoClipDialog}>{t("关闭")}</button>
+        <button type="button" className="btn ghost" onClick={requestClose}>{t("关闭")}</button>
         <button type="button" className="btn" disabled={!!busyJob} onClick={() => void runExport(true)}>
           {t("另存为…")}
         </button>
-        <button type="button" className="btn primary" disabled={!!busyJob} onClick={() => void runExport(false)}>
+        <button type="button" className="btn primary" disabled={!!busyJob} onClick={() => void runExport(false)} title={`${t("导出 MP4")} (${kbd("⌘↵")})`}>
           <Scissors size={14} /> {t("导出 MP4")}
         </button>
       </div>

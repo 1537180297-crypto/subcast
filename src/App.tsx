@@ -74,6 +74,8 @@ export default function App() {
       // Text boxes keep their own keys: plain ones, and arrows with modifiers (⌘↑ jumps to the top).
       if (typing && (isPlain(combo) || combo.includes("Arrow"))) return;
       if (document.querySelector(".shortcut-recorder.recording")) return;
+      // Don't hijack Space/arrows for the background player while a modal dialog is open.
+      if (document.querySelector(".modal-back")) return;
       const { player, time, current } = useStore.getState();
       const segs = current ? useJobs.getState().transcripts[current.id]?.segments : undefined;
       const lineSeek = (dir: -1 | 1) => {

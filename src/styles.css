@@ -2281,8 +2281,10 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .hl-reask { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
 .hl-err { margin: 8px 14px 0; }
 .hl-list { flex: 1; overflow-y: auto; padding: 12px 14px 24px; display: flex; flex-direction: column; gap: 10px; }
-.hl-card { display: flex; flex-direction: column; gap: 7px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); transition: border-color .15s; }
+.hl-card { display: flex; flex-direction: column; gap: 7px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); transition: border-color .15s, background .15s; }
 .hl-card:hover { border-color: var(--line-strong); }
+.hl-card.playing { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel)); }
+.hl-actions .btn.on { color: var(--accent-text); background: var(--accent-soft); }
 .hl-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hl-title { font-size: 14.5px; font-weight: 600; color: var(--text); }
 .hl-reason { font-size: 12.5px; color: var(--text-2); line-height: 1.45; }
@@ -2325,7 +2327,10 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .vclip-overlay-img { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
 .vclip-cue-img { position: absolute; left: 0; width: 100%; height: auto; pointer-events: none; z-index: 4; }
 
+.vclip-scrub { width: 100%; display: flex; align-items: center; }
+.vclip-seek { width: 100%; height: 4px; accent-color: var(--accent); cursor: pointer; margin: 2px 0; }
 .vclip-pv-bar { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vclip-elapsed { opacity: .8; font-weight: 500; }
 .vclip-hint { color: var(--accent-text); text-align: center; }
 
 .vclip-side { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
@@ -2445,3 +2450,14 @@ details.vclip-adv:not([open]) > summary { margin-bottom: 0; }
 .vclip-copy-sec { flex: 1; min-height: 240px; }
 .vclip-post-box { flex: 1; min-height: 210px; width: 100%; resize: vertical; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--text); font-size: 13px; line-height: 1.55; outline: none; }
 .vclip-post-box:focus { border-color: var(--accent); }
+
+/* Show inline rename */
+.show-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.show-rename-btn { opacity: 0; transition: opacity .15s; flex: none; }
+.show-head:hover .show-rename-btn, .show-rename-btn:focus-visible { opacity: 1; }
+.show-rename-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 4px; }
+.show-rename-input { flex: 1 1 200px; max-width: 360px; padding: 6px 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 16px; font-weight: 600; outline: none; }
+.manage-row .manage-edit { margin-left: auto; opacity: 0; transition: opacity .15s; flex: none; }
+.manage-row:hover .manage-edit, .manage-row .manage-edit:focus-visible { opacity: 1; }
+.manage-rename { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.manage-rename input { flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; outline: none; }
