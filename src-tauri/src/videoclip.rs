@@ -38,6 +38,8 @@ pub struct PreparedClip {
     pub cached: bool,
     pub frames: Vec<String>,
     pub best_frame: usize,
+    /// Pauses in the clip (clip time, after `lead`): where "remove pauses" may cut.
+    pub silences: Vec<(f64, f64)>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -102,6 +104,10 @@ pub struct RenderRequest {
     pub save_cover_sidecar: bool,
     #[serde(default)]
     pub landscape_cover_png: Option<String>,
+    /// Stretches of the clip to keep (clip time, before speed), in order; empty keeps it whole.
+    /// Cue times arrive already on the cut (and sped-up) clock.
+    #[serde(default)]
+    pub keep_ranges: Vec<(f64, f64)>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -555,6 +561,45 @@ pub async fn extract_candidate_frames(ffmpeg: &Path, path: &Path, duration: f64)
     (frames, best_idx)
 }
 
+/// Parses `silence_start: X` / `silence_end: Y` pairs from ffmpeg `silencedetect` stderr (file time).
+/// A pause still open at the end of the file closes at `file_end`.
+pub fn parse_silences(stderr: &str, file_end: f64) -> Vec<(f64, f64)> {
+    let num_after = |line: &str, key: &str| -> Option<f64> {
+        let i = line.find(key)?;
+        line[i + key.len()..].trim_start().split(|c: char| c.is_whitespace() || c == '|').next()?.parse().ok()
+    };
+    let mut out = Vec::new();
+    let mut open: Option<f64> = None;
+    for line in stderr.lines() {
+        if let Some(v) = num_after(line, "silence_start:") { open = Some(v.max(0.0)); }
+        else if let Some(v) = num_after(line, "silence_end:") {
+            if let Some(a) = open.take() { if v > a { out.push((a, v)); } }
+        }
+    }
+    if let Some(a) = open { if file_end > a { out.push((a, file_end)); } }
+    out
+}
+
+/// Pauses longer than 0.3 s in the clip, in clip time (the file decoded from 0, then `lead` taken off).
+pub async fn detect_silences(ffmpeg: &Path, path: &Path, lead: f64, duration: f64) -> Vec<(f64, f64)> {
+    let mut cmd = ffmpeg_cmd(ffmpeg);
+    cmd.args(["-hide_banner", "-nostats", "-i"]).arg(path)
+        .args(["-vn", "-af", "silencedetect=noise=-32dB:d=0.3", "-f", "null", "-"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output()).await else { return Vec::new(); };
+    let text = String::from_utf8_lossy(&out.stderr);
+    to_clip_time(&parse_silences(&text, lead + duration), lead, duration)
+}
+
+/// File-time ranges moved onto the clip's clock (`lead` off) and clamped to `0..duration`.
+pub fn to_clip_time(ranges: &[(f64, f64)], lead: f64, duration: f64) -> Vec<(f64, f64)> {
+    ranges.iter()
+        .map(|&(a, b)| ((a - lead).max(0.0), (b - lead).min(duration)))
+        .filter(|&(a, b)| b - a > 0.05)
+        .collect()
+}
+
 /// Seconds before the clip proper in a fetched file (a `.lead` file beside it; none means 0).
 pub fn read_lead(path: &Path) -> f64 {
     std::fs::read_to_string(path.with_extension("lead")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0)
@@ -564,6 +609,7 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
     let lead = read_lead(dest);
     let meta_path = dest.with_extension("meta.json");
     let frames_path = dest.with_extension("frames.json");
+    let silence_path = dest.with_extension("silence.json");
 
     let (meta_raw, frames_raw) = tokio::join!(
         tokio::fs::read_to_string(&meta_path),
@@ -582,7 +628,8 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
         (d, w, h, true)
     };
 
-    let (has_burned_subtitles, (frames, best_frame)) = tokio::join!(
+    let clip_dur = (duration - lead).max(0.1);
+    let (has_burned_subtitles, (frames, best_frame), silences) = tokio::join!(
         async {
             if let Some(m) = cached_meta {
                 m.has_burned_subtitles
@@ -609,6 +656,19 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
                 }
                 res
             }
+        },
+        async {
+            let cached = tokio::fs::read_to_string(&silence_path).await.ok()
+                .and_then(|raw| serde_json::from_str::<Vec<(f64, f64)>>(&raw).ok());
+            match cached {
+                Some(s) => s,
+                None => {
+                    let s = detect_silences(ffmpeg, dest, lead, clip_dur).await;
+                    // Only a found result is kept: an empty one may be a failed run.
+                    if !s.is_empty() { let _ = tokio::fs::write(&silence_path, serde_json::to_string(&s).unwrap_or_default()).await; }
+                    s
+                }
+            }
         }
     );
 
@@ -622,6 +682,7 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
         cached,
         frames,
         best_frame,
+        silences,
     }
 }
 
@@ -1266,6 +1327,57 @@ pub fn with_speed(filter: &str, speed: f64, has_audio: bool) -> String {
     f
 }
 
+/// The kept stretches, sorted, clamped to `0..duration`, overlaps merged; empty when they keep it all.
+pub fn normalize_keep(keep: &[(f64, f64)], duration: f64) -> Vec<(f64, f64)> {
+    let mut v: Vec<(f64, f64)> = keep.iter()
+        .map(|&(a, b)| (a.max(0.0), b.min(duration)))
+        .filter(|&(a, b)| b - a > 0.04)
+        .collect();
+    v.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in v {
+        match out.last_mut() {
+            Some(last) if a <= last.1 + 0.01 => last.1 = last.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    if out.len() == 1 && out[0].0 < 0.01 && out[0].1 > duration - 0.01 { return Vec::new(); }
+    out
+}
+
+/// Cuts the source to `keep` before the rest of the graph: each stretch trimmed (picture and sound) and
+/// joined, the joined streams read where the graph read `[0:v]`/`[0:a]`. Run after `with_speed`, so the
+/// speed change applies to the cut. Sound always leaves through `[aout]` (it can't be stream-copied).
+pub fn with_keep(filter: &str, keep: &[(f64, f64)], has_audio: bool) -> String {
+    if keep.is_empty() { return filter.to_string(); }
+    let n = keep.len();
+    let mut pre: Vec<String> = Vec::new();
+    let vs: String = (0..n).map(|i| format!("[kv{i}i]")).collect();
+    pre.push(format!("[0:v]split={n}{vs}"));
+    if has_audio {
+        let as_: String = (0..n).map(|i| format!("[ka{i}i]")).collect();
+        pre.push(format!("[0:a]asplit={n}{as_}"));
+    }
+    let mut joined = String::new();
+    for (i, &(a, b)) in keep.iter().enumerate() {
+        pre.push(format!("[kv{i}i]trim=start={a:.3}:end={b:.3},setpts=PTS-STARTPTS[kv{i}]"));
+        joined.push_str(&format!("[kv{i}]"));
+        if has_audio {
+            pre.push(format!("[ka{i}i]atrim=start={a:.3}:end={b:.3},asetpts=PTS-STARTPTS[ka{i}]"));
+            joined.push_str(&format!("[ka{i}]"));
+        }
+    }
+    let a = if has_audio { 1 } else { 0 };
+    let outs = if has_audio { "[kv][ka]" } else { "[kv]" };
+    pre.push(format!("{joined}concat=n={n}:v=1:a={a}{outs}"));
+    let mut rest = filter.replace("[0:v]", "[kv]");
+    if has_audio {
+        if rest.contains("[0:a]") { rest = rest.replace("[0:a]", "[ka]"); }
+        else { rest.push_str(";[ka]anull[aout]"); }
+    }
+    format!("{};{rest}", pre.join(";"))
+}
+
 fn decode_png_base64(raw: &str) -> Result<Vec<u8>> {
     let trimmed = raw.trim();
     let b64 = trimmed.strip_prefix("data:image/png;base64,").unwrap_or(trimmed);
@@ -1395,6 +1507,9 @@ async fn render_into(
     }
 
     let speed = if req.speed > 0.0 { req.speed.clamp(0.5, 2.0) } else { 1.0 };
+    let keep = normalize_keep(&req.keep_ranges, req.duration);
+    // The clip's length once cut (before speed).
+    let kept_dur = if keep.is_empty() { req.duration } else { keep.iter().map(|(a, b)| b - a).sum() };
     let cue_meta: Vec<(f64, f64, i32)> = req.cues.iter().map(|c| (c.start, c.end, c.y)).collect();
     let uniform_concat = if req.cues.len() >= 2 {
         let first_y = req.cues[0].y;
@@ -1414,7 +1529,7 @@ async fn render_into(
     let cue_stream_y = if let Some((y, w, h)) = uniform_concat {
         let blank = make_transparent_png(w, h);
         let times: Vec<(f64, f64)> = req.cues.iter().map(|c| (c.start, c.end)).collect();
-        let script = build_cues_concat_script(&times, (req.duration.max(1.0)) / speed);
+        let script = build_cues_concat_script(&times, kept_dur.max(1.0) / speed);
         tokio::try_join!(
             tokio::fs::write(work_dir.join("blank.png"), &blank),
             tokio::fs::write(work_dir.join("cues.txt"), script.as_bytes()),
@@ -1455,9 +1570,10 @@ async fn render_into(
     let tmp_out = work_dir.join("out.mp4");
     let use_vt = has_videotoolbox(ffmpeg);
     let filter = with_speed(&filter, speed, has_audio);
+    let filter = with_keep(&filter, &keep, has_audio);
     let audio_map = if has_audio && filter.contains("[aout]") { "[aout]" } else { "0:a?" };
     let can_copy_audio = audio_map == "0:a?" && meta.audio_codec.as_deref() == Some("aac");
-    let dur = req.duration.max(1.0) / speed + if cover_input_idx.is_some() && cover_mode == "hold" { 1.0 } else { 0.0 };
+    let dur = kept_dur.max(1.0) / speed + if cover_input_idx.is_some() && cover_mode == "hold" { 1.0 } else { 0.0 };
 
     on_progress("render", 0.12, "正在合成视频…");
 
@@ -1701,7 +1817,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "flash".into(),
             embed_thumbnail: true,
             save_cover_sidecar: true,
-            landscape_cover_png: Some(minimal_rgba_png_b64(1920, 1080, 24, 24, 28, 255)),
+            landscape_cover_png: Some(minimal_rgba_png_b64(1920, 1080, 24, 24, 28, 255)), keep_ranges: vec![],
         };
         let cancel = Arc::new(AtomicBool::new(false));
         let res = render_clip(&data, req_flash, cancel.clone(), |_, _, _| {}).await.unwrap();
@@ -1729,7 +1845,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "hold".into(),
             embed_thumbnail: true,
             save_cover_sidecar: false,
-            landscape_cover_png: None,
+            landscape_cover_png: None, keep_ranges: vec![],
         };
         let res_hold = render_clip(&data, req_hold, cancel.clone(), |_, _, _| {}).await.unwrap();
         assert!(std::fs::metadata(&res_hold.video_path).unwrap().len() > 10_000);
@@ -1763,10 +1879,82 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "flash".into(),
             embed_thumbnail: true,
             save_cover_sidecar: false,
-            landscape_cover_png: None,
+            landscape_cover_png: None, keep_ranges: vec![],
         };
         let res_concat = render_clip(&data, req_concat, cancel, |_, _, _| {}).await.unwrap();
         assert!(std::fs::metadata(&res_concat.video_path).unwrap().len() > 10_000);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn silences_parse_and_move_to_clip_time() {
+        let err = "[silencedetect @ 0x1] silence_start: 1.2\n[silencedetect @ 0x1] silence_end: 2.0 | silence_duration: 0.8\n[silencedetect @ 0x1] silence_start: 9.5\n";
+        let s = parse_silences(err, 10.0);
+        assert_eq!(s, vec![(1.2, 2.0), (9.5, 10.0)]);
+        // lead 1.0, clip 8.7 s long: the first pause moves to 0.2–1.0, the second is clamped to the clip's end.
+        let c = to_clip_time(&s, 1.0, 8.7);
+        assert!((c[0].0 - 0.2).abs() < 1e-9 && (c[0].1 - 1.0).abs() < 1e-9);
+        assert!((c[1].0 - 8.5).abs() < 1e-9 && (c[1].1 - 8.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn keep_graph_consumes_each_input_once() {
+        let keep = normalize_keep(&[(1.5, 3.0), (0.0, 1.0), (2.9, 3.5)], 4.0);
+        assert_eq!(keep, vec![(0.0, 1.0), (1.5, 3.5)]);
+        assert!(normalize_keep(&[(0.0, 4.0)], 4.0).is_empty());
+        let base = build_filter_graph("frame", "night", 0.5, Some(&Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: false }), false, &[], None, "hold", None, true);
+        for speed in [1.0, 1.5] {
+            let g = with_keep(&with_speed(&base, speed, true), &keep, true);
+            assert_eq!(g.matches("[0:v]").count(), 1, "{g}");
+            assert_eq!(g.matches("[0:a]").count(), 1, "{g}");
+            assert_eq!(g.matches("[kv]").count(), 2, "{g}");
+            assert_eq!(g.matches("[ka]").count(), 2, "{g}");
+            assert_eq!(g.matches("[aout]").count(), 1, "{g}");
+        }
+        // No graph stage reads the sound: the cut sound still leaves through [aout].
+        let g = with_keep(&build_filter_graph("frame", "night", 0.5, None, false, &[], None, "none", None, true), &keep, true);
+        assert!(g.contains("[ka]anull[aout]"), "{g}");
+    }
+
+    #[tokio::test]
+    async fn real_ffmpeg_remove_pauses() {
+        let data = std::env::temp_dir().join(format!("subcast-vclip-keep-{}", uuid::Uuid::new_v4()));
+        let Some(ffmpeg) = find_ffmpeg(&data) else { return };
+        std::fs::create_dir_all(&data).unwrap();
+        let src = data.join("src.mp4");
+        // 4 s of tone with a silent 1.2–2.4 s.
+        let mk = std::process::Command::new(&ffmpeg)
+            .args([
+                "-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=4",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+                "-af", "volume=enable='between(t,1.2,2.4)':volume=0",
+                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest",
+            ])
+            .arg(&src)
+            .output()
+            .unwrap();
+        assert!(mk.status.success(), "generate test source failed");
+        let sil = detect_silences(&ffmpeg, &src, 0.5, 3.5).await;
+        assert_eq!(sil.len(), 1, "{sil:?}");
+        assert!((sil[0].0 - 0.7).abs() < 0.15 && (sil[0].1 - 1.9).abs() < 0.15, "{sil:?}");
+
+        for (speed, mode) in [(1.0, "none"), (1.25, "hold")] {
+            let out = data.join(format!("out-{mode}.mp4"));
+            let req = RenderRequest { frame: Some(Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: false }),
+                output_dir: None, lead: 0.0, speed,
+                raw_path: src.to_string_lossy().into_owned(),
+                output_path: Some(out.to_string_lossy().into_owned()),
+                default_name: "keep".into(), layout: "frame".into(), card_bg: "night".into(), crop_x: 0.5, duration: 4.0,
+                static_overlay_png: None, cues: vec![],
+                cover_png: Some(minimal_rgba_png_b64(1080, 1920, 24, 24, 28, 255)), cover_mode: mode.into(),
+                embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
+                keep_ranges: vec![(0.0, 1.3), (2.3, 4.0)],
+            };
+            let res = render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
+            let (d, _, _, audio) = probe_video_meta(&ffmpeg, Path::new(&res.video_path), 0.0).await;
+            let want = 3.0 / speed + if mode == "hold" { 1.0 } else { 0.0 };
+            assert!(audio && (d - want).abs() < 0.2, "{mode}: {d} vs {want}");
+        }
         let _ = std::fs::remove_dir_all(&data);
     }
 }
@@ -1814,7 +2002,7 @@ mod render_live {
             raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
             layout: "frame".into(), card_bg: "blur".into(), crop_x: 0.7, duration: 105.16,
             static_overlay_png: Some(png(1080, 1920)), cues, cover_png: None, cover_mode: "none".into(),
-            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![],
         };
         let t = std::time::Instant::now();
         render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
@@ -1839,7 +2027,7 @@ mod render_live {
             raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
             layout: "frame".into(), card_bg: "night".into(), crop_x: 0.5, duration: 105.16,
             static_overlay_png: None, cues: vec![], cover_png: None, cover_mode: "none".into(),
-            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![],
         };
         let t = std::time::Instant::now();
         render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();

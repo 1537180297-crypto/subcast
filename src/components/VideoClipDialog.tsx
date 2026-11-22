@@ -20,6 +20,9 @@ import { type SubContent } from "../lib/subexport";
 import { isZh } from "../lib/zh";
 import { useStore } from "../store";
 import { Modal } from "./Chrome";
+import { ClipRangeBar } from "./ClipRangeBar";
+import { cutAt, pauseCuts, toKeptTime } from "../lib/clipPauses";
+import { CLIP_PRESETS, matchPreset, type ClipPreset, type CoverMode } from "../lib/clipPresets";
 import { Seg } from "./ReadingSettings";
 
 export interface ClipModalTarget {
@@ -40,7 +43,6 @@ export function closeVideoClipDialog() {
 }
 
 const PREF_KEY = "subcast.vclip";
-type CoverMode = "flash" | "hold" | "none";
 type SideTab = "clip" | "cover" | "copy";
 
 interface ClipPrefs {
@@ -67,6 +69,7 @@ interface ClipPrefs {
   embedThumbnail?: boolean;
   saveCoverSidecar?: boolean;
   extraLandscapeCover?: boolean;
+  removePauses?: boolean;
 }
 
 function readPrefs(): ClipPrefs {
@@ -108,6 +111,7 @@ const COVER_FONTS: [CoverFontId, string][] = [
 const ACCENTS = ["", "#ffd23f", "#ff5a36", "#22c55e", "#3b82f6", "#ec4899"];
 /** Speeds a clip can be exported at (the preview plays at the chosen one). */
 const SPEEDS = [1, 1.25, 1.5, 2];
+const NO_CUTS: [number, number][] = [];
 
 interface PreparedState {
   /** Which stretches it holds (the dialog's `rangesKey`). */
@@ -123,6 +127,8 @@ interface PreparedState {
   height: number;
   frames: string[];
   bestFrame: number;
+  /** Pauses in the clip (clip time). */
+  silences: [number, number][];
 }
 
 export function VideoClipDialog() {
@@ -198,6 +204,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const [embedThumbnail, setEmbedThumbnail] = useState(() => prefs.embedThumbnail ?? true);
   const [saveCoverSidecar, setSaveCoverSidecar] = useState(() => prefs.saveCoverSidecar ?? true);
   const [extraLandscapeCover, setExtraLandscapeCover] = useState(() => prefs.extraLandscapeCover ?? true);
+  const [removePauses, setRemovePauses] = useState(() => prefs.removePauses ?? false);
 
   const [coverHook, setCoverHook] = useState(() => clip.coverHook || clip.title);
   const [coverSub, setCoverSub] = useState(() => clip.coverSub || (clip.reason && clip.reason !== t("手动选取片段") ? clip.reason : ""));
@@ -265,8 +272,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       embedThumbnail,
       saveCoverSidecar,
       extraLandscapeCover,
+      removePauses,
     });
-  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, coverTracking, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover]);
+  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, coverTracking, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover, removePauses]);
 
   useEffect(() => {
     if (!busyJob) return;
@@ -351,6 +359,17 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   // Short subtitle lines: split here at once, then the model's punctuated breaks replace them when they arrive.
   // The picture's size is known once the stretch is fetched; YouTube is 16:9 until then.
   const geo = useMemo(() => clipGeometry(aspect, fit, prepared?.width || 1920, prepared?.height || 1080, cardCrop, addSubs), [aspect, fit, cardCrop, prepared?.width, prepared?.height, addSubs]);
+  // "画面放法" only matters when the frame's shape differs from the picture's.
+  const fitShown = aspect !== "source" && Math.abs(geo.W / geo.H - (prepared?.width || 1920) / (prepared?.height || 1080)) > 0.03;
+  const activePreset = matchPreset({ aspect, fit, cardCrop, coverMode, removePauses }, fitShown, geo.fit === "card");
+  const applyPreset = (p: ClipPreset) => {
+    setAspect(p.values.aspect);
+    setFit(p.values.fit);
+    setCardCrop(p.values.cardCrop);
+    setCoverMode(p.values.coverMode);
+    setRemovePauses(p.values.removePauses);
+    setPostPlatform(p.post);
+  };
   useEffect(() => {
     const src = prepared?.frames[prepared.bestFrame];
     if (!src || cropTouched.current) return;
@@ -422,6 +441,13 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
 
   const posterBackdrop = ep.cover || (ep.videoId ? `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg` : undefined);
   const preparedValid = !!prepared && prepared.key === rangesKey;
+  // Pauses to cut (raw clip time) and the clip's length once they're gone.
+  const pauses = useMemo(
+    () => (removePauses && preparedValid && prepared ? pauseCuts(prepared.silences, prepared.duration) : null),
+    [removePauses, preparedValid, prepared],
+  );
+  const cutsNow = pauses?.cuts ?? NO_CUTS;
+  const keptDur = pauses && prepared ? prepared.duration - pauses.saved : clipDur;
   const activeFrameIdx = selectedFrame != null && prepared?.frames[selectedFrame] ? selectedFrame : (prepared?.bestFrame ?? 0);
   const activeCoverBackdrop = (prepared?.frames[activeFrameIdx]) || posterBackdrop || null;
   const videoCoverAspect: CoverAspect = geo.W > geo.H ? "16:9" : aspect === "9:16" || (aspect === "source" && geo.H / geo.W > 1.5) ? "9:16" : aspect === "1:1" ? "1:1" : "3:4";
@@ -436,14 +462,14 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       subTitle: coverSub,
       kicker: coverKicker,
       showName: showDisplay,
-      durationSec: clipDur / speed,
+      durationSec: keptDur / speed,
       backdropUrl: activeCoverBackdrop,
       brand: brandText, ...coverStyle, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
     }).then((c) => {
       if (live) setCoverPreviewUrl(c.toDataURL("image/png"));
     }).catch(() => {});
     return () => { live = false; };
-  }, [coverTpl, effectiveCoverAspect, coverHook, coverSub, coverKicker, showDisplay, clipDur, speed, activeCoverBackdrop, brandText, coverAccent, coverFont, coverScale, coverTracking]);
+  }, [coverTpl, effectiveCoverAspect, coverHook, coverSub, coverKicker, showDisplay, keptDur, speed, activeCoverBackdrop, brandText, coverAccent, coverFont, coverScale, coverTracking]);
 
   // Real previews of every style with this clip's words and picture (only while the cover tab is open).
   const [tplThumbs, setTplThumbs] = useState<Partial<Record<CoverTemplateId, string>>>({});
@@ -510,6 +536,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         height: res.height,
         frames: res.frames ?? [],
         bestFrame: res.bestFrame ?? 0,
+        silences: res.silences ?? [],
       };
       setPrepared(next);
       if (selectedFrame == null) setSelectedFrame(next.bestFrame);
@@ -576,7 +603,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         subTitle: coverSub,
         kicker: coverKicker,
         showName: showDisplay,
-        durationSec: clipDur / speed,
+        durationSec: keptDur / speed,
         backdropUrl: activeCoverBackdrop,
       brand: brandText, ...coverStyle, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
       });
@@ -600,7 +627,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         subTitle: coverSub,
         kicker: coverKicker,
         showName: showDisplay,
-        durationSec: clipDur / speed,
+        durationSec: keptDur / speed,
         backdropUrl: activeCoverBackdrop,
       brand: brandText, ...coverStyle, cropBottom: prepared?.hasBurnedSubtitles ? 0.2 : 0,
       });
@@ -670,11 +697,18 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       // The fetched picture's real size decides the layout (an export can start before any preview).
       const exportConfig: ClipVisualConfig = { ...visualConfig, geo: clipGeometry(aspect, fit, prep.width || 1920, prep.height || 1080, cardCrop, subsOn) };
       const eg = exportConfig.geo;
+      // Pauses cut: the clip's stretches to keep, and every cue moved onto the cut clock (cues inside a cut drop).
+      const exportPauses = removePauses ? pauseCuts(prep.silences, prep.duration) : null;
+      const xc = exportPauses?.cuts ?? [];
+      const exportDur = prep.duration - (exportPauses?.saved ?? 0);
       const renderedCues: { start: number; end: number; y: number; pngBase64: string }[] = [];
       for (let i = 0; i < exportCues.length; i++) {
         const cue = exportCues[i];
+        const cs = toKeptTime(cue.start, xc);
+        const ce = toKeptTime(cue.end, xc);
+        if (ce - cs < 0.05) continue;
         const band = renderCueBand(cue, exportConfig);
-        renderedCues.push({ start: cue.start / speed, end: cue.end / speed, y: band.y, pngBase64: canvasToPngBase64(band.canvas) });
+        renderedCues.push({ start: cs / speed, end: ce / speed, y: band.y, pngBase64: canvasToPngBase64(band.canvas) });
         if ((i + 1) % 6 === 0 && i + 1 < exportCues.length) {
           setBusyJob({ id: jobId, stage: "render", progress: 0.04 + ((i + 1) / exportCues.length) * 0.07, message: t("正在生成封面和画面图层…") });
           await new Promise((r) => window.setTimeout(r, 0));
@@ -695,7 +729,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           subTitle: coverSub,
           kicker: coverKicker,
           showName: showDisplay,
-          durationSec: prep.duration / speed,
+          durationSec: exportDur / speed,
           backdropUrl: backdropForExport,
           brand: brandText, ...coverStyle, cropBottom: prep.hasBurnedSubtitles ? 0.2 : 0,
         });
@@ -711,7 +745,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           subTitle: coverSub,
           kicker: coverKicker,
           showName: showDisplay,
-          durationSec: prep.duration / speed,
+          durationSec: exportDur / speed,
           backdropUrl: backdropForExport,
           brand: brandText, ...coverStyle, cropBottom: prep.hasBurnedSubtitles ? 0.2 : 0,
         });
@@ -737,6 +771,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         embedThumbnail,
         saveCoverSidecar,
         landscapeCoverPng,
+        keepRanges: exportPauses?.cuts.length ? exportPauses.keep : undefined,
       });
       const elapsedSec = Math.max(0.1, (performance.now() - startedAt) / 1000);
       setExported({ ...result, elapsedSec });
@@ -767,6 +802,22 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     if (v.paused) void v.play().catch(() => {});
     else v.pause();
   }, []);
+
+  // Removing pauses: the preview jumps over each one as it plays (checked every frame, not at timeupdate's ~4 Hz).
+  useEffect(() => {
+    if (!pvPlaying || !cutsNow.length || !prepared) return;
+    let raf = 0;
+    const tick = () => {
+      const v = videoRef.current;
+      if (v) {
+        const cut = cutAt(v.currentTime - prepared.lead, cutsNow);
+        if (cut) v.currentTime = prepared.lead + cut[1];
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [pvPlaying, cutsNow, prepared]);
 
   // Sync active transcript line highlight while preview video plays.
   useEffect(() => {
@@ -971,6 +1022,10 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
             </div>
           )}
 
+          {pvView === "video" && !montage && segments.length > 1 && (
+            <ClipRangeBar segments={segments} startIdx={startIdx} endIdx={endIdx} onChange={(a, b) => { setStartIdx(a); setEndIdx(b); }} />
+          )}
+
           <div className="vclip-pv-bar">
             {pvView === "cover" ? (
               <>
@@ -1002,7 +1057,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <button type="button" className={`icon-btn sm${soundBlocked && pvMuted ? " vclip-unmute" : ""}`} onClick={() => { setSoundBlocked(false); setPvMuted(!pvMuted); if (videoRef.current) { videoRef.current.muted = !pvMuted; void videoRef.current.play().catch(() => {}); } }} title={pvMuted ? t("取消静音") : t("静音")}>
                   {pvMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}{soundBlocked && pvMuted && <span>{t("点这里开声音")}</span>}
                 </button>
-                <span className="num small muted nowrap">{clock(pvTime / speed)} / {clock(clipDur / speed)}</span>
+                <span className="num small muted nowrap">{clock(toKeptTime(pvTime, cutsNow) / speed)} / {clock(keptDur / speed)}</span>
                 <div className="vclip-speed" role="group" aria-label={t("成片倍速")}>
                   {SPEEDS.map((r) => (
                     <button key={r} type="button" className={r === speed ? "on" : ""} onClick={() => setSpeed(r)} title={t("成片按这个速度导出")}>{r}×</button>
@@ -1031,6 +1086,17 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           {sideTab === "clip" && (
             <>
               <section className="vclip-sec">
+                <div className="vclip-sec-head">
+                  <span className="vclip-label">{t("发到哪里")}</span>
+                  {!activePreset && <span className="small muted">{t("自定义")}</span>}
+                </div>
+                <div className="vclip-presets" role="radiogroup" aria-label={t("发到哪里")}>
+                  {CLIP_PRESETS.map((p) => (
+                    <button key={p.id} type="button" role="radio" aria-checked={activePreset === p.id} className={`vclip-preset${activePreset === p.id ? " on" : ""}`} title={t(p.hint)} onClick={() => applyPreset(p)}>
+                      {t(p.name)}
+                    </button>
+                  ))}
+                </div>
                 <div className="reading-row">
                   <span>{t("画面比例")}</span>
                   <Seg
@@ -1039,7 +1105,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     onChange={setAspect}
                   />
                 </div>
-                {(aspect !== "source" && Math.abs(geo.W / geo.H - (prepared?.width || 1920) / (prepared?.height || 1080)) > 0.03) && (
+                {fitShown && (
                   <div className="reading-row">
                     <span>{t("画面放法")}</span>
                     <Seg
@@ -1049,35 +1115,19 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     />
                   </div>
                 )}
-                {card && (
-                  <div className="reading-row">
-                    <span>{t("画面裁成")}</span>
-                    <Seg
-                      value={cardCrop}
-                      options={[["none", t("完整")], ["4:3", "4:3"], ["1:1", "1:1"]]}
-                      onChange={setCardCrop}
-                    />
-                  </div>
-                )}
-                {card && (
-                  <div className="reading-row">
-                    <span>{t("卡片底色")}</span>
-                    <Seg
-                      value={cardBg}
-                      options={[["blur", t("画面模糊")], ["night", t("墨夜")], ["paper", t("纸白")]]}
-                      onChange={setCardBg}
-                    />
-                  </div>
-                )}
-                {((!card && aspect !== "source") || geo.cropBox) && (
-                  <div className="reading-row">
-                    <span>{t("水平取景")}</span>
-                    <div className="vclip-crop-row">
-                      <input type="range" min={0} max={1} step={0.02} value={cropX} onChange={(e) => setCropX(Number(e.target.value))} />
-                      <span className="num small muted">{Math.round(cropX * 100)}%</span>
-                    </div>
-                  </div>
-                )}
+                <label className="vclip-sub-toggle">
+                  <input type="checkbox" checked={removePauses} onChange={(e) => setRemovePauses(e.target.checked)} />
+                  {t("去掉停顿")}
+                  {removePauses && (
+                    <span className="muted small">
+                      {!preparedValid
+                        ? t("获取画面后自动找出停顿")
+                        : pauses?.cuts.length
+                          ? t("剪掉 {n} 处，省 {s} 秒", { n: pauses.cuts.length, s: pauses.saved.toFixed(1) })
+                          : t("这段没有明显停顿")}
+                    </span>
+                  )}
+                </label>
                 <label className="vclip-sub-toggle">
                   <input type="checkbox" checked={addSubs} onChange={(e) => setAddSubsPick(e.target.checked)} />
                   {t("加字幕")}
@@ -1092,15 +1142,52 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     onChange={setSubLang}
                   />
                 </div>}
-                {addSubs && <div className="vclip-styles">
-                  {SUB_STYLES.map((st) => (
-                    <button key={st.id} type="button" className={`vclip-style-btn ${subStyle === st.id ? "on" : ""}`} onClick={() => setSubStyle(st.id)}>
-                      <span className="vclip-swatch" style={{ background: st.swatchBg, color: st.swatchFg }}>Aa</span>
-                      <span>{t(st.name)}</span>
-                    </button>
-                  ))}
-                </div>}
-                {addSubs && (
+              </section>
+              {(card || (!card && aspect !== "source") || geo.cropBox) && (
+                <details className="vclip-sec vclip-adv">
+                  <summary className="vclip-sec-head"><span className="vclip-label">{t("画面细节")}</span><span className="small muted">{t("裁切、底色与取景")}</span></summary>
+                  {card && (
+                    <div className="reading-row">
+                      <span>{t("画面裁成")}</span>
+                      <Seg
+                        value={cardCrop}
+                        options={[["none", t("完整")], ["4:3", "4:3"], ["1:1", "1:1"]]}
+                        onChange={setCardCrop}
+                      />
+                    </div>
+                  )}
+                  {card && (
+                    <div className="reading-row">
+                      <span>{t("卡片底色")}</span>
+                      <Seg
+                        value={cardBg}
+                        options={[["blur", t("画面模糊")], ["night", t("墨夜")], ["paper", t("纸白")]]}
+                        onChange={setCardBg}
+                      />
+                    </div>
+                  )}
+                  {((!card && aspect !== "source") || geo.cropBox) && (
+                    <div className="reading-row">
+                      <span>{t("水平取景")}</span>
+                      <div className="vclip-crop-row">
+                        <input type="range" min={0} max={1} step={0.02} value={cropX} onChange={(e) => setCropX(Number(e.target.value))} />
+                        <span className="num small muted">{Math.round(cropX * 100)}%</span>
+                      </div>
+                    </div>
+                  )}
+                </details>
+              )}
+              {addSubs && (
+                <details className="vclip-sec vclip-adv">
+                  <summary className="vclip-sec-head"><span className="vclip-label">{t("字幕样式")}</span><span className="small muted">{t(SUB_STYLES.find((x) => x.id === subStyle)?.name ?? "")} · {Math.round(subScale * 100)}%</span></summary>
+                  <div className="vclip-styles">
+                    {SUB_STYLES.map((st) => (
+                      <button key={st.id} type="button" className={`vclip-style-btn ${subStyle === st.id ? "on" : ""}`} onClick={() => setSubStyle(st.id)}>
+                        <span className="vclip-swatch" style={{ background: st.swatchBg, color: st.swatchFg }}>Aa</span>
+                        <span>{t(st.name)}</span>
+                      </button>
+                    ))}
+                  </div>
                   <div className="reading-row">
                     <span>{t("字幕大小")}</span>
                     <div className="vclip-crop-row">
@@ -1108,20 +1195,23 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                       <span className="num small muted">{Math.round(subScale * 100)}%</span>
                     </div>
                   </div>
-                )}
+                  {!card && prepared?.hasBurnedSubtitles && (
+                    <label className="vclip-sub-toggle"><input type="checkbox" checked={liftBurned} onChange={(e) => setLiftBurned(e.target.checked)} /> {t("避让原字幕")}</label>
+                  )}
+                </details>
+              )}
+              <details className="vclip-sec vclip-adv">
+                <summary className="vclip-sec-head"><span className="vclip-label">{t("标题与署名")}</span><span className="small muted clamp1">{showTitle ? title : t("不显示标题")}</span></summary>
                 <div className="vclip-toggles">
                   <label><input type="checkbox" checked={showTitle} onChange={(e) => setShowTitle(e.target.checked)} /> {t("顶部金句标题")}</label>
                   <label><input type="checkbox" checked={showSource} onChange={(e) => setShowSource(e.target.checked)} /> {t("节目出处")}</label>
                   <label><input type="checkbox" checked={watermark} onChange={(e) => setWatermark(e.target.checked)} /> {t("SubCast 水印")}</label>
-                  {!card && addSubs && prepared?.hasBurnedSubtitles && (
-                    <label><input type="checkbox" checked={liftBurned} onChange={(e) => setLiftBurned(e.target.checked)} /> {t("避让原字幕")}</label>
-                  )}
                 </div>
                 {showTitle && (
                   <input className="vclip-title-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("输入切片顶部金句标题")} />
                 )}
                 <input className="vclip-title-input" value={brandText} onChange={(e) => setBrandText(e.target.value)} placeholder={t("底部署名（可选），如你的账号名或品牌")} />
-              </section>
+              </details>
               <details className="vclip-sec vclip-adv">
                 <summary className="vclip-sec-head">
                   <span className="vclip-label">{t("微调起止与字幕文字")}</span>
