@@ -76,6 +76,14 @@ Listen to overseas podcasts and YouTube with bilingual subtitles, deep reads and
 | <img src="docs/assets/episode-subscribe-before.webp" alt="单集页只有已看、收藏、下载和 YouTube" /> | <img src="docs/assets/episode-subscribe-after.webp" alt="下载和 YouTube 之间多了订阅按钮" /> |
 | <img src="docs/assets/sidebar-avatar-before.webp" alt="侧栏里老周横眉显示的是这一期封面" /> | <img src="docs/assets/sidebar-avatar-after.webp" alt="侧栏里老周横眉显示的是 YouTube 频道头像" /> |
 
+## 搜索 YouTube 频道
+
+搜索结果里的频道头像以前经常加载失败，显示成问号。现在头像在本机取好再显示。
+
+| 以前 | 现在 |
+|---|---|
+| <img src="docs/assets/search-avatar-before.webp" alt="搜索结果里 YouTube 头像是问号" /> | <img src="docs/assets/search-avatar-after.webp" alt="搜索结果里显示 YouTube 频道头像" /> |
+
 ## 用自己的模型
 
 AI 导读、问答和可选的字幕翻译，用你自己的模型服务。推荐 DeepSeek，国内直连，一般一期一角钱左右。也预置了硅基流动、Kimi、Claude、OpenAI、OpenRouter、Gemini，以及 Ollama、LM Studio 等本机模型；任何 OpenAI 兼容接口都可以。Key 只存在系统钥匙串里（macOS Keychain / Windows 凭据管理器 / Linux Secret Service）。
@@ -168,6 +176,12 @@ An episode page can subscribe to that episode's channel. The sidebar then uses t
 |---|---|
 | <img src="docs/assets/episode-subscribe-before.webp" alt="Episode toolbar without a subscribe button" /> | <img src="docs/assets/episode-subscribe-after.webp" alt="Episode toolbar with a subscribe button" /> |
 | <img src="docs/assets/sidebar-avatar-before.webp" alt="Sidebar row using the episode cover" /> | <img src="docs/assets/sidebar-avatar-after.webp" alt="Sidebar row using the YouTube channel picture" /> |
+
+YouTube channel pictures in search used to fail and show a question mark. They are now fetched on the computer and shown directly.
+
+| Before | After |
+|---|---|
+| <img src="docs/assets/search-avatar-before.webp" alt="YouTube search results with broken channel pictures" /> | <img src="docs/assets/search-avatar-after.webp" alt="YouTube search results with channel pictures" /> |
 
 ## Privacy
 

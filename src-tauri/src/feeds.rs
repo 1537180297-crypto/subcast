@@ -422,6 +422,16 @@ async fn search_youtube_channels(term: &str) -> Result<Vec<SearchResult>> {
     let data: serde_json::Value = serde_json::from_str(&json[1])?;
     let mut found = Vec::new();
     collect_channels(&data, &mut found, MAX);
+    // Covers are yt3.ggpht.com URLs. The webview loads them itself and draws a broken-image question mark when
+    // that request fails; this client is the one that already reached YouTube (including via the app proxy).
+    // Fetch the avatar here and hand the webview a data URL. A failed fetch keeps the original URL.
+    let inlined = futures_util::future::join_all(found.iter().map(|r| {
+        let url = r.cover.clone();
+        async move { match url { Some(u) => inline_youtube_avatar(&u).await, None => None } }
+    })).await;
+    for (row, data) in found.iter_mut().zip(inlined) {
+        if data.is_some() { row.cover = data; }
+    }
     Ok(found)
 }
 
@@ -531,6 +541,19 @@ mod tests {
         let html = r#"<html><meta property="og:image" content="https://yt3.googleusercontent.com/abc=s900-c-k-c0x00ffffff-no-rj"></html>"#;
         assert_eq!(og_image(html).as_deref(), Some("https://yt3.googleusercontent.com/abc=s176-c-k-c0x00ffffff-no-rj"));
         assert!(og_image(r#"<meta property="og:image" content="https://evil.example/a.jpg">"#).is_none());
+    }
+    #[test]
+    fn avatar_data_url_stays_on_youtube_hosts() {
+        assert!(is_youtube_avatar_host("https://yt3.ggpht.com/abc=s176-c-k-c0x00ffffff-no-rj-mo"));
+        assert!(is_youtube_avatar_host("https://yt3.googleusercontent.com/abc"));
+        assert!(!is_youtube_avatar_host("https://yt3.ggpht.com.evil.test/abc"));
+        assert!(!is_youtube_avatar_host("http://yt3.ggpht.com/abc"));
+        assert!(!is_youtube_avatar_host("https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"));
+        let url = image_data_url("image/jpeg; charset=binary", &[0xff, 0xd8, 1, 2]).unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,"));
+        assert!(image_data_url("text/html", &[1, 2, 3]).is_none());
+        assert!(image_data_url("image/jpeg", &[]).is_none());
+        assert!(image_data_url("image/jpeg", &vec![1u8; AVATAR_MAX + 1]).is_none());
     }
     /// Network: a Chinese name finds the YouTube channel first, and a 小宇宙-hosted show resolves to its 小宇宙 page.
     #[tokio::test]
