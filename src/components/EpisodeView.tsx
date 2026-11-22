@@ -15,7 +15,7 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { ArrowDownToLine, BookOpen, Captions, Check, ChevronDown, ScrollText, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, FolderOpen, Trash2, Youtube, Bookmark, Pause } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Captions, Check, ChevronDown, ScrollText, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, FolderOpen, Trash2, Youtube, Bookmark, Pause, UserPlus, UserCheck, Loader2 } from "lucide-react";
 import { BookArt, DoneCheck, EmptyState } from "./Illustrations";
 import { Splitter } from "./Splitter";
 import { DeepRead } from "./DeepRead";
@@ -24,7 +24,7 @@ import { PANEL, useLayout } from "../lib/layout";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, type Episode } from "../lib/api";
 import { date, duration, notesText } from "../lib/format";
-import { showName } from "../lib/picks";
+import { sameFeed, showName } from "../lib/picks";
 import { isZh, useZh, useZhParagraphs } from "../lib/zh";
 import { autoTranslate, loadTranscript, useJobs } from "../lib/jobs";
 import { seekSoon, useStore } from "../store";
@@ -184,6 +184,84 @@ function CoverPlay({ ep, isCurrent, onToggle }: { ep: Episode; isCurrent: boolea
       <span className={`cover-play-btn ${playing ? "playing" : ""}`}>
         {playing ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}
       </span>
+    </button>
+  );
+}
+
+/** Feed for this episode: the subscribed show, a channel opened before subscribing, or the channel behind a pasted video. */
+async function subscriptionInput(ep: Episode): Promise<string | null> {
+  if (ep.showId !== "single") {
+    const live = useStore.getState().shows.find((s) => s.id === ep.showId);
+    if (live?.feedUrl) return live.feedUrl;
+    const raw = await api.getBlob(ep.showId, "show-json");
+    if (raw) {
+      try {
+        const feed = (JSON.parse(raw) as { feedUrl?: string }).feedUrl;
+        if (feed) return feed;
+      } catch { /* not a show */ }
+    }
+  }
+  if (ep.videoId) return api.youtubeChannelFeed(ep.videoId);
+  return null;
+}
+
+/** Subscribes to the show this episode belongs to. Already subscribed: the same button unsubscribes, after a confirm. */
+function SubscribeShowButton({ ep }: { ep: Episode }) {
+  const [input, setInput] = useState<string | null>(null);
+  const show = useStore((s) => s.shows.find((x) => x.id === ep.showId || (input && (
+    sameFeed(x.feedUrl, input) ||
+    (input.startsWith("https://www.youtube.com/feeds/videos.xml?playlist_id=UULF") &&
+      x.feedUrl === input.replace("playlist_id=UULF", "channel_id=UC"))
+  ))));
+  const reloadShows = useStore((s) => s.reloadShows);
+  const notify = useStore((s) => s.notify);
+  const [busy, setBusy] = useState(false);
+  const subscribed = !!show;
+
+  useEffect(() => {
+    if (show || input) return;
+    let active = true;
+    void subscriptionInput(ep).then((feed) => { if (active) setInput(feed); }).catch(() => {});
+    return () => { active = false; };
+  }, [ep, show, input]);
+
+  const subscribe = async () => {
+    setBusy(true);
+    try {
+      const feed = input ?? await subscriptionInput(ep);
+      if (!feed) { notify(t("找不到这个节目的订阅源")); return; }
+      const r = await api.addSubscription(feed);
+      if (!r.show) { notify(t("找不到这个节目的订阅源")); return; }
+      setInput(r.show.feedUrl);
+      await reloadShows();
+      notify(t("已订阅「{name}」", { name: showName(r.show.title) }));
+    } catch (e) { notify(errorText(e)); }
+    finally { setBusy(false); }
+  };
+  const unsubscribe = async () => {
+    if (!show) return;
+    const label = showName(show.title);
+    setBusy(true);
+    try {
+      if (!(await ask({ title: t("取消订阅「{name}」？", { name: label }), message: t("已生成的字幕、精读和收听进度会保留。"), ok: t("取消订阅"), danger: true }))) return;
+      await api.removeShow(show.id, ep.id);
+      setInput(show.feedUrl);
+      await reloadShows();
+      notify(t("已取消订阅「{name}」", { name: label }));
+    } catch (e) { notify(errorText(e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <button
+      type="button"
+      className={`round-btn sub-btn ${subscribed ? "on" : ""}`}
+      aria-pressed={subscribed}
+      disabled={busy}
+      title={subscribed ? t("再点一次，取消订阅") : t("订阅这个节目")}
+      aria-label={subscribed ? t("再点一次，取消订阅") : t("订阅这个节目")}
+      onClick={() => void (subscribed ? unsubscribe() : subscribe())}
+    >
+      {busy ? <Loader2 size={15} className="spin" /> : subscribed ? <UserCheck size={15} /> : <UserPlus size={15} />}
     </button>
   );
 }
@@ -396,6 +474,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             <button className={`round-btn watch-btn ${watched ? "on" : ""}`} aria-pressed={watched} title={watched ? t("标为未看") : t("标为已看")} onClick={() => void markWatched(ep, !watched)}><Check size={15} strokeWidth={watched ? 2.6 : 2} /></button>
             <button className={`round-btn fav-btn ${fav ? "on" : ""}`} aria-pressed={fav} title={fav ? t("取消收藏") : t("收藏这一集")} onClick={() => toggleFavorite(ep)}><Bookmark size={15} fill={fav ? "currentColor" : "none"} /></button>
             <DownloadButton ep={ep} />
+            {(ep.showId !== "single" || ep.videoId) && <SubscribeShowButton key={ep.id} ep={ep} />}
             {ep.videoId
               ? <button className="round-btn yt-open" title={t("在 YouTube 打开（从当前位置继续）")} onClick={() => { const s = Math.floor(isCurrent ? useStore.getState().time : ep.progress ?? 0); void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`); }}><Youtube size={16} /></button>
               : ep.link && <button className="round-btn" title={t("节目网页")} onClick={() => openUrl(ep.link!)}><ExternalLink size={15} /></button>}
