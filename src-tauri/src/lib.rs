@@ -106,10 +106,17 @@ async fn fetch_any(state: &AppState, feed_url: &str, kind: &str) -> anyhow::Resu
 
 /// The channel feed for a video that was opened on its own (pasted link), so the episode page can subscribe.
 #[tauri::command]
-async fn youtube_channel_feed(video_id: String) -> Res<String> {
-    let info = youtube::video_info(&video_id).await.map_err(e)?;
-    let id = info.channel_id.filter(|id| id.starts_with("UC") && id.len() == 24).ok_or("没有在这个页面找到 YouTube 频道")?;
-    Ok(feeds::channel_feed(&id))
+async fn youtube_channel_feed(state: State<'_, AppState>, video_id: String) -> Res<String> {
+    let ep_id = short_hash(&format!("single:{video_id}"), 20);
+    if let Some(feed) = db::get_blob(&state.db.lock().unwrap(), &ep_id, "youtube-channel-feed").map_err(e)? {
+        return Ok(feed);
+    }
+    let info = tokio::time::timeout(std::time::Duration::from_secs(8), youtube::video_info(&video_id))
+        .await.map_err(|_| "没有在这个页面找到 YouTube 频道")?.map_err(e)?;
+    let id = info.channel_id.ok_or("没有在这个页面找到 YouTube 频道")?;
+    let feed = feeds::channel_feed(&id);
+    db::set_blob(&state.db.lock().unwrap(), &ep_id, "youtube-channel-feed", &feed).map_err(e)?;
+    Ok(feed)
 }
 
 async fn single_youtube(state: &AppState, video_id: &str) -> Res<Episode> {
@@ -129,6 +136,9 @@ async fn single_youtube(state: &AppState, video_id: &str) -> Res<Episode> {
     };
     let mut conn = state.db.lock().unwrap();
     db::upsert_episodes(&mut conn, std::slice::from_ref(&ep)).map_err(e)?;
+    if let Some(id) = info.channel_id {
+        let _ = db::set_blob(&conn, &ep.id, "youtube-channel-feed", &feeds::channel_feed(&id));
+    }
     Ok(db::get_episode(&conn, &ep.id).map_err(e)?.unwrap_or(ep))
 }
 
@@ -270,7 +280,12 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
             let (st, slots) = (&state, &slots);
             async move {
                 let _slot = slots.acquire().await;
-                (s, tokio::time::timeout(std::time::Duration::from_secs(30), fetch_any(st, &s.feed_url, &s.kind)).await)
+                let result = tokio::time::timeout(std::time::Duration::from_secs(30), fetch_any(st, &s.feed_url, &s.kind)).await;
+                let result = match result {
+                    Ok(Ok((fresh, eps))) => Ok(Ok((with_channel_avatar(fresh, s.cover.clone()).await, eps))),
+                    other => other,
+                };
+                (s, result)
             }
         })).await;
         for (s, r) in results {
@@ -282,7 +297,6 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
                     eps.iter().filter(|x| ids.contains(&x.id)).count()
                 };
                 let fresh = Show { id: s.id.clone(), kind: s.kind.clone(), ..fresh };
-                let fresh = with_channel_avatar(fresh, s.cover.clone()).await;
                 if store(&state, &fresh, &eps).is_ok() { ok += 1; fresh_eps += eps.len() - known; }
             }
         }
@@ -385,7 +399,9 @@ fn recent_episodes(state: State<'_, AppState>) -> Res<Vec<Episode>> { db::recent
 fn get_episode(state: State<'_, AppState>, id: String) -> Res<Option<Episode>> { db::get_episode(&state.db.lock().unwrap(), &id).map_err(e) }
 
 #[tauri::command(async)]
-fn remove_show(state: State<'_, AppState>, id: String) -> Res<()> { db::delete_show(&state.db.lock().unwrap(), &id).map_err(e) }
+fn remove_show(state: State<'_, AppState>, id: String, keep_episode_id: Option<String>) -> Res<()> {
+    db::delete_show(&state.db.lock().unwrap(), &id, keep_episode_id.as_deref()).map_err(e)
+}
 
 #[tauri::command(async)]
 fn set_progress(state: State<'_, AppState>, id: String, seconds: f64) -> Res<()> { db::set_progress(&state.db.lock().unwrap(), &id, seconds).map_err(e) }

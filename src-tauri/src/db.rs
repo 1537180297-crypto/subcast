@@ -103,9 +103,20 @@ pub fn get_show(conn: &Connection, id: &str) -> Result<Option<Show>> {
         .optional()?)
 }
 
-pub fn delete_show(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("DELETE FROM episodes WHERE show_id=?1 AND id NOT IN (SELECT episode_id FROM transcripts)", [id])?;
-    conn.execute("DELETE FROM shows WHERE id=?1", [id])?;
+pub fn delete_show(conn: &Connection, id: &str, keep_episode_id: Option<&str>) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    if keep_episode_id.is_some() {
+        if let Some(show) = get_show(&tx, id)? {
+            set_blob(&tx, id, "show-json", &serde_json::to_string(&show)?)?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM episodes WHERE show_id=?1 AND id NOT IN (SELECT episode_id FROM transcripts)
+         AND (?2 IS NULL OR (id != ?2 AND progress = 0))",
+        params![id, keep_episode_id]
+    )?;
+    tx.execute("DELETE FROM shows WHERE id=?1", [id])?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -297,6 +308,30 @@ pub fn listens_since(conn: &Connection, since: &str) -> Result<Vec<serde_json::V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn episode_unsubscribe_keeps_the_open_episode_and_progress() {
+        let mut conn = open(Path::new(":memory:")).unwrap();
+        let show = Show {
+            id: "show".into(), kind: "podcast".into(), title: "Show".into(),
+            feed_url: "https://example.com/feed.xml".into(), ..Default::default()
+        };
+        upsert_show(&conn, &show).unwrap();
+        let episodes = ["open", "played", "unplayed"].map(|id| Episode {
+            id: id.into(), show_id: show.id.clone(), guid: id.into(), title: id.into(), ..Default::default()
+        });
+        upsert_episodes(&mut conn, &episodes).unwrap();
+        set_progress(&conn, "played", 42.0).unwrap();
+
+        delete_show(&conn, &show.id, Some("open")).unwrap();
+
+        assert!(get_show(&conn, &show.id).unwrap().is_none());
+        assert!(get_episode(&conn, "open").unwrap().is_some());
+        assert_eq!(get_episode(&conn, "played").unwrap().unwrap().progress, 42.0);
+        assert!(get_episode(&conn, "unplayed").unwrap().is_none());
+        let cached = get_blob(&conn, &show.id, "show-json").unwrap().unwrap();
+        assert_eq!(serde_json::from_str::<Show>(&cached).unwrap().feed_url, show.feed_url);
+    }
 
     #[test]
     fn deep_column_migrates_and_round_trips() {

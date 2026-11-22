@@ -66,7 +66,7 @@ fn base(lang: &str) -> String { lang.split(['-', '_']).next().unwrap_or(lang).to
 /// A YouTube channel id (`UC` plus 22 characters). Anything else is not a channel we can subscribe to.
 pub fn channel_id_of(details: &Value) -> Option<String> {
     let id = details["channelId"].as_str()?;
-    (id.starts_with("UC") && id.len() == 24).then(|| id.to_string())
+    (id.starts_with("UC") && id.len() == 24 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')).then(|| id.to_string())
 }
 
 fn tracks_of(player: &Value) -> Vec<Track> {

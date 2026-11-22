@@ -372,10 +372,16 @@ fn image_data_url(mime: &str, bytes: &[u8]) -> Option<String> {
 
 async fn inline_youtube_avatar(url: &str) -> Option<String> {
     if !is_youtube_avatar_host(url) { return None; }
-    let res = net::get(url).await.ok()?;
-    let mime = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("image/jpeg").to_string();
-    let bytes = res.bytes().await.ok()?;
-    image_data_url(&mime, &bytes)
+    tokio::time::timeout(std::time::Duration::from_secs(4), async {
+        let mut res = net::get(url).await.ok()?;
+        let mime = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("image/jpeg").to_string();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = res.chunk().await.ok()? {
+            if chunk.len() > AVATAR_MAX - bytes.len() { return None; }
+            bytes.extend_from_slice(&chunk);
+        }
+        image_data_url(&mime, &bytes)
+    }).await.ok().flatten()
 }
 
 /// The channel's own picture, as a data URL the webview can show. None keeps the video thumbnail already on the show.
