@@ -656,7 +656,6 @@ const dict: Record<string, string> = {
   "这一集正在转写": "This episode is already being transcribed",
   "超时": "Timed out",
   "在侧栏显示「乔木精读」推荐": "Show Qiaomu Deep Reads picks in the sidebar",
-  "翻译订阅节目的名字": "Translate subscribed show names",
   "播放全部": "Play all",
   "按列表顺序连着播放没听完的 {n} 集": "Play the {n} unfinished episodes in list order",
   "节目方中文字幕": "Publisher's Chinese subtitles",
@@ -867,8 +866,6 @@ const dict: Record<string, string> = {
   "最重要的是，学习的速度要比世界变化的速度更快。": "The most important thing is to keep learning faster than the world changes.",
   "系统字体": "System font",
   "字号": "Size",
-  "标准": "Standard",
-  "大": "Large",
   "视频上的字幕": "Subtitles on video",
   "半透明底": "Shaded background",
   "描边，无底": "Outline, no background",
@@ -1688,6 +1685,11 @@ const dict: Record<string, string> = {
   "恢复原名": "Reset name",
   "重命名": "Rename",
   "重命名…": "Rename…",
+  "侧栏和订阅列表保留原名，如 Lenny's Podcast。自己改过的名字不受影响。": "The sidebar and subscription list keep original names, like Lenny's Podcast. Names you changed yourself stay as they are.",
+  "外文节目名不翻译": "Keep foreign show names untranslated",
+  "这期节目最重要的观点是什么？": "What's the key idea of this episode?",
+  "嘉宾认为，学习的速度要比世界变化的速度更快：先抓住底层原理，再用小项目反复练习。": "The guest says you should learn faster than the world changes: grasp the first principles, then practice with small projects.",
+  "AI 问答与导读字号": "AI Q&A and guide text size",
 };
 
 export default dict;

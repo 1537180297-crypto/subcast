@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { useJobs } from "../lib/jobs";
 import { t, useLang } from "../lib/i18n";
-import { SCALE_MAX, SCALE_MIN, SUB_FONTS, origScale, setOrigScale, setSubScale, subScale } from "../lib/reading";
+import { CHAT_MAX, CHAT_MIN, SCALE_MAX, SCALE_MIN, SUB_FONTS, chatScaleOf, origScale, setOrigScale, setSubScale, subScale } from "../lib/reading";
 import { POSTER_FONTS } from "../lib/poster";
 import type { Settings } from "../lib/settings";
 
@@ -84,8 +84,19 @@ export function ReadingSettings() {
 
       <section className="setup-block">
         <p className="setup-title">{t("AI 问答与导读")}</p>
+        {/* The same bubbles the chat uses, so the preview is what the answers will look like. */}
+        <div className="chat-preview" aria-hidden>
+          <div className="msg user"><p>{t("这期节目最重要的观点是什么？")}</p></div>
+          <div className="msg assistant"><p>{t("嘉宾认为，学习的速度要比世界变化的速度更快：先抓住底层原理，再用小项目反复练习。")}</p></div>
+        </div>
         <div className="reading-row"><span>{t("字号")}</span>
-          <Seg value={settings.chatSize ?? "m"} options={[["m", t("标准")], ["l", t("大")]]} onChange={(v) => save({ chatSize: v })} />
+          <div className="reading-sizes">
+            <div className="size-row">
+              <input type="range" min={CHAT_MIN * 100} max={CHAT_MAX * 100} step={5} value={Math.round(chatScaleOf(settings) * 100)} aria-label={t("AI 问答与导读字号")}
+                onChange={(e) => void saveSettings({ chatScale: Number(e.target.value) / 100 }, true)} />
+              <span className="num size-val">{Math.round(chatScaleOf(settings) * 100)}%</span>
+            </div>
+          </div>
         </div>
       </section>
 

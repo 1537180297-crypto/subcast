@@ -17,7 +17,7 @@ import { bytes, clearAudioCache, clearDownloads, useOffline } from "../lib/offli
 import { HomeShowCard } from "./YtPromo";
 import { YouTubeAccount } from "./YouTubeAccount";
 import { useModelDownload } from "./TranscriptPanel";
-import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC, kbd } from "../lib/i18n";
+import { LANGS, systemLang, t, tk, tr, type LangSetting, IS_MAC, kbd, isChineseUi } from "../lib/i18n";
 import { ModelSettings } from "./ModelSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { ReadingSettings } from "./ReadingSettings";
@@ -229,7 +229,12 @@ export function SettingsView() {
                 <label className="check"><input type="checkbox" checked={settings.youtubePromo} onChange={(e) => saveSettings({ youtubePromo: e.target.checked })} /> {t("显示节目的 YouTube 订阅按钮")}</label>
                 {settings.youtubePromo && <label className="check"><input type="checkbox" checked={!settings.homeBannerHidden} onChange={(e) => saveSettings({ homeBannerHidden: !e.target.checked })} /> {t("在发现页顶部推荐「词元之外」")}</label>}
                 <label className="check"><input type="checkbox" checked={settings.sideCurated} onChange={(e) => saveSettings({ sideCurated: e.target.checked })} /> {t("在侧栏显示「乔木精读」推荐")}</label>
-                <label className="check"><input type="checkbox" checked={settings.translateShowNames} onChange={(e) => saveSettings({ translateShowNames: e.target.checked })} /> {t("翻译订阅节目的名字")}</label>
+                {isChineseUi() && (
+                  <>
+                    <label className="check"><input type="checkbox" checked={!settings.translateShowNames} onChange={(e) => saveSettings({ translateShowNames: !e.target.checked })} /> {t("外文节目名不翻译")}</label>
+                    <p className="muted small check-note">{t("侧栏和订阅列表保留原名，如 Lenny's Podcast。自己改过的名字不受影响。")}</p>
+                  </>
+                )}
               </section>
               <section className="setup-block">
                 <p className="setup-title">{t("订阅")}</p>

@@ -4,10 +4,11 @@
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Check, Loader2, Pencil, Search, X } from "lucide-react";
+import { TextField } from "./TextField";
 import { api, type Show } from "../lib/api";
 import { showAliasPatch } from "../lib/settings";
 import { useStore } from "../store";
-import { t } from "../lib/i18n";
+import { isChineseUi, t } from "../lib/i18n";
 import { ask } from "../lib/confirm";
 import { useNameMatch, useShowName } from "../lib/zh";
 import { Modal } from "./Chrome";
@@ -18,7 +19,7 @@ const kindOf = (s: Show): Exclude<Kind, "all"> => (s.kind === "youtube" ? "youtu
 const kindLabel = (s: Show) => (s.kind === "youtube" ? t("YouTube 频道") : s.kind === "xiaoyuzhou" ? t("小宇宙") : s.kind === "qiaomu" ? t("乔木精读") : t("播客"));
 
 export function ManageSubs() {
-  const { shows, set, showAliases } = useStore(useShallow((s) => ({ shows: s.shows, set: s.set, showAliases: s.settings.showAliases })));
+  const { shows, set, showAliases, translateNames, saveSettings } = useStore(useShallow((s) => ({ shows: s.shows, set: s.set, showAliases: s.settings.showAliases, translateNames: s.settings.translateShowNames, saveSettings: s.saveSettings })));
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>("all");
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -74,12 +75,7 @@ export function ManageSubs() {
           </span>
         </div>
         <div className="pick-tools">
-          <label className={`list-filter ${query ? "on" : ""}`}>
-            <Search size={14} />
-            <input value={query} autoFocus spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder={t("按名字筛选")} aria-label={t("按名字筛选")}
-              onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && query) { e.stopPropagation(); setQuery(""); } }} />
-            {query && <button className="icon-btn sm" onClick={() => setQuery("")} aria-label={t("清除搜索")}><X size={13} /></button>}
-          </label>
+          <TextField size="sm" value={query} onValue={setQuery} icon={<Search size={14} />} clearable autoFocus placeholder={t("按名字筛选")} aria-label={t("按名字筛选")} />
           {mixed && (
             <div className="seg-control" role="tablist" aria-label={t("类型")}>
               {([["all", t("全部")], ["podcast", t("播客")], ["youtube", "YouTube"]] as [Kind, string][]).map(([k, label]) => (
@@ -93,7 +89,9 @@ export function ManageSubs() {
           {!shown.length && <p className="muted small list-empty">{shows.length ? t("没有名字里带「{q}」的", { q: query.trim() }) : t("还没有订阅")}</p>}
         </div>
         <div className="modal-foot">
-          {progress && <span className="small muted"><Loader2 size={13} className="spin" /> {t("正在取消订阅 {done} / {total}", { done: progress.done, total: progress.total })}</span>}
+          {progress
+            ? <span className="small muted"><Loader2 size={13} className="spin" /> {t("正在取消订阅 {done} / {total}", { done: progress.done, total: progress.total })}</span>
+            : isChineseUi() && <NameToggle on={!translateNames} onChange={(keep) => void saveSettings({ translateShowNames: !keep })} />}
           <div className="spacer" />
           <button className="btn ghost" onClick={close} disabled={progress != null}>{t("关闭")}</button>
           <button className="btn danger-btn" onClick={() => void remove()} disabled={!picked.size || progress != null}>{picked.size ? t("取消订阅 {n} 个", { n: picked.size }) : t("取消订阅")}</button>
@@ -124,16 +122,15 @@ function ManageRow({ show, on, disabled, onChange }: { show: Show; on: boolean; 
       <span className="manage-cover">{showIcon(show)}</span>
       {editing ? (
         <span className="manage-rename" onClick={(e) => e.preventDefault()}>
-          <input
+          <TextField
+            size="sm"
             value={draft}
+            onValue={setDraft}
             autoFocus
             placeholder={orig}
             aria-label={t("自定义节目名")}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); commit(); }
-              if (e.key === "Escape") { e.stopPropagation(); setEditing(false); }
-            }}
+            onEnter={commit}
+            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setEditing(false); } }}
           />
           <button type="button" className="icon-btn sm" title={t("保存")} aria-label={t("保存")} onClick={commit}><Check size={13} /></button>
           <button type="button" className="icon-btn sm" title={t("取消")} aria-label={t("取消")} onClick={() => setEditing(false)}><X size={13} /></button>
@@ -147,6 +144,15 @@ function ManageRow({ show, on, disabled, onChange }: { show: Show; on: boolean; 
           <button type="button" className="icon-btn sm manage-edit" disabled={disabled} title={t("重命名")} aria-label={t("重命名")} onClick={startEdit}><Pencil size={13} /></button>
         </>
       )}
+    </label>
+  );
+}
+
+/** Same switch as Settings › 通用: foreign show names stay as they are instead of turning into Chinese. */
+export function NameToggle({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <label className="check small" title={t("侧栏和订阅列表保留原名，如 Lenny's Podcast。自己改过的名字不受影响。")}>
+      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} /> {t("外文节目名不翻译")}
     </label>
   );
 }
