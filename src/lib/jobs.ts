@@ -263,7 +263,7 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
 export function autoTranslate(ep: Episode) {
   const t = useJobs.getState().transcripts[ep.id];
   const subMode = subtitleModeFor(useStore.getState().settings, ep);
-  if (!t || subMode === "original" || subMode === "off" || !needsTranslation(t)) return;
+  if (!t || subMode === "original" || !needsTranslation(t)) return;
   void loadTranslation(ep.id, t.segments.length).then(() => {
     const job = useJobs.getState().translations[ep.id];
     if (!job || job.running || job.error || job.items.every((x) => x != null)) return;
