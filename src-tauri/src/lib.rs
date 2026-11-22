@@ -104,6 +104,21 @@ async fn fetch_any(state: &AppState, feed_url: &str, kind: &str) -> anyhow::Resu
     feeds::fetch_show(feed_url, kind).await
 }
 
+/// The channel feed for a video that was opened on its own (pasted link), so the episode page can subscribe.
+#[tauri::command]
+async fn youtube_channel_feed(state: State<'_, AppState>, video_id: String) -> Res<String> {
+    let ep_id = short_hash(&format!("single:{video_id}"), 20);
+    if let Some(feed) = db::get_blob(&state.db.lock().unwrap(), &ep_id, "youtube-channel-feed").map_err(e)? {
+        return Ok(feed);
+    }
+    let info = tokio::time::timeout(std::time::Duration::from_secs(8), youtube::video_info(&video_id))
+        .await.map_err(|_| "没有在这个页面找到 YouTube 频道")?.map_err(e)?;
+    let id = info.channel_id.ok_or("没有在这个页面找到 YouTube 频道")?;
+    let feed = feeds::channel_feed(&id);
+    db::set_blob(&state.db.lock().unwrap(), &ep_id, "youtube-channel-feed", &feed).map_err(e)?;
+    Ok(feed)
+}
+
 async fn single_youtube(state: &AppState, video_id: &str) -> Res<Episode> {
     let info = youtube::video_info(video_id).await.map_err(e)?;
     let ep = Episode {
@@ -121,6 +136,9 @@ async fn single_youtube(state: &AppState, video_id: &str) -> Res<Episode> {
     };
     let mut conn = state.db.lock().unwrap();
     db::upsert_episodes(&mut conn, std::slice::from_ref(&ep)).map_err(e)?;
+    if let Some(id) = info.channel_id {
+        let _ = db::set_blob(&conn, &ep.id, "youtube-channel-feed", &feeds::channel_feed(&id));
+    }
     Ok(db::get_episode(&conn, &ep.id).map_err(e)?.unwrap_or(ep))
 }
 
@@ -162,11 +180,29 @@ async fn fetch_input(state: &AppState, input: &str) -> Res<Fetched> {
     Ok(Fetched::Show(show, eps))
 }
 
+/// YouTube's feed only carries a video thumbnail. The sidebar should show the channel picture instead.
+/// Once that picture is stored, later refreshes keep it and do not download the channel page again.
+async fn with_channel_avatar(mut show: Show, existing: Option<String>) -> Show {
+    if show.kind != "youtube" { return show; }
+    if existing.as_deref().is_some_and(|c| c.starts_with("data:image/")) {
+        show.cover = existing;
+        return show;
+    }
+    if let Ok(Some(avatar)) = tokio::time::timeout(std::time::Duration::from_secs(8), feeds::youtube_channel_avatar(&show.feed_url)).await {
+        show.cover = Some(avatar);
+    }
+    show
+}
+
 #[tauri::command]
 async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Added> {
     match fetch_input(&state, &input).await? {
         Fetched::Single(ep) => Ok(Added { show: None, episode: Some(ep) }),
-        Fetched::Show(show, eps) => { store(&state, &show, &eps)?; Ok(Added { show: Some(show), episode: None }) }
+        Fetched::Show(show, eps) => {
+            let show = with_channel_avatar(show, None).await;
+            store(&state, &show, &eps)?;
+            Ok(Added { show: Some(show), episode: None })
+        }
     }
 }
 
@@ -216,8 +252,10 @@ async fn preview_show(state: State<'_, AppState>, input: String) -> Res<Preview>
 #[tauri::command]
 async fn refresh_show(state: State<'_, AppState>, id: String) -> Res<Show> {
     let show = db::get_show(&state.db.lock().unwrap(), &id).map_err(e)?.ok_or("节目不存在")?;
+    let existing = show.cover.clone();
     let (fresh, eps) = fetch_any(&state, &show.feed_url, &show.kind).await.map_err(e)?;
     let fresh = Show { id: show.id.clone(), kind: show.kind.clone(), ..fresh };
+    let fresh = with_channel_avatar(fresh, existing).await;
     store(&state, &fresh, &eps)?;
     Ok(fresh)
 }
@@ -242,7 +280,12 @@ async fn refresh_all(state: State<'_, AppState>) -> Res<Refreshed> {
             let (st, slots) = (&state, &slots);
             async move {
                 let _slot = slots.acquire().await;
-                (s, tokio::time::timeout(std::time::Duration::from_secs(30), fetch_any(st, &s.feed_url, &s.kind)).await)
+                let result = tokio::time::timeout(std::time::Duration::from_secs(30), fetch_any(st, &s.feed_url, &s.kind)).await;
+                let result = match result {
+                    Ok(Ok((fresh, eps))) => Ok(Ok((with_channel_avatar(fresh, s.cover.clone()).await, eps))),
+                    other => other,
+                };
+                (s, result)
             }
         })).await;
         for (s, r) in results {
@@ -356,7 +399,9 @@ fn recent_episodes(state: State<'_, AppState>) -> Res<Vec<Episode>> { db::recent
 fn get_episode(state: State<'_, AppState>, id: String) -> Res<Option<Episode>> { db::get_episode(&state.db.lock().unwrap(), &id).map_err(e) }
 
 #[tauri::command(async)]
-fn remove_show(state: State<'_, AppState>, id: String) -> Res<()> { db::delete_show(&state.db.lock().unwrap(), &id).map_err(e) }
+fn remove_show(state: State<'_, AppState>, id: String, keep_episode_id: Option<String>) -> Res<()> {
+    db::delete_show(&state.db.lock().unwrap(), &id, keep_episode_id.as_deref()).map_err(e)
+}
 
 #[tauri::command(async)]
 fn set_progress(state: State<'_, AppState>, id: String, seconds: f64) -> Res<()> { db::set_progress(&state.db.lock().unwrap(), &id, seconds).map_err(e) }
@@ -1662,7 +1707,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, set_watched, mark_show_watched, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, youtube_channel_feed, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             app_update_check, app_update_download, app_update_install,
             shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
             download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete,
