@@ -1744,6 +1744,12 @@ const dict: Record<string, string> = {
   "开头接在上一句中间，前 3 秒可能听不懂": "Opens mid-sentence: the first 3 seconds may not make sense",
   "从「{s}…」开始": "Start at “{s}…”",
   "忽略": "Ignore",
+  "跟着说话的人取景": "Follow the speaker",
+  "获取画面后自动找人": "Finds the speaker once the clip is fetched",
+  "画面会随人物移动 {n} 次": "The frame follows them {n} times",
+  "人物一直在同一位置": "They stay in one place",
+  "没找到人物，用下面的位置": "No one found; uses the position below",
+  "自动": "Auto",
 };
 
 export default dict;

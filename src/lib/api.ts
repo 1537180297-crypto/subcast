@@ -72,7 +72,7 @@ export interface Saved { episodeId: string; path: string; bytes: number; savedAt
 
 export interface AsrEvent { episodeId: string; stage: "download" | "transcribe" | "segment" | "done" | "error"; progress: number; message?: string; segment?: Segment }
 export interface FfmpegStatus { installed: boolean; path?: string | null; hardwareH264: boolean }
-export interface PreparedClip { path: string; duration: number; /** Seconds before the clip in the file (stream copy from a keyframe). */ lead: number; width: number; height: number; hasBurnedSubtitles: boolean; cached: boolean; frames: string[]; bestFrame: number; /** Pauses (clip time), where "remove pauses" cuts. */ silences?: [number, number][] }
+export interface PreparedClip { path: string; duration: number; /** Seconds before the clip in the file (stream copy from a keyframe). */ lead: number; width: number; height: number; hasBurnedSubtitles: boolean; cached: boolean; frames: string[]; bestFrame: number; /** Pauses (clip time), where "remove pauses" cuts. */ silences?: [number, number][]; /** Where the speaker sits over time: (clip time, 0–1 across). */ subjectTrack?: [number, number][] }
 export interface CueOverlay { start: number; end: number; y: number; pngBase64: string }
 export interface RenderVideoClipRequest {
   rawPath: string;
@@ -101,6 +101,8 @@ export interface RenderVideoClipRequest {
   keepRanges?: [number, number][];
   /** Even the sound to −14 LUFS. */
   loudness?: boolean;
+  /** Smart framing: the crop follows the speaker along these (clip time, 0–1) points. */
+  pan?: [number, number][];
 }
 export interface RenderVideoClipResult { videoPath: string; coverPath?: string | null; landscapeCoverPath?: string | null }
 export interface VideoClipProgress { jobId: string; stage: string; progress: number; message: string }

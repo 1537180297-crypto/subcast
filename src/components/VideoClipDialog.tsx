@@ -75,6 +75,7 @@ interface ClipPrefs {
   extraLandscapeCover?: boolean;
   removePauses?: boolean;
   loudness?: boolean;
+  smartFrame?: boolean;
 }
 
 function readPrefs(): ClipPrefs {
@@ -134,6 +135,8 @@ interface PreparedState {
   bestFrame: number;
   /** Pauses in the clip (clip time). */
   silences: [number, number][];
+  /** Where the speaker sits over time (clip time, 0–1 across). */
+  subjectTrack: [number, number][];
 }
 
 export function VideoClipDialog() {
@@ -211,6 +214,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const [extraLandscapeCover, setExtraLandscapeCover] = useState(() => prefs.extraLandscapeCover ?? true);
   const [removePauses, setRemovePauses] = useState(() => prefs.removePauses ?? false);
   const [loudness, setLoudness] = useState(() => prefs.loudness ?? true);
+  const [smartFrame, setSmartFrame] = useState(() => prefs.smartFrame ?? true);
 
   const [coverHook, setCoverHook] = useState(() => clip.coverHook || clip.title);
   const [coverSub, setCoverSub] = useState(() => clip.coverSub || (clip.reason && clip.reason !== t("手动选取片段") ? clip.reason : ""));
@@ -280,8 +284,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       extraLandscapeCover,
       removePauses,
       loudness,
+      smartFrame,
     });
-  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, coverTracking, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover, removePauses, loudness]);
+  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, coverTracking, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover, removePauses, loudness, smartFrame]);
 
   useEffect(() => {
     if (!busyJob) return;
@@ -448,6 +453,14 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
 
   const posterBackdrop = ep.cover || (ep.videoId ? `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg` : undefined);
   const preparedValid = !!prepared && prepared.key === rangesKey;
+  // Smart framing: where a crop cuts the picture, it follows the speaker (found while fetching) instead of
+  // staying where the slider put it.
+  const cropping = (geo.fit !== "card" && aspect !== "source") || geo.cropBox;
+  const track = preparedValid && prepared?.subjectTrack?.length ? prepared.subjectTrack : null;
+  const following = smartFrame && cropping && !!track;
+  const cropBoxW = geo.fit === "card" ? geo.video.w : geo.W;
+  const cropBoxH = geo.fit === "card" ? geo.video.h : geo.H;
+  const viewCropX = following && prepared ? centreShare(trackAt(track!, pvTime), cropBoxW, cropBoxH, prepared.width || 1920, prepared.height || 1080) : cropX;
   const preparedValidRef = useRef(preparedValid);
   preparedValidRef.current = preparedValid;
   // A new range is being fetched: the old clip holds still under the progress instead of playing on.
@@ -548,6 +561,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         frames: res.frames ?? [],
         bestFrame: res.bestFrame ?? 0,
         silences: res.silences ?? [],
+        subjectTrack: res.subjectTrack ?? [],
       };
       setPrepared(next);
       if (selectedFrame == null) setSelectedFrame(next.bestFrame);
@@ -763,6 +777,10 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         landscapeCoverPng = canvasToPngBase64(landCanvas);
       }
 
+      const expCropping = (eg.fit !== "card" && aspect !== "source") || eg.cropBox;
+      const expTrack = smartFrame && expCropping && prep.subjectTrack?.length ? prep.subjectTrack : null;
+      const expBoxW = eg.fit === "card" ? eg.video.w : eg.W;
+      const expBoxH = eg.fit === "card" ? eg.video.h : eg.H;
       const result = await api.videoClipRender(jobId, {
         rawPath: prep.path,
         outputPath: customPath,
@@ -771,7 +789,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         layout: "frame",
         frame: { w: eg.W, h: eg.H, fit: eg.fit, vx: eg.video.x, vy: eg.video.y, vw: eg.video.w, vh: eg.video.h, cropBox: eg.cropBox },
         cardBg,
-        cropX,
+        cropX: expTrack?.length === 1 ? centreShare(expTrack[0][1], expBoxW, expBoxH, prep.width || 1920, prep.height || 1080) : cropX,
+        pan: expTrack && expTrack.length > 1 ? expTrack : undefined,
         duration: prep.duration,
         lead: prep.lead,
         speed,
@@ -935,13 +954,13 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     left: `${(geo.video.x / geo.W) * 100}%`, top: `${(geo.video.y / geo.H) * 100}%`,
     width: `${(geo.video.w / geo.W) * 100}%`, height: `${(geo.video.h / geo.H) * 100}%`,
   };
-  const mediaStyle: React.CSSProperties | undefined = card && !geo.cropBox ? { objectFit: "contain" } : { objectFit: "cover", objectPosition: `${cropX * 100}% center` };
+  const mediaStyle: React.CSSProperties | undefined = card && !geo.cropBox ? { objectFit: "contain" } : { objectFit: "cover", objectPosition: `${viewCropX * 100}% center` };
   // An iframe can't object-fit: size it to cover (or fit) the box and pan it like the export.
   const srcRatio = (prepared?.width || 1920) / (prepared?.height || 1080);
   const boxRatio = geo.video.w / geo.video.h;
   const coverIt = !(card && !geo.cropBox);
   const ytFrameBase: React.CSSProperties = coverIt && srcRatio > boxRatio
-    ? { width: `${(srcRatio / boxRatio) * 100}%`, height: "100%", left: `${(1 - srcRatio / boxRatio) * cropX * 100}%`, top: 0 }
+    ? { width: `${(srcRatio / boxRatio) * 100}%`, height: "100%", left: `${(1 - srcRatio / boxRatio) * viewCropX * 100}%`, top: 0 }
     : coverIt
       ? { width: "100%", height: `${(boxRatio / srcRatio) * 100}%`, top: `${((1 - boxRatio / srcRatio) / 2) * 100}%`, left: 0 }
       : srcRatio > boxRatio
@@ -1247,14 +1266,21 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                       />
                     </div>
                   )}
-                  {((!card && aspect !== "source") || geo.cropBox) && (
-                    <div className="reading-row">
-                      <span>{t("水平取景")}</span>
-                      <div className="vclip-crop-row">
-                        <input type="range" min={0} max={1} step={0.02} value={cropX} onChange={(e) => setCropX(Number(e.target.value))} />
-                        <span className="num small muted">{Math.round(cropX * 100)}%</span>
+                  {cropping && (
+                    <>
+                      <label className="vclip-sub-toggle">
+                        <input type="checkbox" checked={smartFrame} onChange={(e) => setSmartFrame(e.target.checked)} />
+                        {t("跟着说话的人取景")}
+                        {smartFrame && <span className="muted small">{!preparedValid ? t("获取画面后自动找人") : track ? (track.length > 1 ? t("画面会随人物移动 {n} 次", { n: (track.length - 1) / 2 }) : t("人物一直在同一位置")) : t("没找到人物，用下面的位置")}</span>}
+                      </label>
+                      <div className="reading-row">
+                        <span>{t("水平取景")}</span>
+                        <div className="vclip-crop-row">
+                          <input type="range" min={0} max={1} step={0.02} value={following ? viewCropX : cropX} disabled={following} onChange={(e) => setCropX(Number(e.target.value))} />
+                          <span className="num small muted">{following ? t("自动") : `${Math.round(cropX * 100)}%`}</span>
+                        </div>
                       </div>
-                    </div>
+                    </>
                   )}
                 </details>
               )}
@@ -1600,4 +1626,22 @@ function OpeningHint({ segments, startIdx, endIdx, onStart }: { segments: Segmen
       <button type="button" className="icon-btn sm" onClick={() => setHidden(startIdx)} aria-label={t("忽略")} title={t("忽略")}><X size={12} /></button>
     </div>
   );
+}
+
+/** The speaker's place (0–1 across the picture) at clip time `t` on an eased track. */
+function trackAt(track: [number, number][], t: number): number {
+  if (t <= track[0][0]) return track[0][1];
+  for (let i = 1; i < track.length; i++) {
+    const [t1, x1] = track[i];
+    if (t < t1) { const [t0, x0] = track[i - 1]; return t1 - t0 < 1e-3 ? x1 : x0 + (x1 - x0) * (t - t0) / (t1 - t0); }
+  }
+  return track[track.length - 1][1];
+}
+
+/** A speaker place → the crop's share of the spare width (what `cropX` means), centring them in a `bw`×`bh`
+ *  box cut from a `sw`×`sh` picture scaled to cover it; the same rule the export's crop uses. */
+function centreShare(sx: number, bw: number, bh: number, sw: number, sh: number): number {
+  const w = sw * Math.max(bw / sw, bh / sh);
+  if (w - bw < 1) return 0.5;
+  return Math.min(1, Math.max(0, (sx * w - bw / 2) / (w - bw)));
 }

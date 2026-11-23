@@ -40,6 +40,9 @@ pub struct PreparedClip {
     pub best_frame: usize,
     /// Pauses in the clip (clip time, after `lead`): where "remove pauses" may cut.
     pub silences: Vec<(f64, f64)>,
+    /// Where the speaker sits across the clip: (clip time, 0–1 across the picture), eased between moves.
+    /// One point when they stay put; empty when no one was found.
+    pub subject_track: Vec<(f64, f64)>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -112,6 +115,9 @@ pub struct RenderRequest {
     /// same level whatever show it came from.
     #[serde(default)]
     pub loudness: bool,
+    /// Smart framing: the crop follows these (clip time, 0–1) points instead of staying at `crop_x`.
+    #[serde(default)]
+    pub pan: Vec<(f64, f64)>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -609,6 +615,113 @@ pub fn read_lead(path: &Path) -> f64 {
     std::fs::read_to_string(path.with_extension("lead")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0)
 }
 
+/// Seconds between the stills the speaker is looked for in.
+const TRACK_STEP: f64 = 2.0;
+const TRACK_W: usize = 96;
+const TRACK_H: usize = 54;
+
+/// Where a person sits across a small RGB still (0–1), from skin-coloured columns: the densest stretch, not the
+/// mean (two people would average to the empty middle). `None` with too little skin to go on. Same rule as the
+/// interface's `subjectCenterX`.
+pub fn subject_x(rgb: &[u8], w: usize, h: usize) -> Option<f64> {
+    let mut cols = vec![0f64; w];
+    let mut total = 0f64;
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 3;
+            let (r, g, b) = (rgb[i] as f64, rgb[i + 1] as f64, rgb[i + 2] as f64);
+            let cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+            let cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+            let yy = 0.299 * r + 0.587 * g + 0.114 * b;
+            if yy > 50.0 && (77.0..=127.0).contains(&cb) && (135.0..=173.0).contains(&cr) { cols[x] += 1.0; total += 1.0; }
+        }
+    }
+    if total <= (w * h) as f64 * 0.004 { return None; }
+    let win = ((w as f64) * 0.22).round().max(1.0) as usize;
+    let (mut best, mut at, mut run) = (-1f64, 0f64, 0f64);
+    for x in 0..w {
+        run += cols[x] - if x >= win { cols[x - win] } else { 0.0 };
+        if x + 1 >= win && run > best { best = run; at = x as f64 - win as f64 / 2.0 + 0.5; }
+    }
+    Some((at / w as f64).clamp(0.05, 0.95))
+}
+
+/// Raw samples into a calm track: gaps take the last known place, single-frame outliers go (median of three),
+/// and the frame only moves when the speaker has clearly moved (8% of the width, seen twice), easing over
+/// 0.8 s. Returns (time, x) points to interpolate between; one point when nothing moves.
+pub fn smooth_track(samples: &[(f64, Option<f64>)], duration: f64) -> Vec<(f64, f64)> {
+    let first = match samples.iter().find_map(|s| s.1) { Some(x) => x, None => return vec![] };
+    let mut last = first;
+    let filled: Vec<(f64, f64)> = samples.iter().map(|&(t, x)| { if let Some(v) = x { last = v; } (t, last) }).collect();
+    let med: Vec<(f64, f64)> = (0..filled.len()).map(|i| {
+        let mut w = [filled[i.saturating_sub(1)].1, filled[i].1, filled[(i + 1).min(filled.len() - 1)].1];
+        w.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        (filled[i].0, w[1])
+    }).collect();
+    let mut points = vec![(0.0, med[0].1)];
+    let mut cur = med[0].1;
+    let mut pending: Option<f64> = None;
+    for i in 1..med.len() {
+        let (t, x) = med[i];
+        if (x - cur).abs() < 0.08 { pending = None; continue; }
+        match pending {
+            Some(p) if (x - p).abs() < 0.08 => {
+                // Moved since the sample before this one: ease across that moment.
+                let at = med[i - 1].0;
+                let (a, b) = ((at - 0.4).max(points.last().unwrap().0 + 0.05), (at + 0.4).min(duration));
+                if b > a {
+                    points.push((a, cur));
+                    points.push((b, x));
+                    cur = x;
+                }
+                pending = None;
+            }
+            _ => pending = Some(x),
+        }
+        let _ = t;
+    }
+    if points.len() == 1 { return points; }
+    points
+}
+
+/// Looks for the speaker every `TRACK_STEP` s of the clip (clip time) and returns the eased track.
+pub async fn track_subject(ffmpeg: &Path, path: &Path, lead: f64, duration: f64) -> Vec<(f64, f64)> {
+    let mut cmd = ffmpeg_cmd(ffmpeg);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-ss", &format!("{:.3}", lead.max(0.0)), "-t", &format!("{duration:.3}"), "-i"]).arg(path)
+        .args(["-an", "-vf", &format!("fps=1/{TRACK_STEP},scale={TRACK_W}:{TRACK_H}"), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(40), cmd.output()).await else { return vec![]; };
+    let size = TRACK_W * TRACK_H * 3;
+    let samples: Vec<(f64, Option<f64>)> = out.stdout.chunks_exact(size).enumerate()
+        .map(|(k, f)| (k as f64 * TRACK_STEP, subject_x(f, TRACK_W, TRACK_H)))
+        .collect();
+    smooth_track(&samples, duration)
+}
+
+/// Clip time onto the export's clock: the cut stretches taken out, then the speed.
+pub fn to_output_time(t: f64, keep: &[(f64, f64)], speed: f64) -> f64 {
+    let kept = if keep.is_empty() { t } else {
+        keep.iter().map(|&(a, b)| if t >= b { b - a } else if t > a { t - a } else { 0.0 }).sum()
+    };
+    kept / speed.max(0.01)
+}
+
+/// An FFmpeg expression in `t` that walks the track: linear between points, held before the first and after
+/// the last, kept inside 0–1. `None` for a track that never moves.
+pub fn pan_expr(points: &[(f64, f64)]) -> Option<String> {
+    if points.len() < 2 { return None; }
+    let n = points.len();
+    let mut e = format!("{:.4}", points[n - 1].1);
+    for i in (0..n - 1).rev() {
+        let ((t0, x0), (t1, x1)) = (points[i], points[i + 1]);
+        let seg = if (x1 - x0).abs() < 1e-4 || t1 - t0 < 1e-3 { format!("{x0:.4}") }
+            else { format!("{x0:.4}+({:.4})*(t-{t0:.3})/{:.3}", x1 - x0, t1 - t0) };
+        e = format!("if(lt(t,{t1:.3}),{seg},{e})");
+    }
+    Some(format!("clip(if(lt(t,{:.3}),{:.4},{e}),0,1)", points[0].0, points[0].1))
+}
+
 async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: bool) -> PreparedClip {
     let lead = read_lead(dest);
     let meta_path = dest.with_extension("meta.json");
@@ -633,7 +746,8 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
     };
 
     let clip_dur = (duration - lead).max(0.1);
-    let (has_burned_subtitles, (frames, best_frame), silences) = tokio::join!(
+    let track_path = dest.with_extension("track.json");
+    let (has_burned_subtitles, (frames, best_frame), silences, subject_track) = tokio::join!(
         async {
             if let Some(m) = cached_meta {
                 m.has_burned_subtitles
@@ -673,6 +787,18 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
                     s
                 }
             }
+        },
+        async {
+            let cached = tokio::fs::read_to_string(&track_path).await.ok()
+                .and_then(|raw| serde_json::from_str::<Vec<(f64, f64)>>(&raw).ok());
+            match cached {
+                Some(t) => t,
+                None => {
+                    let t = track_subject(ffmpeg, dest, lead, clip_dur).await;
+                    if !t.is_empty() { let _ = tokio::fs::write(&track_path, serde_json::to_string(&t).unwrap_or_default()).await; }
+                    t
+                }
+            }
         }
     );
 
@@ -687,6 +813,7 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
         frames,
         best_frame,
         silences,
+        subject_track,
     }
 }
 
@@ -1180,8 +1307,15 @@ pub fn build_filter_graph(
     cover_mode: &str,
     cover_input_idx: Option<usize>,
     has_audio: bool,
+    pan: Option<&str>,
 ) -> String {
+    // The crop's left edge for an output `ow` wide: a fixed share of the slack (`crop_x`, 0 = left, 1 = right),
+    // or (smart framing) centred on the speaker's place in `t`, kept inside the picture. Quoted for its commas.
     let cx = crop_x.clamp(0.0, 1.0);
+    let crop_left = |ow: u32| match pan {
+        Some(e) => format!("'clip(({e})*iw-{ow}/2,0,iw-{ow})'"),
+        None => format!("(iw-{ow})*{cx:.4}"),
+    };
     let mut parts: Vec<String> = Vec::new();
     let even = |v: u32| (v / 2 * 2).max(2);
 
@@ -1192,7 +1326,7 @@ pub fn build_filter_graph(
             let hex = match card_bg { "paper" => "#f5f2eb", "white" => "#ffffff", _ => "#141315" };
             let (vw, vh) = (even(f.vw.max(2)), even(f.vh.max(2)));
             let fit_box = if f.crop_box {
-                format!("scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh}:(iw-{vw})*{cx:.4}:(ih-{vh})/2")
+                format!("scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh}:{}:(ih-{vh})/2", crop_left(vw))
             } else {
                 format!("scale={vw}:{vh}:force_original_aspect_ratio=decrease,pad={vw}:{vh}:(ow-iw)/2:(oh-ih)/2:color={hex}")
             };
@@ -1211,7 +1345,7 @@ pub fn build_filter_graph(
             };
             let (vw, vh) = (even(f.vw.max(2)), even(f.vh.max(2)));
             let fg = if f.crop_box {
-                format!("[fg]scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh}:(iw-{vw})*{cx:.4}:(ih-{vh})/2,setsar=1[fg2]")
+                format!("[fg]scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh}:{}:(ih-{vh})/2,setsar=1[fg2]", crop_left(vw))
             } else {
                 format!("[fg]scale={vw}:{vh}:force_original_aspect_ratio=decrease,setsar=1[fg2]")
             };
@@ -1221,7 +1355,7 @@ pub fn build_filter_graph(
             ));
         } else {
             parts.push(format!(
-                "[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:(iw-{w})*{cx:.4}:(ih-{h})/2,setsar=1[base]"
+                "[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:{}:(ih-{h})/2,setsar=1[base]", crop_left(w)
             ));
         }
     } else {
@@ -1243,7 +1377,7 @@ pub fn build_filter_graph(
         }
         "portrait_fill" => {
             parts.push(format!(
-                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(iw-1080)*{cx:.4}:(ih-1920)/2,setsar=1[base]"
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:{}:(ih-1920)/2,setsar=1[base]", crop_left(1080)
             ));
         }
         _ => {
@@ -1316,7 +1450,7 @@ pub fn build_filter_script(
     cover_input_idx: Option<usize>,
     has_audio: bool,
 ) -> String {
-    build_filter_graph(layout, card_bg, crop_x, frame, has_static, cues, None, cover_mode, cover_input_idx, has_audio)
+    build_filter_graph(layout, card_bg, crop_x, frame, has_static, cues, None, cover_mode, cover_input_idx, has_audio, None)
 }
 
 /// Plays the source at `speed`: picture timestamps divided, audio through atempo; the rest of the graph
@@ -1589,6 +1723,9 @@ async fn render_into(
 
     let meta = probe_video_detail(ffmpeg, raw_path, req.duration).await;
     let has_audio = meta.has_audio;
+    // The crop reads time after the speed change and the cuts, so the track goes onto that clock first.
+    let pan_points: Vec<(f64, f64)> = req.pan.iter().map(|&(t, x)| (to_output_time(t, &keep, speed), x)).collect();
+    let pan = pan_expr(&pan_points);
     let filter = build_filter_graph(
         &req.layout,
         &req.card_bg,
@@ -1600,6 +1737,7 @@ async fn render_into(
         cover_mode,
         cover_input_idx,
         has_audio,
+        pan.as_deref(),
     );
     let tmp_out = work_dir.join("out.mp4");
     let use_vt = has_videotoolbox(ffmpeg);
@@ -1698,7 +1836,7 @@ mod tests {
         assert!(c_blur.contains("tpad=start_duration=1.000:start_mode=clone"));
         assert!(c_blur.contains("[0:a]adelay=1000:all=1[aout]"));
 
-        let c_concat = build_filter_graph("portrait_card", "blur", 0.5, None, true, &[], Some(1236), "flash", Some(3), true);
+        let c_concat = build_filter_graph("portrait_card", "blur", 0.5, None, true, &[], Some(1236), "flash", Some(3), true, None);
         assert!(c_concat.contains("[v0][2:v]overlay=0:1236:eof_action=pass:format=auto[vc]"));
         assert!(c_concat.contains("[vc][3:v]overlay=0:0:enable='lt(t,0.140)'"));
 
@@ -1855,7 +1993,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "flash".into(),
             embed_thumbnail: true,
             save_cover_sidecar: true,
-            landscape_cover_png: Some(minimal_rgba_png_b64(1920, 1080, 24, 24, 28, 255)), keep_ranges: vec![], loudness: false,
+            landscape_cover_png: Some(minimal_rgba_png_b64(1920, 1080, 24, 24, 28, 255)), keep_ranges: vec![], loudness: false, pan: vec![],
         };
         let cancel = Arc::new(AtomicBool::new(false));
         let res = render_clip(&data, req_flash, cancel.clone(), |_, _, _| {}).await.unwrap();
@@ -1883,7 +2021,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "hold".into(),
             embed_thumbnail: true,
             save_cover_sidecar: false,
-            landscape_cover_png: None, keep_ranges: vec![], loudness: false,
+            landscape_cover_png: None, keep_ranges: vec![], loudness: false, pan: vec![],
         };
         let res_hold = render_clip(&data, req_hold, cancel.clone(), |_, _, _| {}).await.unwrap();
         assert!(std::fs::metadata(&res_hold.video_path).unwrap().len() > 10_000);
@@ -1917,7 +2055,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "flash".into(),
             embed_thumbnail: true,
             save_cover_sidecar: false,
-            landscape_cover_png: None, keep_ranges: vec![], loudness: false,
+            landscape_cover_png: None, keep_ranges: vec![], loudness: false, pan: vec![],
         };
         let res_concat = render_clip(&data, req_concat, cancel, |_, _, _| {}).await.unwrap();
         assert!(std::fs::metadata(&res_concat.video_path).unwrap().len() > 10_000);
@@ -1940,7 +2078,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
         let keep = normalize_keep(&[(1.5, 3.0), (0.0, 1.0), (2.9, 3.5)], 4.0);
         assert_eq!(keep, vec![(0.0, 1.0), (1.5, 3.5)]);
         assert!(normalize_keep(&[(0.0, 4.0)], 4.0).is_empty());
-        let base = build_filter_graph("frame", "night", 0.5, Some(&Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: false }), false, &[], None, "hold", None, true);
+        let base = build_filter_graph("frame", "night", 0.5, Some(&Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: false }), false, &[], None, "hold", None, true, None);
         for speed in [1.0, 1.5] {
             let g = with_keep(&with_speed(&base, speed, true), &keep, true);
             assert_eq!(g.matches("[0:v]").count(), 1, "{g}");
@@ -1950,8 +2088,60 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             assert_eq!(g.matches("[aout]").count(), 1, "{g}");
         }
         // No graph stage reads the sound: the cut sound still leaves through [aout].
-        let g = with_keep(&build_filter_graph("frame", "night", 0.5, None, false, &[], None, "none", None, true), &keep, true);
+        let g = with_keep(&build_filter_graph("frame", "night", 0.5, None, false, &[], None, "none", None, true, None), &keep, true);
         assert!(g.contains("[ka]anull[aout]"), "{g}");
+    }
+
+    #[test]
+    fn track_smooths_and_maps_to_the_export_clock() {
+        // Left for 6 s, one stray frame, then right: one move, eased around 6 s; the stray is ignored.
+        let s: Vec<(f64, Option<f64>)> = [0.2, 0.2, 0.9, 0.2, 0.8, 0.8, 0.8].iter().enumerate().map(|(k, &x)| (k as f64 * 2.0, Some(x))).collect();
+        let t = smooth_track(&s, 14.0);
+        assert_eq!(t.len(), 3, "{t:?}");
+        assert!((t[0].1 - 0.2).abs() < 1e-9 && (t[2].1 - 0.8).abs() < 1e-9, "{t:?}");
+        assert!(t[1].0 > 5.0 && t[2].0 < 7.0, "{t:?}");
+        // Nobody moves: one point, no expression.
+        assert_eq!(smooth_track(&[(0.0, Some(0.4)), (2.0, None), (4.0, Some(0.42))], 6.0), vec![(0.0, 0.4)]);
+        assert!(pan_expr(&[(0.0, 0.4)]).is_none());
+        assert!(smooth_track(&[(0.0, None)], 2.0).is_empty());
+        // 2 s cut out before t, then 2× speed.
+        assert!((to_output_time(5.0, &[(0.0, 1.0), (3.0, 8.0)], 2.0) - 1.5).abs() < 1e-9);
+        let e = pan_expr(&t).unwrap();
+        assert!(e.starts_with("clip(") && e.matches("if(").count() == 3, "{e}");
+    }
+
+    #[tokio::test]
+    async fn real_ffmpeg_smart_framing_follows_the_speaker() {
+        let data = std::env::temp_dir().join(format!("subcast-vclip-pan-{}", uuid::Uuid::new_v4()));
+        let Some(ffmpeg) = find_ffmpeg(&data) else { return };
+        std::fs::create_dir_all(&data).unwrap();
+        let src = data.join("src.mp4");
+        // A skin-coloured block on the left for 4 s, then on the right.
+        let mk = std::process::Command::new(&ffmpeg)
+            .args(["-y", "-f", "lavfi", "-i", "color=c=0x202020:s=640x360:d=8:r=30",
+                "-vf", "drawbox=x=60:y=100:w=100:h=160:color=0xE0AC69:t=fill:enable='lt(t,4)',drawbox=x=480:y=100:w=100:h=160:color=0xE0AC69:t=fill:enable='gte(t,4)'",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&src).output().unwrap();
+        assert!(mk.status.success(), "{}", String::from_utf8_lossy(&mk.stderr));
+        let track = track_subject(&ffmpeg, &src, 0.0, 8.0).await;
+        assert!(track.len() >= 3 && track[0].1 < 0.3 && track.last().unwrap().1 > 0.7, "{track:?}");
+
+        let out = data.join("out.mp4");
+        let req = RenderRequest { frame: Some(Frame { w: 360, h: 640, fit: "fill".into(), vx: 0, vy: 0, vw: 360, vh: 640, crop_box: false }),
+            output_dir: None, lead: 0.0, speed: 1.0, raw_path: src.to_string_lossy().into_owned(),
+            output_path: Some(out.to_string_lossy().into_owned()), default_name: "pan".into(), layout: "frame".into(),
+            card_bg: "night".into(), crop_x: 0.5, duration: 8.0, static_overlay_png: None, cues: vec![], cover_png: None,
+            cover_mode: "none".into(), embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
+            keep_ranges: vec![], loudness: false, pan: track.clone() };
+        let res = render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
+        // The block sits near the middle of the 9:16 frame both before and after it moved.
+        for at in ["1.0", "7.0"] {
+            let f = std::process::Command::new(&ffmpeg).args(["-v", "error", "-ss", at, "-i", &res.video_path, "-frames:v", "1",
+                "-vf", &format!("scale={TRACK_W}:{TRACK_H}"), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
+            let x = subject_x(&f.stdout, TRACK_W, TRACK_H).unwrap_or(-1.0);
+            assert!((x - 0.5).abs() < 0.2, "at {at}s the speaker is at {x}");
+        }
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[tokio::test]
@@ -1989,6 +2179,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
                 keep_ranges: vec![(0.0, 1.3), (2.3, 4.0)],
                 // The second pass also evens the loudness: a quiet tone comes out near −14 LUFS.
                 loudness: mode == "hold",
+                pan: vec![],
             };
             let res = render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
             let (d, _, _, audio) = probe_video_meta(&ffmpeg, Path::new(&res.video_path), 0.0).await;
@@ -2047,7 +2238,7 @@ mod render_live {
             raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
             layout: "frame".into(), card_bg: "blur".into(), crop_x: 0.7, duration: 105.16,
             static_overlay_png: Some(png(1080, 1920)), cues, cover_png: None, cover_mode: "none".into(),
-            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![], loudness: false,
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![], loudness: false, pan: vec![],
         };
         let t = std::time::Instant::now();
         render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
@@ -2072,7 +2263,7 @@ mod render_live {
             raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
             layout: "frame".into(), card_bg: "night".into(), crop_x: 0.5, duration: 105.16,
             static_overlay_png: None, cues: vec![], cover_png: None, cover_mode: "none".into(),
-            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![], loudness: false,
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![], loudness: false, pan: vec![],
         };
         let t = std::time::Instant::now();
         render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
