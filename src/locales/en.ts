@@ -1731,6 +1731,15 @@ const dict: Record<string, string> = {
   "下载视频，打开就播，离线也能看": "Download the video: plays instantly, even offline",
   "下载 YouTube 视频失败：{}": "Couldn't download the YouTube video: {}",
   "没有找到下载的视频": "Couldn't find the downloaded video",
+  "刚刚": "Just now",
+  "{n} 分钟前": "{n} min ago",
+  "{n} 小时前": "{n} h ago",
+  "找不到这个文件了，已从记录中移除": "That file is gone; removed it from the list",
+  "未命名片段": "Untitled clip",
+  "从记录中移除": "Remove from list",
+  "最近导出": "Recent exports",
+  "这一集": "This episode",
+  "其他节目": "Other episodes",
 };
 
 export default dict;

@@ -2525,3 +2525,10 @@ details.vclip-adv > summary .clamp1 { min-width: 0; max-width: 60%; }
 /* A folded section's summary line says what's inside; once it's open the fields say it themselves. */
 details.vclip-sec[open] > summary.vclip-sec-head > .small { visibility: hidden; }
 .vclip-sec > .vclip-chips { margin-top: 10px; }
+/* 最近导出: a compact list of files made from highlights. */
+.clip-hist { width: 340px; max-height: 360px; overflow-y: auto; padding: 6px; }
+.clip-hist-row { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
+.clip-hist-row:hover { background: var(--soft); }
+.clip-hist-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; font-size: 13px; }
+.clip-hist-row .icon-btn { opacity: 0; }
+.clip-hist-row:hover .icon-btn, .clip-hist-row .icon-btn:focus-visible { opacity: 1; }

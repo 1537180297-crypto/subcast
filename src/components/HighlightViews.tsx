@@ -9,6 +9,7 @@ import { useJobs } from "../lib/jobs";
 import { isZh, useZh } from "../lib/zh";
 import { useStore } from "../store";
 import { openVideoClipDialog } from "./VideoClipDialog";
+import { ClipHistory } from "./ClipHistory";
 
 /** Renders a highlight card's opening quote, automatically fetching a Chinese translation for English lines. */
 function HighlightQuote({ zh, orig }: { zh?: string; orig: string }) {
@@ -212,6 +213,7 @@ export function HighlightsPanel({
             </button>
           </>
         )}
+        <ClipHistory episodeId={ep.id} />
         <button type="button" className="link-btn" onClick={() => setSortBy(sortBy === "score" ? "time" : "score")}>
           {sortBy === "score" ? t("按时间顺序") : t("按传播度")}
         </button>

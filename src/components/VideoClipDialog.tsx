@@ -23,6 +23,7 @@ import { Modal } from "./Chrome";
 import { ClipRangeBar } from "./ClipRangeBar";
 import { TextField } from "./TextField";
 import { ToggleChip } from "./ToggleChip";
+import { noteExport } from "../lib/clipHistory";
 import { cutAt, pauseCuts, toKeptTime } from "../lib/clipPauses";
 import { CLIP_PRESETS, matchPreset, type ClipPreset, type CoverMode } from "../lib/clipPresets";
 import { Seg } from "./ReadingSettings";
@@ -785,6 +786,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       });
       const elapsedSec = Math.max(0.1, (performance.now() - startedAt) / 1000);
       setExported({ ...result, elapsedSec });
+      noteExport({
+        path: result.videoPath, episodeId: ep.id, episodeTitle: ep.title,
+        title: title.trim() || (segments[startIdx]?.text ?? "").slice(0, 40),
+        duration: exportDur / speed + (coverMode === "hold" ? 1 : 0), aspect, at: Date.now(),
+      });
       notify(t("视频切片已导出到 {path}", { path: result.videoPath.replace(DOWNLOADS_DIR, tx("folder", "下载") + "/") }), {
         label: t("打开文件夹"),
         run: () => void api.revealFile(result.videoPath).catch(() => {}),
