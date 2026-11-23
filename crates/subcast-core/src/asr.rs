@@ -436,6 +436,23 @@ where F: Fn(PathBuf) -> Fut, Fut: std::future::Future<Output = Result<T>> {
 /// 通用; empty = never). Read from the browser each time, never stored by SubCast.
 pub static YT_BROWSER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
+/// Explicit Netscape cookie file path supplied by CLI or settings (never deleted by SubCast).
+pub static YT_COOKIES_FILE: once_cell::sync::Lazy<std::sync::RwLock<Option<PathBuf>>> =
+    once_cell::sync::Lazy::new(|| std::sync::RwLock::new(None));
+
+/// Optional desktop cookie provider callback (creates a temporary Netscape jar that SubCast deletes after one run).
+pub type CookieProvider = Box<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<PathBuf>> + Send>>
+        + Send
+        + Sync,
+>;
+
+static COOKIE_PROVIDER: std::sync::OnceLock<CookieProvider> = std::sync::OnceLock::new();
+
+pub fn set_cookie_provider(provider: CookieProvider) {
+    let _ = COOKIE_PROVIDER.set(provider);
+}
+
 /// A yt-dlp command with what YouTube needs today: a JavaScript runtime for its signature challenges (deno, node
 /// or bun, whichever this computer has; an app opened from the Dock doesn't see the terminal's PATH, so the usual
 /// install folders are added) and the app's proxy.
@@ -455,7 +472,7 @@ pub fn ytdlp_command(ytdlp: &Path) -> tokio::process::Command {
 }
 
 /// Runs a yt-dlp job and, when YouTube answers with its "confirm you're not a bot" check, tries other YouTube
-/// clients, then the listener's browser sign-in if they allowed one (Settings › 通用).
+/// clients, then a configured cookies file, desktop WebView sign-in, or the listener's browser sign-in.
 pub async fn with_bot_fallback<T, F, Fut>(job: F) -> Result<T>
 where F: Fn(Vec<String>) -> Fut, Fut: std::future::Future<Output = Result<T>> {
     match job(vec![]).await {
@@ -463,11 +480,17 @@ where F: Fn(Vec<String>) -> Fut, Fut: std::future::Future<Output = Result<T>> {
             let alt = vec!["--extractor-args".to_string(), "youtube:player_client=tv,web_safari,mweb".to_string()];
             match job(alt).await {
                 Err(e2) if bot_check(&e2.to_string()) => {
+                    let file_cookie = YT_COOKIES_FILE.read().unwrap().clone().filter(|p| p.is_file());
+                    if let Some(jar) = file_cookie {
+                        return job(vec!["--cookies".into(), jar.to_string_lossy().into_owned()]).await;
+                    }
                     // Signed in to YouTube in SubCast: that sign-in first, it needs no browser.
-                    if let Some(jar) = crate::ytlogin::cookie_file().await {
-                        let r = job(vec!["--cookies".into(), jar.to_string_lossy().into_owned()]).await;
-                        let _ = std::fs::remove_file(&jar);
-                        return r.map_err(|e3| if bot_check(&e3.to_string()) { anyhow!(YT_SIGN_IN_AGAIN) } else { e3 });
+                    if let Some(provider) = COOKIE_PROVIDER.get() {
+                        if let Some(jar) = provider().await {
+                            let r = job(vec!["--cookies".into(), jar.to_string_lossy().into_owned()]).await;
+                            let _ = std::fs::remove_file(&jar);
+                            return r.map_err(|e3| if bot_check(&e3.to_string()) { anyhow!(YT_SIGN_IN_AGAIN) } else { e3 });
+                        }
                     }
                     let browser = YT_BROWSER.read().unwrap().clone();
                     if browser.is_empty() { return Err(anyhow!("YouTube 要求验证「不是机器人」。选一个已登录 YouTube 的浏览器，SubCast 借用它的登录再试")); }

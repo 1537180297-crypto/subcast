@@ -62,7 +62,8 @@ pub fn upsert_episodes(conn: &mut Connection, eps: &[Episode]) -> Result<()> {
             "INSERT INTO episodes(id,show_id,guid,title,published,duration,audio_url,video_id,link,cover,notes,transcript_url,transcript_type,deep)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
              ON CONFLICT(id) DO UPDATE SET title=excluded.title, published=excluded.published, duration=COALESCE(excluded.duration, episodes.duration),
-             audio_url=COALESCE(excluded.audio_url, episodes.audio_url), link=excluded.link, cover=COALESCE(excluded.cover, episodes.cover),
+             audio_url=COALESCE(excluded.audio_url, episodes.audio_url), video_id=COALESCE(excluded.video_id, episodes.video_id),
+             link=excluded.link, cover=COALESCE(excluded.cover, episodes.cover),
              notes=COALESCE(excluded.notes, episodes.notes), transcript_url=excluded.transcript_url, transcript_type=excluded.transcript_type, deep=excluded.deep",
         )?;
         for e in eps {
@@ -261,6 +262,30 @@ pub fn set_blob(conn: &Connection, id: &str, kind: &str, data: &str) -> Result<(
     Ok(())
 }
 
+pub fn delete_blob(conn: &Connection, id: &str, kind: &str) -> Result<()> {
+    conn.execute("DELETE FROM blobs WHERE episode_id=?1 AND kind=?2", params![id, kind])?;
+    Ok(())
+}
+
+/// Atomic read-modify-write inside an IMMEDIATE transaction so CLI and GUI updates don't clobber each other.
+pub fn update_blob<F>(conn: &mut Connection, id: &str, kind: &str, f: F) -> Result<String>
+where
+    F: FnOnce(Option<String>) -> Result<String>,
+{
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let cur: Option<String> = tx
+        .query_row("SELECT data FROM blobs WHERE episode_id=?1 AND kind=?2", [id, kind], |r| r.get(0))
+        .optional()?;
+    let next = f(cur)?;
+    tx.execute("INSERT OR REPLACE INTO blobs(episode_id,kind,data) VALUES(?1,?2,?3)", params![id, kind, &next])?;
+    tx.commit()?;
+    Ok(next)
+}
+
+pub fn data_version(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("PRAGMA data_version", [], |r| r.get(0))?)
+}
+
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
     Ok(conn.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| r.get(0)).optional()?)
 }
@@ -331,6 +356,25 @@ mod tests {
         assert!(get_episode(&conn, "unplayed").unwrap().is_none());
         let cached = get_blob(&conn, &show.id, "show-json").unwrap().unwrap();
         assert_eq!(serde_json::from_str::<Show>(&cached).unwrap().feed_url, show.feed_url);
+    }
+
+    /// Audio first, video hours later (词元之外 uploads to YouTube after the podcast): a refresh that finds the
+    /// video fills it in, and one that doesn't find it (the channel feed failed) keeps it.
+    #[test]
+    fn a_video_found_later_is_kept() {
+        let path = std::env::temp_dir().join(format!("subcast-db-video-{}.sqlite", uuid::Uuid::new_v4()));
+        let mut conn = open(&path).unwrap();
+        let mut ep = Episode { id: "e".into(), show_id: "s".into(), guid: "g".into(), title: "#011".into(), audio_url: Some("a.mp3".into()), ..Default::default() };
+        upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
+        assert_eq!(get_episode(&conn, "e").unwrap().unwrap().video_id, None);
+        ep.video_id = Some("XQGJPVDBZPk".into());
+        upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
+        assert_eq!(get_episode(&conn, "e").unwrap().unwrap().video_id.as_deref(), Some("XQGJPVDBZPk"));
+        ep.video_id = None;
+        upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
+        assert_eq!(get_episode(&conn, "e").unwrap().unwrap().video_id.as_deref(), Some("XQGJPVDBZPk"));
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

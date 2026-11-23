@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri -> target
+          workspaces: . -> src-tauri/target
       - name: Linux dependencies
         if: startsWith(matrix.platform, 'ubuntu')
         run: |

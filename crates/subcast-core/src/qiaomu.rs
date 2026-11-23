@@ -196,7 +196,7 @@ struct YtVideo { id: String, num: Option<u32> }
 /// The channel's recent videos from its public feed (no API key, no yt-dlp needed).
 async fn youtube_videos(channel_id: &str) -> Vec<YtVideo> {
     let Ok(xml) = net::get_text(&format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")).await else { return vec![] };
-    Regex::new(r"(?s)<yt:videoId>s*([^<]+?)s*</yt:videoId>.*?<title>([^<]*)</title>").unwrap()
+    Regex::new(r"(?s)<yt:videoId>\s*([^<]+?)\s*</yt:videoId>.*?<title>([^<]*)</title>").unwrap()
         .captures_iter(&xml).map(|c| YtVideo { id: c[1].to_string(), num: episode_num(&c[2]) }).collect()
 }
 
@@ -217,7 +217,7 @@ fn original_feed(id: &str) -> Option<&'static str> {
     })
 }
 
-pub(crate) struct Borrowable { pub title: String, pub published: Option<i64>, pub audio: String, pub duration: Option<f64> }
+pub struct Borrowable { pub title: String, pub published: Option<i64>, pub audio: String, pub duration: Option<f64> }
 
 fn words(t: &str) -> std::collections::HashSet<String> {
     t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 3).map(String::from).collect()
@@ -232,7 +232,7 @@ fn overlap(a: &str, b: &str) -> f64 {
 /// The feed episode a Podscribe entry is a transcript of. Titles often differ (Podscribe sometimes carries the
 /// YouTube title), so an exact title wins, then a similar title published within about a day, then the only episode
 /// published within half a day, then a near-identical title from any date.
-pub(crate) fn find_audio<'a>(pool: &'a [Borrowable], title: &str, published: Option<i64>) -> Option<&'a Borrowable> {
+pub fn find_audio<'a>(pool: &'a [Borrowable], title: &str, published: Option<i64>) -> Option<&'a Borrowable> {
     let key = norm_title(title);
     if let Some(b) = pool.iter().find(|b| norm_title(&b.title) == key) { return Some(b); }
     const HOUR: i64 = 3600 * 1000;
@@ -246,7 +246,7 @@ pub(crate) fn find_audio<'a>(pool: &'a [Borrowable], title: &str, published: Opt
 }
 
 /// Podscribe episodes have transcripts but no audio: borrow it from the show's own feed, its whole archive included.
-pub(crate) async fn borrowable(id: &str, show_name: &str) -> Vec<Borrowable> {
+pub async fn borrowable(id: &str, show_name: &str) -> Vec<Borrowable> {
     let feed = match original_feed(id) {
         Some(f) => f.to_string(),
         None => match crate::feeds::search_podcasts(show_name, "US").await.ok().and_then(|r| r.into_iter().next()) { Some(r) => r.feed_url, None => return vec![] },
