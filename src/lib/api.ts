@@ -7,6 +7,16 @@ import type { Aligned, TimeMap } from "./timemap";
 /** One day-hour of listening to one episode (from the player; seeks don't count). */
 export interface ListenRow { day: string; hour: number; episodeId: string; showId: string; seconds: number; translated: boolean; showTitle: string; kind: string; cover: string; episodeTitle: string; video: boolean; duration: number; progress: number; published: number }
 
+export interface CliStatus {
+  bundled: boolean;
+  bundledPath: string | null;
+  installed: boolean;
+  linkPath: string | null;
+  targetPath: string | null;
+  needsUpdate: boolean;
+  inPath: boolean;
+}
+
 export interface ShowHit { episode: Episode; field: "title" | "notes" | "transcript"; snippet: string; time?: number | null }
 
 export interface Show {
@@ -205,6 +215,9 @@ export const api = {
   videoClipPrepare: (jobId: string, videoId: string, start: number, end: number, ranges?: [number, number][]) => invoke<PreparedClip>("video_clip_prepare", { jobId, videoId, start, end, ranges: ranges ?? null }),
   videoClipRender: (jobId: string, req: RenderVideoClipRequest) => invoke<RenderVideoClipResult>("video_clip_render", { jobId, req }),
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
+  dbDataVersion: () => invoke<number>("db_data_version"),
+  cliStatus: () => invoke<CliStatus>("cli_status"),
+  cliInstall: () => invoke<CliStatus>("cli_install"),
 };
 
 let llmCounter = 0;

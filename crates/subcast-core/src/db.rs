@@ -262,6 +262,30 @@ pub fn set_blob(conn: &Connection, id: &str, kind: &str, data: &str) -> Result<(
     Ok(())
 }
 
+pub fn delete_blob(conn: &Connection, id: &str, kind: &str) -> Result<()> {
+    conn.execute("DELETE FROM blobs WHERE episode_id=?1 AND kind=?2", params![id, kind])?;
+    Ok(())
+}
+
+/// Atomic read-modify-write inside an IMMEDIATE transaction so CLI and GUI updates don't clobber each other.
+pub fn update_blob<F>(conn: &mut Connection, id: &str, kind: &str, f: F) -> Result<String>
+where
+    F: FnOnce(Option<String>) -> Result<String>,
+{
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let cur: Option<String> = tx
+        .query_row("SELECT data FROM blobs WHERE episode_id=?1 AND kind=?2", [id, kind], |r| r.get(0))
+        .optional()?;
+    let next = f(cur)?;
+    tx.execute("INSERT OR REPLACE INTO blobs(episode_id,kind,data) VALUES(?1,?2,?3)", params![id, kind, &next])?;
+    tx.commit()?;
+    Ok(next)
+}
+
+pub fn data_version(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("PRAGMA data_version", [], |r| r.get(0))?)
+}
+
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
     Ok(conn.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| r.get(0)).optional()?)
 }

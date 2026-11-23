@@ -1762,6 +1762,22 @@ const dict: Record<string, string> = {
   "导出这 {n} 段": "Export these {n}",
   "本段导出后停止": "Stopping after this one",
   "第 {i}/{n} 段 · 停止": "{i}/{n} · Stop",
+  "命令行工具（CLI）": "Command-Line Tool (CLI)",
+  "已安装 subcast 命令": "Installed `subcast` command",
+  "正在检查…": "Checking…",
+  "仅发布版附带": "Included in release builds only",
+  "已安装": "Installed",
+  "需要更新链接": "Link needs update",
+  "未安装": "Not installed",
+  "在终端或 AI Agent 中通过 subcast 命令管理订阅、转写、翻译、导读、切片与生词本。": "Manage shows, transcription, translation, guides, clips, and vocabulary via `subcast` in your terminal or AI agent.",
+  "状态": "Status",
+  "请将 {dir} 加入 PATH 环境变量。": "Add {dir} to your PATH environment variable.",
+  "更新链接": "Update link",
+  "已就绪": "Ready",
+  "安装 subcast 命令": "Install `subcast` command",
+  "当前安装包里没有附带命令行程序（subcast-cli）": "No bundled CLI binary (subcast-cli) in this build",
+  "安装命令行工具失败": "Failed to install CLI command",
+  "找不到本地安装目录": "Local install directory not found",
 };
 
 export default dict;

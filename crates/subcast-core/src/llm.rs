@@ -3,13 +3,24 @@
 use crate::net;
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const KEYRING_SERVICE: &str = "ai.qiaomu.subcast";
+static NO_KEYCHAIN: AtomicBool = AtomicBool::new(false);
 
-#[derive(Deserialize, Clone, Debug)]
+pub fn set_no_keychain(skip: bool) {
+    NO_KEYCHAIN.store(skip, Ordering::Relaxed);
+}
+
+fn skip_keychain() -> bool {
+    NO_KEYCHAIN.load(Ordering::Relaxed)
+        || std::env::var("SUBCAST_NO_KEYCHAIN")
+            .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Provider {
     pub id: String,
@@ -18,7 +29,7 @@ pub struct Provider {
     pub model: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct Message {
     pub role: String,
     pub content: String,
@@ -34,8 +45,77 @@ pub fn set_key(provider: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
+fn std_env_var(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" | "asr.openai" | "tts.openai" => Some("OPENAI_API_KEY"),
+        "anthropic" => Some("ANTHROPIC_API_KEY"),
+        "deepseek" | "asr.deepseek" | "tts.deepseek" => Some("DEEPSEEK_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
+        "google-gemini" => Some("GEMINI_API_KEY"),
+        "groq" | "asr.groq" => Some("GROQ_API_KEY"),
+        "siliconflow" | "asr.siliconflow" | "tts.siliconflow" => Some("SILICONFLOW_API_KEY"),
+        "xai" => Some("XAI_API_KEY"),
+        "mistral" => Some("MISTRAL_API_KEY"),
+        "moonshot" => Some("MOONSHOT_API_KEY"),
+        "zhipu" | "asr.glm" => Some("ZHIPU_API_KEY"),
+        "qwen-cn" | "tts.qwen" => Some("DASHSCOPE_API_KEY"),
+        "tts.elevenlabs" => Some("ELEVENLABS_API_KEY"),
+        _ => None,
+    }
+}
+
+fn env_key_for(provider: &str) -> Option<String> {
+    let suffix: String = provider
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+        .collect();
+    let prefixed = format!("SUBCAST_API_KEY_{suffix}");
+    if let Ok(v) = std::env::var(&prefixed) {
+        let t = v.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    if let Some(name) = std_env_var(provider) {
+        if let Ok(v) = std::env::var(name) {
+            let t = v.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn get_key(provider: &str) -> Option<String> {
-    keyring::Entry::new(KEYRING_SERVICE, provider).ok()?.get_password().ok()
+    if let Some(v) = env_key_for(provider) {
+        return Some(v);
+    }
+    if skip_keychain() {
+        return None;
+    }
+    keyring::Entry::new(KEYRING_SERVICE, provider)
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+}
+
+pub fn key_source(provider: &str) -> Option<&'static str> {
+    if env_key_for(provider).is_some() {
+        return Some("env");
+    }
+    if skip_keychain() {
+        return None;
+    }
+    if keyring::Entry::new(KEYRING_SERVICE, provider)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .is_some_and(|k| !k.trim().is_empty())
+    {
+        return Some("keyring");
+    }
+    None
 }
 
 /// OpenCode Go/Zen refuses requests without this header (it drives prompt-cache routing).
