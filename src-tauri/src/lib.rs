@@ -789,6 +789,148 @@ async fn translate_texts(state: State<'_, AppState>, texts: Vec<String>, target:
 }
 
 #[tauri::command]
+fn db_data_version(state: State<'_, AppState>) -> Res<i64> {
+    db::data_version(&state.ctx.db.lock().unwrap()).map_err(e)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliStatus {
+    bundled: bool,
+    bundled_path: Option<String>,
+    installed: bool,
+    link_path: Option<String>,
+    target_path: Option<String>,
+    needs_update: bool,
+    in_path: bool,
+}
+
+fn bundled_cli_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let name = if cfg!(windows) { "subcast-cli.exe" } else { "subcast-cli" };
+    let candidate = dir.join(name);
+    candidate.is_file().then_some(candidate)
+}
+
+fn cli_install_candidates() -> Vec<std::path::PathBuf> {
+    let mut list = Vec::new();
+    #[cfg(unix)]
+    {
+        list.push(std::path::PathBuf::from("/usr/local/bin/subcast"));
+        if let Some(h) = dirs::home_dir() {
+            list.push(h.join(".local/bin/subcast"));
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Some(local) = dirs::data_local_dir() {
+            list.push(local.join("SubCast").join("bin").join("subcast.exe"));
+        }
+    }
+    list
+}
+
+fn dir_in_path(dir: &std::path::Path) -> bool {
+    let Ok(canon_dir) = std::fs::canonicalize(dir) else {
+        return std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|x| x == dir));
+    };
+    std::env::var_os("PATH").is_some_and(|p| {
+        std::env::split_paths(&p).any(|x| x == dir || std::fs::canonicalize(&x).ok().as_ref() == Some(&canon_dir))
+    })
+}
+
+fn inspect_cli_status() -> CliStatus {
+    let bundled = bundled_cli_path();
+    let bundled_canon = bundled.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
+    let mut installed = false;
+    let mut link_path = None;
+    let mut target_path = None;
+    let mut needs_update = false;
+    let mut in_path = false;
+
+    for cand in cli_install_candidates() {
+        if let Ok(meta) = std::fs::symlink_metadata(&cand) {
+            if meta.file_type().is_symlink() || meta.is_file() {
+                installed = true;
+                link_path = Some(cand.to_string_lossy().into_owned());
+                let resolved = std::fs::canonicalize(&cand).ok();
+                target_path = resolved.as_ref().map(|p| p.to_string_lossy().into_owned());
+                if let (Some(b), Some(r)) = (bundled_canon.as_ref(), resolved.as_ref()) {
+                    needs_update = b != r;
+                } else if bundled_canon.is_some() {
+                    needs_update = true;
+                }
+                if let Some(parent) = cand.parent() {
+                    in_path = dir_in_path(parent);
+                }
+                break;
+            }
+        }
+    }
+
+    CliStatus {
+        bundled: bundled.is_some(),
+        bundled_path: bundled.map(|p| p.to_string_lossy().into_owned()),
+        installed,
+        link_path,
+        target_path,
+        needs_update,
+        in_path,
+    }
+}
+
+#[tauri::command]
+fn cli_status() -> CliStatus {
+    inspect_cli_status()
+}
+
+#[tauri::command]
+fn cli_install() -> Res<CliStatus> {
+    let bundled = bundled_cli_path().ok_or_else(|| "当前安装包里没有附带命令行程序（subcast-cli）".to_string())?;
+    #[cfg(unix)]
+    {
+        let mut last_err: Option<String> = None;
+        for cand in cli_install_candidates() {
+            if let Some(parent) = cand.parent() {
+                if !parent.exists() {
+                    if let Err(err) = std::fs::create_dir_all(parent) {
+                        last_err = Some(err.to_string());
+                        continue;
+                    }
+                }
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(&cand) {
+                if meta.file_type().is_symlink() {
+                    if let Err(err) = std::fs::remove_file(&cand) {
+                        last_err = Some(err.to_string());
+                        continue;
+                    }
+                } else {
+                    last_err = Some(format!("{} 已存在且不是软链接，已跳过以免覆盖其他程序", cand.display())); // i18n-ignore
+                    continue;
+                }
+            }
+            match std::os::unix::fs::symlink(&bundled, &cand) {
+                Ok(()) => return Ok(inspect_cli_status()),
+                Err(err) => last_err = Some(err.to_string()),
+            }
+        }
+        return Err(last_err.unwrap_or_else(|| "安装命令行工具失败".to_string()));
+    }
+    #[cfg(windows)]
+    {
+        let dest = cli_install_candidates().into_iter().next().ok_or("找不到本地安装目录")?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(e)?;
+        }
+        std::fs::copy(&bundled, &dest).map_err(e)?;
+        Ok(inspect_cli_status())
+    }
+}
+
+#[tauri::command]
 fn set_menu_labels(app: AppHandle, labels: Vec<String>) -> Res<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     for sub in menu.items().map_err(e)? {
@@ -880,7 +1022,8 @@ pub fn run() {
             app_update_check, app_update_download, app_update_install,
             shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
             download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete,
-            video_clip_env, video_clip_warm, video_clip_prepare, video_clip_render, reveal_file
+            video_clip_env, video_clip_warm, video_clip_prepare, video_clip_render, reveal_file,
+            db_data_version, cli_status, cli_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

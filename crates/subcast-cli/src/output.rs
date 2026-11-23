@@ -1,6 +1,6 @@
 //! Output formatting (`human`, `--json`, `--jsonl`, `--quiet`) and stderr progress sink.
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use subcast_core::{ProgressEvent, ProgressSink};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,12 +39,6 @@ impl Out {
             Mode::Jsonl => self.emit_jsonl(&json!({ "type": "result", "data": value })),
             Mode::Quiet => {}
             Mode::Human => human_fn(),
-        }
-    }
-
-    pub fn message(&self, msg: &str) {
-        if matches!(self.mode, Mode::Human) {
-            println!("{msg}");
         }
     }
 
@@ -93,21 +87,46 @@ impl ProgressSink for CliSink {
                             format!("[{stage}] {message}")
                         }
                     }
-                    ProgressEvent::Transcribe { stage, detail, .. } => format!("[transcribe:{stage}] {detail}"),
-                    ProgressEvent::Model { progress, .. } => format!("[model] {:.0}%", (progress * 100.0).clamp(0.0, 100.0)),
-                    ProgressEvent::LocalTts { progress, .. } => format!("[local-tts] {:.0}%", (progress * 100.0).clamp(0.0, 100.0)),
-                    ProgressEvent::Download { progress, .. } => format!("[download] {:.0}%", (progress * 100.0).clamp(0.0, 100.0)),
-                    ProgressEvent::Align { stage, detail, .. } => format!("[align:{stage}] {detail}"),
+                    ProgressEvent::Asr { stage, progress, message, .. } => {
+                        let m = message.unwrap_or_default();
+                        format!("[asr:{stage}] {:.0}% {m}", (progress * 100.0).clamp(0.0, 100.0))
+                    }
+                    ProgressEvent::LlmDelta { .. } | ProgressEvent::ShadowLevel { .. } => return,
+                    ProgressEvent::ModelDownload { id, received, total } => {
+                        if let Some(t) = total.filter(|&t| t > 0) {
+                            format!("[model:{id}] {:.0}%", (received as f64 / t as f64 * 100.0).clamp(0.0, 100.0))
+                        } else {
+                            format!("[model:{id}] {received} bytes")
+                        }
+                    }
+                    ProgressEvent::LocalTtsDownload { id, received, total } => {
+                        if let Some(t) = total.filter(|&t| t > 0) {
+                            format!("[local-tts:{id}] {:.0}%", (received as f64 / t as f64 * 100.0).clamp(0.0, 100.0))
+                        } else {
+                            format!("[local-tts:{id}] {received} bytes")
+                        }
+                    }
+                    ProgressEvent::Download { progress, .. } => {
+                        if let Some(p) = progress {
+                            format!("[download] {:.0}%", (p * 100.0).clamp(0.0, 100.0))
+                        } else {
+                            "[download] working…".into()
+                        }
+                    }
+                    ProgressEvent::Align { progress, .. } => {
+                        if let Some(p) = progress {
+                            format!("[align] {:.0}%", (p * 100.0).clamp(0.0, 100.0))
+                        } else {
+                            "[align] working…".into()
+                        }
+                    }
                     ProgressEvent::VideoClip { stage, progress, message, .. } => {
                         format!("[clip:{stage}] {:.0}% {message}", (progress * 100.0).clamp(0.0, 100.0))
                     }
-                    ProgressEvent::YouTubeStream { episode_id } => format!("[youtube-stream] ready ({episode_id})"),
-                    ProgressEvent::YouTubeLogin { done, ok, error } => {
-                        format!("[youtube-login] done={done} ok={ok} {:?}", error)
+                    ProgressEvent::YtStream { stage, progress, .. } => {
+                        format!("[yt:{stage}] {:.0}%", (progress * 100.0).clamp(0.0, 100.0))
                     }
-                    ProgressEvent::AppUpdate { downloaded, total } => {
-                        format!("[update] {downloaded}/{total:?}")
-                    }
+                    ProgressEvent::SharedUpload { action } => format!("[shared] {action}"),
                 };
                 eprintln!("{text}");
             }
@@ -137,17 +156,5 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
         out
     } else {
         chars[..max_chars].iter().collect()
-    }
-}
-
-pub fn print_kv(pairs: &[(&str, Value)]) {
-    let width = pairs.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-    for (k, v) in pairs {
-        let vs = match v {
-            Value::String(s) => s.clone(),
-            Value::Null => "-".into(),
-            other => other.to_string(),
-        };
-        println!("{k:<width$} : {vs}");
     }
 }

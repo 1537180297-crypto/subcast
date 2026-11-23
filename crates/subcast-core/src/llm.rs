@@ -8,6 +8,17 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const KEYRING_SERVICE: &str = "ai.qiaomu.subcast";
+static NO_KEYCHAIN: AtomicBool = AtomicBool::new(false);
+
+pub fn set_no_keychain(skip: bool) {
+    NO_KEYCHAIN.store(skip, Ordering::Relaxed);
+}
+
+fn skip_keychain() -> bool {
+    NO_KEYCHAIN.load(Ordering::Relaxed)
+        || std::env::var("SUBCAST_NO_KEYCHAIN")
+            .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -80,6 +91,9 @@ pub fn get_key(provider: &str) -> Option<String> {
     if let Some(v) = env_key_for(provider) {
         return Some(v);
     }
+    if skip_keychain() {
+        return None;
+    }
     keyring::Entry::new(KEYRING_SERVICE, provider)
         .ok()?
         .get_password()
@@ -90,6 +104,9 @@ pub fn get_key(provider: &str) -> Option<String> {
 pub fn key_source(provider: &str) -> Option<&'static str> {
     if env_key_for(provider).is_some() {
         return Some("env");
+    }
+    if skip_keychain() {
+        return None;
     }
     if keyring::Entry::new(KEYRING_SERVICE, provider)
         .ok()

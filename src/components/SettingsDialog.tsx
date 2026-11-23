@@ -3,7 +3,7 @@ import { sizeMb } from "../lib/format";
 import { ask } from "../lib/confirm";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
-import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Trash2, Volume2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, GraduationCap, type LucideIcon } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Cloud, Cpu, ExternalLink, FolderOpen, Github, Loader2, MessageCircle, RefreshCw, Terminal, Trash2, Volume2, X, Captions, HardDrive, Info, Keyboard, SlidersHorizontal, Sparkles, GraduationCap, type LucideIcon } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { ASR_SERVICES, CLOUD_ASR_MAIN } from "../lib/settings";
 import { stopSpeaking } from "../lib/tts";
@@ -11,7 +11,7 @@ import logoUrl from "../assets/logo.png";
 import wechatQr from "../assets/about-wechat-qr.jpg";
 import rewardQr from "../assets/about-reward-qr.png";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { api, errorText, llmChat, type CloudAsr, type ModelInfo, type Provider } from "../lib/api";
+import { api, errorText, llmChat, type CliStatus, type CloudAsr, type ModelInfo, type Provider } from "../lib/api";
 import { useStore } from "../store";
 import { bytes, clearAudioCache, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
@@ -147,6 +147,7 @@ export function SettingsView() {
   const [moreCloud, setMoreCloud] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
+  const [showCli, setShowCli] = useState(false);
   const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["tts", tk("朗读"), Volume2], ["general", tk("通用"), SlidersHorizontal], ["learn", tk("学英语"), GraduationCap], ["about", tk("关于"), Info]];
   const modelRow = (m: ModelInfo) => (
     <div key={m.id} className={`model-item ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`}>
@@ -269,6 +270,8 @@ export function SettingsView() {
                 {showKeys && <ShortcutSettings />}
                 <button className="setting-row" aria-expanded={showStorage} onClick={() => setShowStorage(!showStorage)}><HardDrive size={15} /> <span>{t("存储")}</span><StorageTotal /><ChevronDown size={14} className={showStorage ? "flip" : ""} /></button>
                 {showStorage && <Storage onAsr={() => setSection("subtitles")} />}
+                <button className="setting-row" aria-expanded={showCli} onClick={() => setShowCli(!showCli)}><Terminal size={15} /> <span>{t("命令行工具（CLI）")}</span><span className="muted small">subcast</span><ChevronDown size={14} className={showCli ? "flip" : ""} /></button>
+                {showCli && <CliSettings />}
               </section>
             </>
           )}
@@ -438,6 +441,55 @@ function Storage({ onAsr }: { onAsr: () => void }) {
         )}
       </div>
     </>
+  );
+}
+
+function CliSettings() {
+  const notify = useStore((s) => s.notify);
+  const [status, setStatus] = useState<CliStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => { void api.cliStatus().then(setStatus).catch(() => {}); };
+  useEffect(load, []);
+
+  const install = async () => {
+    setBusy(true);
+    try {
+      const next = await api.cliInstall();
+      setStatus(next);
+      notify(t("已安装 subcast 命令"));
+    } catch (e) {
+      notify(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!status) return <p className="muted small">{t("正在检查…")}</p>;
+  const badge = !status.bundled
+    ? t("仅发布版附带")
+    : status.installed && !status.needsUpdate
+      ? t("已安装")
+      : status.needsUpdate
+        ? t("需要更新链接")
+        : t("未安装");
+
+  return (
+    <div className="provider-form">
+      <p className="muted small">{t("在终端或 AI Agent 中通过 subcast 命令管理订阅、转写、翻译、导读、切片与生词本。")}</p>
+      <p className="small"><span>{t("状态")}：{badge}</span>{status.linkPath ? ` · ${status.linkPath}` : ""}</p>
+      {status.installed && !status.inPath && status.linkPath && (
+        <p className="muted small">{t("请将 {dir} 加入 PATH 环境变量。", { dir: status.linkPath.replace(/[/\\][^/\\]+$/, "") })}</p>
+      )}
+      {status.bundled && (
+        <div className="row-actions">
+          <button className="btn sm" disabled={busy || (status.installed && !status.needsUpdate)} onClick={install}>
+            {busy ? <Loader2 size={13} className="spin" /> : <Terminal size={13} />}
+            {status.needsUpdate ? t("更新链接") : status.installed ? t("已就绪") : t("安装 subcast 命令")}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

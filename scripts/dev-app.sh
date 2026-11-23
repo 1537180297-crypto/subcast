@@ -22,6 +22,8 @@ fi
 osascript -e 'quit app id "ai.qiaomu.subcast"' >/dev/null 2>&1 || true
 
 APPLE_SIGNING_IDENTITY="$IDENTITY" npx tauri build --debug --bundles app --no-sign
+cargo build -p subcast-cli
+cp src-tauri/target/debug/subcast-cli "$APP/Contents/MacOS/subcast-cli"
 # Tauri signs when APPLE_SIGNING_IDENTITY is set; sign again explicitly so the result never depends on that.
 codesign --force --deep --options runtime --entitlements src-tauri/Entitlements.plist --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"

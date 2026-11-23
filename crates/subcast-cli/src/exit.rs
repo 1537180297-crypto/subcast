@@ -93,3 +93,15 @@ impl From<anyhow::Error> for CliError {
         Self::from_anyhow(value)
     }
 }
+
+impl From<std::io::Error> for CliError {
+    fn from(value: std::io::Error) -> Self {
+        Self::from_anyhow(value.into())
+    }
+}
+
+impl From<serde_json::Error> for CliError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::new(ERR, "json", value.to_string())
+    }
+}

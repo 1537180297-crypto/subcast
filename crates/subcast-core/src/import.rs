@@ -206,6 +206,26 @@ pub fn opml(shows: &[(String, String)]) -> String {
     out
 }
 
+/// Parses an OPML XML file into `(title, xml_url)` pairs.
+pub fn parse_opml(xml: &str) -> Result<Vec<(String, String)>> {
+    let doc = roxmltree::Document::parse(xml)?;
+    let mut out = Vec::new();
+    for node in doc.descendants().filter(|n| n.has_tag_name("outline")) {
+        let Some(url) = node.attribute("xmlUrl").or_else(|| node.attribute("xmlurl")).map(str::trim).filter(|u| !u.is_empty()) else {
+            continue;
+        };
+        let title = node
+            .attribute("text")
+            .or_else(|| node.attribute("title"))
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(url)
+            .to_string();
+        out.push((title, url.to_string()));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
