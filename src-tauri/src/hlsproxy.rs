@@ -210,4 +210,27 @@ mod live {
         println!("{url}");
         tokio::time::sleep(std::time::Duration::from_secs(50)).await;
     }
+
+    /// HLS_VIDEO: a YouTube id with AI-dubbed audio. Gets its HLS address the way the app does, serves the
+    /// master through `master_only`, and has ffprobe play it: prints the audio languages left.
+    #[tokio::test]
+    #[ignore]
+    async fn native_master_keeps_original_audio() {
+        let Ok(id) = std::env::var("HLS_VIDEO") else { return };
+        let data = dirs::data_dir().unwrap().join("ai.qiaomu.subcast");
+        crate::asr::streams::init(&data);
+        let bin = crate::asr::find_ytdlp(&data).unwrap();
+        let url = crate::asr::youtube_stream_url(&bin, &id, true, true).await.unwrap();
+        println!("source: {}", &url[..url.len().min(90)]);
+        let raw = crate::net::client().get(&url).send().await.unwrap().text().await.unwrap();
+        let langs = |p: &str| p.lines().filter(|l| l.starts_with("#EXT-X-MEDIA") && l.contains("TYPE=AUDIO")).filter_map(|l| super::attr(l, "LANGUAGE").map(String::from)).collect::<std::collections::BTreeSet<_>>();
+        println!("audio languages in YouTube's master: {:?}", langs(&raw));
+        println!("after filtering: {:?}", langs(&super::original_audio_only(&raw)));
+        let local = super::master_only(&url).await.unwrap();
+        let ff = crate::videoclip::find_ffmpeg(&data).unwrap();
+        let probe = ff.with_file_name("ffprobe");
+        let probe = if probe.exists() { probe } else { std::path::PathBuf::from("/opt/homebrew/bin/ffprobe") };
+        let out = tokio::process::Command::new(probe).args(["-v", "error", "-show_entries", "stream=codec_type,codec_name:stream_tags=language,variant_bitrate", "-of", "compact", &local]).output().await.unwrap();
+        println!("ffprobe via proxy (ok={}):\n{}{}", out.status.success(), String::from_utf8_lossy(&out.stdout).lines().take(12).collect::<Vec<_>>().join("\n"), String::from_utf8_lossy(&out.stderr).lines().take(3).collect::<Vec<_>>().join("\n"));
+    }
 }
