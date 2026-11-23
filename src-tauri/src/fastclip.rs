@@ -111,7 +111,8 @@ async fn resolve(ytdlp: &Path, video_id: &str, max_h: u32) -> Result<Pair> {
     let headers: Vec<(String, String)> = vf["http_headers"].as_object().map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect()).unwrap_or_default();
     let audio = formats.iter().filter(https)
         .filter(|f| f["acodec"].as_str().is_some_and(|a| a.starts_with("mp4a")) && f["vcodec"].as_str() == Some("none"))
-        .max_by_key(|f| (f["abr"].as_f64().unwrap_or(0.0) * 10.0) as u64)
+        // The original language before bitrate: YouTube's AI dubs come at the same bitrate as the original.
+        .max_by_key(|f| (asr::audio_rank(f), (f["abr"].as_f64().unwrap_or(0.0) * 10.0) as i64, !f["format_id"].as_str().unwrap_or("").contains("drc")))
         .and_then(|f| f["url"].as_str().map(String::from))
         .ok_or_else(|| anyhow!("这个视频没有可分段下载的音频"))?;
     let pair = Pair { video, audio, headers };

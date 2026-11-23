@@ -55,6 +55,20 @@ function markBlocked(videoId?: string) {
   try { localStorage.setItem(BLOCKED_KEY, JSON.stringify([...blockedIds(), videoId].slice(-500))); } catch { /* storage unavailable */ }
 }
 
+// Videos the listener switched to the original audio (YouTube's embedded player picks an AI dub by region or
+// language and has no audio menu here): played through the direct stream, which keeps only the original track.
+const ORIGINAL_KEY = "subcast-yt-original";
+function originalIds(): string[] { try { return JSON.parse(localStorage.getItem(ORIGINAL_KEY) ?? "[]"); } catch { return []; } }
+export const wantsOriginalAudio = (videoId?: string) => !!videoId && originalIds().includes(videoId);
+/** Asks the video on screen to switch to its original audio (SubtitleTune's "换成原声"). */
+export function switchToOriginalAudio(videoId?: string) {
+  if (!videoId) return;
+  if (!wantsOriginalAudio(videoId)) {
+    try { localStorage.setItem(ORIGINAL_KEY, JSON.stringify([...originalIds(), videoId].slice(-500))); } catch { /* storage unavailable */ }
+  }
+  window.dispatchEvent(new CustomEvent("subcast-original-audio", { detail: videoId }));
+}
+
 /** Playback asked for, sound not there yet: the controls show it, and say more if it takes long. */
 export const waiting = (on: boolean) => { const s = useStore.getState(); if (on ? !s.loadingSince : s.loadingSince) s.set({ loadingSince: on ? Date.now() : null }); };
 let lastSaved = 0;
@@ -263,8 +277,17 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   };
   useEffect(() => { setNative(null); setError(null); setDenied(null); retried.current = false; }, [ep.id]);
   // Known to refuse embedding: skip the embedded player and fetch the direct stream right away.
-  const [direct] = useState(() => wasBlocked(ep.videoId));
-  useEffect(() => { if (direct) void fallback(t("作者限制了嵌入播放")); }, []);
+  const [direct, setDirect] = useState(() => wasBlocked(ep.videoId) || wantsOriginalAudio(ep.videoId));
+  useEffect(() => { if (direct) void fallback(wasBlocked(ep.videoId) ? t("作者限制了嵌入播放") : t("使用原声")); }, []);
+  useEffect(() => {
+    const on = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== ep.videoId || native) return;
+      setDirect(true);
+      void fallback(t("切换到原声"));
+    };
+    window.addEventListener("subcast-original-audio", on);
+    return () => window.removeEventListener("subcast-original-audio", on);
+  }, [ep.videoId, native]);
   // Have yt-dlp ready before it is needed: a first fallback would otherwise start with a 35 MB download.
   useEffect(() => { void api.prepareYoutube().catch(() => {}); }, []);
   const watchOnYouTube = () => {

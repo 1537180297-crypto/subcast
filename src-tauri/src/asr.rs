@@ -630,6 +630,13 @@ pub mod streams {
     }
 }
 
+/// How much a format's sound is the video's own: yt-dlp gives the original-language track a higher
+/// `language_preference` than YouTube's AI dubs (same bitrate, other language), so this goes first in any choice.
+pub fn audio_rank(f: &serde_json::Value) -> i64 {
+    let note = f["format_note"].as_str().unwrap_or("").to_lowercase();
+    f["language_preference"].as_i64().unwrap_or(0) + if note.contains("original") { 100 } else { 0 } - if note.contains("dubbed") { 100 } else { 0 }
+}
+
 async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) -> Result<String> {
     warm_ytdlp(ytdlp).await;
     let mut cmd = ytdlp_command(ytdlp);
@@ -648,7 +655,7 @@ async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) 
     // Progressive files with both audio and video (format 18, 360p, is the one nearly every video has).
     formats.iter().rev()
         .filter(|f| f["vcodec"].as_str().is_some_and(|v| v != "none") && f["acodec"].as_str().is_some_and(|a| a != "none") && f["protocol"].as_str() == Some("https"))
-        .max_by_key(|f| (f["ext"].as_str() == Some("mp4"), f["height"].as_i64().unwrap_or(0)))
+        .max_by_key(|f| (audio_rank(f), f["ext"].as_str() == Some("mp4"), f["height"].as_i64().unwrap_or(0)))
         .and_then(|f| f["url"].as_str().map(str::to_string))
         .ok_or_else(|| anyhow!("这个视频没有可直接播放的格式"))
 }

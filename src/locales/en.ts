@@ -1718,6 +1718,12 @@ const dict: Record<string, string> = {
   "大字标题": "Title",
   "副标题": "Subtitle",
   "眉标": "Kicker",
+  "使用原声": "Using the original audio",
+  "切换到原声": "Switching to the original audio",
+  "音轨": "Audio",
+  "原声": "Original",
+  "YouTube 可能按地区自动播放 AI 配音，点这里改回原声": "YouTube may play an AI dub based on your region; switch back to the original audio",
+  "听到的是配音？换成原声": "Hearing a dub? Use original audio",
 };
 
 export default dict;

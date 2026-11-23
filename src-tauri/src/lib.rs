@@ -850,6 +850,8 @@ async fn youtube_stream(app: AppHandle, state: State<'_, AppState>, video_id: St
     // yt-dlp falls back to an MP4 when a video has no HLS.
     let is_hls = url.contains("m3u8") || url.contains("/manifest/hls");
     if is_hls && mode == "proxy-hls" { return Ok(VideoStream { url: hlsproxy::proxied(&url).await.map_err(e)?, kind: "hls" }); }
+    // The WebView plays HLS itself: only the top playlist goes through the proxy, to keep the original audio.
+    if is_hls { return Ok(VideoStream { url: hlsproxy::master_only(&url).await.map_err(e)?, kind: "hls" }); }
     Ok(VideoStream { url, kind: if is_hls { "hls" } else { "mp4" } })
 }
 
