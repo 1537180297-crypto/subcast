@@ -1628,7 +1628,6 @@ const dict: Record<string, string> = {
   "加字幕": "Add subtitles",
   "原视频已有字幕，默认不加": "Source has subtitles; off by default",
   "SubCast 水印": "SubCast watermark",
-  "底部署名（可选），如你的账号名或品牌": "Footer line (optional), e.g. your account or brand",
   "获取视频地址超时": "Timed out getting the video address",
   "无法获取视频地址：{}": "Couldn't get the video address: {}",
   "这个视频没有可分段下载的 H.264 画面": "This video has no H.264 stream that can be fetched in parts",
@@ -1713,6 +1712,12 @@ const dict: Record<string, string> = {
   "提前一句": "One sentence earlier",
   "推后一句": "One sentence later",
   "留白": "Padding",
+  "金句标题": "Headline",
+  "底部署名": "Byline",
+  "账号名或品牌，可不填": "Your account or brand (optional)",
+  "大字标题": "Title",
+  "副标题": "Subtitle",
+  "眉标": "Kicker",
 };
 
 export default dict;

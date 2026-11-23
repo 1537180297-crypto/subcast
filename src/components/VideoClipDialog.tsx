@@ -21,6 +21,8 @@ import { isZh } from "../lib/zh";
 import { useStore } from "../store";
 import { Modal } from "./Chrome";
 import { ClipRangeBar } from "./ClipRangeBar";
+import { TextField } from "./TextField";
+import { ToggleChip } from "./ToggleChip";
 import { cutAt, pauseCuts, toKeptTime } from "../lib/clipPauses";
 import { CLIP_PRESETS, matchPreset, type ClipPreset, type CoverMode } from "../lib/clipPresets";
 import { Seg } from "./ReadingSettings";
@@ -1254,15 +1256,24 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               )}
               <details className="vclip-sec vclip-adv">
                 <summary className="vclip-sec-head"><span className="vclip-label">{t("标题与署名")}</span><span className="small muted clamp1">{showTitle ? title : t("不显示标题")}</span></summary>
-                <div className="vclip-toggles">
-                  <label><input type="checkbox" checked={showTitle} onChange={(e) => setShowTitle(e.target.checked)} /> {t("顶部金句标题")}</label>
-                  <label><input type="checkbox" checked={showSource} onChange={(e) => setShowSource(e.target.checked)} /> {t("节目出处")}</label>
-                  <label><input type="checkbox" checked={watermark} onChange={(e) => setWatermark(e.target.checked)} /> {t("SubCast 水印")}</label>
+                <div className="vclip-chips">
+                  <ToggleChip on={showTitle} onChange={setShowTitle}>{t("顶部金句标题")}</ToggleChip>
+                  <ToggleChip on={showSource} onChange={setShowSource}>{t("节目出处")}</ToggleChip>
+                  <ToggleChip on={watermark} onChange={setWatermark}>{t("SubCast 水印")}</ToggleChip>
                 </div>
-                {showTitle && (
-                  <input className="vclip-title-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("输入切片顶部金句标题")} />
-                )}
-                <input className="vclip-title-input" value={brandText} onChange={(e) => setBrandText(e.target.value)} placeholder={t("底部署名（可选），如你的账号名或品牌")} />
+                <div className="vclip-fields">
+                  {showTitle && (
+                    <div className="vclip-field">
+                      <span>{t("金句标题")}</span>
+                      <TextField value={title} onValue={setTitle} clearable placeholder={t("输入切片顶部金句标题")} aria-label={t("金句标题")}
+                        suffix={title ? <span className="num">{[...title].length}</span> : undefined} />
+                    </div>
+                  )}
+                  <div className="vclip-field">
+                    <span>{t("底部署名")}</span>
+                    <TextField value={brandText} onValue={setBrandText} clearable placeholder={t("账号名或品牌，可不填")} aria-label={t("底部署名")} />
+                  </div>
+                </div>
               </details>
               <details className="vclip-sec vclip-adv">
                 <summary className="vclip-sec-head">
@@ -1325,9 +1336,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                           {isEditing ? (
                             <div className="vclip-edit-box" onClick={(e) => e.stopPropagation()}>
                               {hasZh && (
-                                <input value={zhText} placeholder={t("中文译文")} onChange={(e) => setZhEdits((m) => ({ ...m, [idx]: e.target.value }))} />
+                                <TextField size="sm" value={zhText} placeholder={t("中文译文")} aria-label={t("中文译文")} onValue={(v) => setZhEdits((m) => ({ ...m, [idx]: v }))} />
                               )}
-                              <input value={origText} placeholder={t("原文")} onChange={(e) => setOrigEdits((m) => ({ ...m, [idx]: e.target.value }))} />
+                              <TextField size="sm" value={origText} placeholder={t("原文")} aria-label={t("原文")} onValue={(v) => setOrigEdits((m) => ({ ...m, [idx]: v }))} onEnter={() => setEditingIdx(null)} />
                               <div className="vclip-edit-actions">
                                 <button type="button" className="btn ghost sm" onClick={() => {
                                   setZhEdits((m) => { const n = { ...m }; delete n[idx]; return n; });
@@ -1371,10 +1382,19 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     </button>
                   ))}
                 </div>
-                <input className="vclip-title-input" value={coverHook} onChange={(e) => setCoverHook(e.target.value)} placeholder={t("封面大字标题，如：未来三年，【会提问的人】胜出")} />
-                <div className="vclip-cover-inputs">
-                  <input className="vclip-title-input" value={coverSub} onChange={(e) => setCoverSub(e.target.value)} placeholder={t("副标题钩子（可选）")} />
-                  <input className="vclip-title-input" value={coverKicker} onChange={(e) => setCoverKicker(e.target.value)} placeholder={t("顶部眉标（节目名）")} />
+                <div className="vclip-fields">
+                  <div className="vclip-field">
+                    <span>{t("大字标题")}</span>
+                    <TextField value={coverHook} onValue={setCoverHook} clearable placeholder={t("封面大字标题，如：未来三年，【会提问的人】胜出")} aria-label={t("大字标题")} />
+                  </div>
+                  <div className="vclip-field">
+                    <span>{t("副标题")}</span>
+                    <TextField value={coverSub} onValue={setCoverSub} clearable placeholder={t("副标题钩子（可选）")} aria-label={t("副标题")} />
+                  </div>
+                  <div className="vclip-field">
+                    <span>{t("眉标")}</span>
+                    <TextField value={coverKicker} onValue={setCoverKicker} clearable placeholder={t("顶部眉标（节目名）")} aria-label={t("眉标")} />
+                  </div>
                 </div>
               </section>
 
@@ -1423,11 +1443,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                       ? t("片头静态展示 1 秒爆款封面后再开讲，音画同步顺延，适合直接发朋友圈与公众号视频。")
                       : t("正片开头不压封面，仅通过下方选项内嵌缩略图或保存独立封面 PNG。")}
                 </p>
-                <div className="vclip-toggles">
-                  <label><input type="checkbox" checked={embedThumbnail} onChange={(e) => setEmbedThumbnail(e.target.checked)} /> {t("内嵌视频缩略图")}</label>
-                  <label><input type="checkbox" checked={saveCoverSidecar} onChange={(e) => setSaveCoverSidecar(e.target.checked)} /> {t("同目录保存封面 PNG")}</label>
+                <div className="vclip-chips">
+                  <ToggleChip on={embedThumbnail} onChange={setEmbedThumbnail}>{t("内嵌视频缩略图")}</ToggleChip>
+                  <ToggleChip on={saveCoverSidecar} onChange={setSaveCoverSidecar}>{t("同目录保存封面 PNG")}</ToggleChip>
                   {videoCoverAspect !== "16:9" && saveCoverSidecar && (
-                    <label><input type="checkbox" checked={extraLandscapeCover} onChange={(e) => setExtraLandscapeCover(e.target.checked)} /> {t("附带 16:9 横版封面（公众号/B站）")}</label>
+                    <ToggleChip on={extraLandscapeCover} onChange={setExtraLandscapeCover}>{t("附带 16:9 横版封面（公众号/B站）")}</ToggleChip>
                   )}
                 </div>
                 <div className="vclip-cover-actions">
