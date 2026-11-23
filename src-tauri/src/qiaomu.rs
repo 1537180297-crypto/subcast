@@ -196,7 +196,7 @@ struct YtVideo { id: String, num: Option<u32> }
 /// The channel's recent videos from its public feed (no API key, no yt-dlp needed).
 async fn youtube_videos(channel_id: &str) -> Vec<YtVideo> {
     let Ok(xml) = net::get_text(&format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")).await else { return vec![] };
-    Regex::new(r"(?s)<yt:videoId>s*([^<]+?)s*</yt:videoId>.*?<title>([^<]*)</title>").unwrap()
+    Regex::new(r"(?s)<yt:videoId>\s*([^<]+?)\s*</yt:videoId>.*?<title>([^<]*)</title>").unwrap()
         .captures_iter(&xml).map(|c| YtVideo { id: c[1].to_string(), num: episode_num(&c[2]) }).collect()
 }
 
