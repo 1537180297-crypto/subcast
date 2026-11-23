@@ -9,7 +9,7 @@ import { t, useLang } from "../lib/i18n";
 import { subtitleModeFor, subtitleModePatch, type SubtitleMode } from "../lib/settings";
 import { ACTIONS, prettyCombo } from "../lib/shortcuts";
 import { Seg, SubSizeSliders } from "./ReadingSettings";
-import { toggleTheater } from "./Players";
+import { switchToOriginalAudio, toggleTheater, wantsOriginalAudio } from "./Players";
 
 export function SubtitleTune({ ep }: { ep?: Episode }) {
   const [open, setOpen] = useState(false);
@@ -56,6 +56,14 @@ export function SubtitleTune({ ep }: { ep?: Episode }) {
             <span>{t("样式")}</span>
             <Seg value={s.subtitleLook ?? "outline"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => void save({ subtitleLook: v })} />
           </div>
+          {ep?.videoId && (
+            <div className="sub-tune-row">
+              <span>{t("音轨")}</span>
+              {wantsOriginalAudio(ep.videoId)
+                ? <span className="small muted">{t("原声")}</span>
+                : <button className="link-btn" title={t("YouTube 可能按地区自动播放 AI 配音，点这里改回原声")} onClick={() => { setOpen(false); switchToOriginalAudio(ep.videoId); }}>{t("听到的是配音？换成原声")}</button>}
+            </div>
+          )}
           <p className="sub-tune-hint">{t("拖动字幕可以上下移动，双击字幕回到原位。")}{keys && ` ${t("快捷键 {keys} 调大小。", { keys })}`}</p>
           <div className="sub-tune-foot">
             <button className="link-btn" disabled={!changed} onClick={() => void save({ subtitleScale: undefined, subtitleOrigScale: undefined, subtitleLift: undefined })}>{t("恢复默认")}</button>

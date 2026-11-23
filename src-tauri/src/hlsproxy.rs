@@ -35,6 +35,57 @@ pub async fn proxied(url: &str) -> Result<String> { Ok(wrap(&base().await?, url)
 
 fn wrap(base: &str, url: &str) -> String { format!("{base}/p?u={}", urlencoding::encode(url)) }
 
+/// For a player that plays HLS itself (macOS): only the top playlist comes through the proxy, trimmed to the
+/// original-language audio; everything it lists is fetched from YouTube directly.
+pub async fn master_only(url: &str) -> Result<String> { Ok(format!("{}/m?u={}", base().await?, urlencoding::encode(url))) }
+
+fn attr<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let re = regex::Regex::new(&format!(r#"(?:^|[:,]){}=("([^"]*)"|[^,]*)"#, regex::escape(key))).ok()?;
+    let c = re.captures(line)?;
+    Some(c.get(2).or(c.get(1))?.as_str())
+}
+
+/// Videos with AI-dubbed tracks list one audio rendition per language, and the player picks by the system
+/// language or the network's region, so a Chinese listener can get the Russian dub. Keeps only the original
+/// language's renditions (YouTube names it "… original" / tags it `acont=original`; else the DEFAULT=YES one),
+/// and drops variants left without audio. Anything unrecognised passes through unchanged.
+pub fn original_audio_only(playlist: &str) -> String {
+    let lines: Vec<&str> = playlist.lines().collect();
+    let audio: Vec<&str> = lines.iter().copied().filter(|l| l.starts_with("#EXT-X-MEDIA:") && attr(l, "TYPE") == Some("AUDIO")).collect();
+    let langs: std::collections::HashSet<&str> = audio.iter().filter_map(|l| attr(l, "LANGUAGE")).collect();
+    if langs.len() < 2 { return playlist.to_string(); }
+    let is_original = |l: &&str| attr(l, "NAME").is_some_and(|n| n.to_lowercase().contains("original"))
+        || attr(l, "YT-EXT-XTAGS").is_some_and(|x| x.contains("acont=original"));
+    let Some(keep) = audio.iter().find(|l| is_original(l)).or_else(|| audio.iter().find(|l| attr(l, "DEFAULT") == Some("YES"))).and_then(|l| attr(l, "LANGUAGE")) else {
+        return playlist.to_string();
+    };
+    let groups: std::collections::HashSet<&str> = audio.iter().filter(|l| attr(l, "LANGUAGE") == Some(keep)).filter_map(|l| attr(l, "GROUP-ID")).collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut skip_next = false;
+    for l in &lines {
+        if skip_next { skip_next = false; if !l.starts_with('#') { continue; } }
+        if l.starts_with("#EXT-X-MEDIA:") && attr(l, "TYPE") == Some("AUDIO") && attr(l, "LANGUAGE").is_some_and(|x| x != keep) { continue; }
+        if l.starts_with("#EXT-X-STREAM-INF:") {
+            if let Some(g) = attr(l, "AUDIO") { if !groups.contains(g) { skip_next = true; continue; } }
+        }
+        out.push(*l);
+    }
+    let mut s = out.join("\n");
+    if playlist.ends_with('\n') { s.push('\n'); }
+    s
+}
+
+/// Every URI in a playlist made absolute (no proxy): for the master served to a native player.
+fn absolute(playlist: &str, from: &Url) -> String {
+    let abs = |u: &str| from.join(u.trim()).map(|x| x.to_string()).unwrap_or_else(|_| u.to_string());
+    let attr = regex::Regex::new(r#"URI="([^"]+)""#).unwrap();
+    playlist.lines().map(|line| {
+        if line.starts_with('#') { attr.replace_all(line, |c: &regex::Captures| format!(r#"URI="{}""#, abs(&c[1]))).to_string() }
+        else if line.trim().is_empty() { line.to_string() }
+        else { abs(line) }
+    }).collect::<Vec<_>>().join("\n")
+}
+
 fn allowed(url: &Url) -> bool {
     url.scheme() == "https" && url.host_str().is_some_and(|h| h == "youtube.com" || h.ends_with(".youtube.com") || h.ends_with(".googlevideo.com"))
 }
@@ -69,7 +120,8 @@ async fn serve(mut sock: TcpStream, token: &str, base: &str) -> Result<()> {
         sock.write_all(format!("HTTP/1.1 204 No Content\r\n{CORS}Connection: close\r\n\r\n").as_bytes()).await?;
         return Ok(());
     }
-    let target = path.strip_prefix(&format!("/{token}/p?u="))
+    let master = path.starts_with(&format!("/{token}/m?u="));
+    let target = path.strip_prefix(&format!("/{token}/p?u=")).or_else(|| path.strip_prefix(&format!("/{token}/m?u=")))
         .and_then(|u| urlencoding::decode(u).ok())
         .and_then(|u| Url::parse(&u).ok())
         .filter(allowed);
@@ -86,7 +138,8 @@ async fn serve(mut sock: TcpStream, token: &str, base: &str) -> Result<()> {
     let status = res.status();
     let kind = res.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
     if kind.contains("mpegurl") || target.path().ends_with(".m3u8") || target.path().contains("/manifest/hls") {
-        let body = rewrite(&res.text().await?, &target, base);
+        let text = original_audio_only(&res.text().await?);
+        let body = if master { absolute(&text, &target) } else { rewrite(&text, &target, base) };
         sock.write_all(format!("HTTP/1.1 {} {}\r\nContent-Type: {kind}\r\n{CORS}Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", status.as_u16(), status.canonical_reason().unwrap_or(""), body.len()).as_bytes()).await?;
         sock.write_all(body.as_bytes()).await?;
         return Ok(());
@@ -117,6 +170,26 @@ mod tests {
         assert!(out.starts_with("#EXTM3U\n#EXT-X-MEDIA"));
     }
     #[test]
+    fn dubbed_audio_is_dropped_original_kept() {
+        let p = "#EXTM3U\n\
+#EXT-X-MEDIA:URI=\"https://m/a/ru.m3u8\",TYPE=AUDIO,GROUP-ID=\"234-ru\",NAME=\"Russian\",DEFAULT=NO,AUTOSELECT=YES,LANGUAGE=\"ru\"\n\
+#EXT-X-MEDIA:URI=\"https://m/a/en.m3u8\",TYPE=AUDIO,GROUP-ID=\"234-en\",NAME=\"English (US) original\",DEFAULT=NO,AUTOSELECT=YES,LANGUAGE=\"en-US\"\n\
+#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"234-ru\"\n\
+https://m/v/ru-720.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"234-en\"\n\
+https://m/v/en-720.m3u8\n";
+        let out = original_audio_only(p);
+        assert!(!out.contains("ru.m3u8") && !out.contains("ru-720"), "{out}");
+        assert!(out.contains("en.m3u8") && out.contains("en-720"), "{out}");
+        // One language: untouched.
+        let single = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",LANGUAGE=\"en\",URI=\"x\"\n#EXT-X-STREAM-INF:AUDIO=\"a\"\nv.m3u8\n";
+        assert_eq!(original_audio_only(single), single);
+        // Several languages, none marked: untouched rather than guessing.
+        let unmarked = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",LANGUAGE=\"en\",URI=\"x\"\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"b\",LANGUAGE=\"ru\",URI=\"y\"\n";
+        assert_eq!(original_audio_only(unmarked), unmarked);
+    }
+
+    #[test]
     fn only_youtube_hosts() {
         assert!(allowed(&Url::parse("https://rr1---sn-abc.googlevideo.com/videoplayback?x=1").unwrap()));
         assert!(!allowed(&Url::parse("https://example.com/x.m3u8").unwrap()));
@@ -136,5 +209,28 @@ mod live {
         std::fs::write("/tmp/proxied-hls.txt", &url).unwrap();
         println!("{url}");
         tokio::time::sleep(std::time::Duration::from_secs(50)).await;
+    }
+
+    /// HLS_VIDEO: a YouTube id with AI-dubbed audio. Gets its HLS address the way the app does, serves the
+    /// master through `master_only`, and has ffprobe play it: prints the audio languages left.
+    #[tokio::test]
+    #[ignore]
+    async fn native_master_keeps_original_audio() {
+        let Ok(id) = std::env::var("HLS_VIDEO") else { return };
+        let data = dirs::data_dir().unwrap().join("ai.qiaomu.subcast");
+        crate::asr::streams::init(&data);
+        let bin = crate::asr::find_ytdlp(&data).unwrap();
+        let url = crate::asr::youtube_stream_url(&bin, &id, true, true).await.unwrap();
+        println!("source: {}", &url[..url.len().min(90)]);
+        let raw = crate::net::client().get(&url).send().await.unwrap().text().await.unwrap();
+        let langs = |p: &str| p.lines().filter(|l| l.starts_with("#EXT-X-MEDIA") && l.contains("TYPE=AUDIO")).filter_map(|l| super::attr(l, "LANGUAGE").map(String::from)).collect::<std::collections::BTreeSet<_>>();
+        println!("audio languages in YouTube's master: {:?}", langs(&raw));
+        println!("after filtering: {:?}", langs(&super::original_audio_only(&raw)));
+        let local = super::master_only(&url).await.unwrap();
+        let ff = crate::videoclip::find_ffmpeg(&data).unwrap();
+        let probe = ff.with_file_name("ffprobe");
+        let probe = if probe.exists() { probe } else { std::path::PathBuf::from("/opt/homebrew/bin/ffprobe") };
+        let out = tokio::process::Command::new(probe).args(["-v", "error", "-show_entries", "stream=codec_type,codec_name:stream_tags=language,variant_bitrate", "-of", "compact", &local]).output().await.unwrap();
+        println!("ffprobe via proxy (ok={}):\n{}{}", out.status.success(), String::from_utf8_lossy(&out.stdout).lines().take(12).collect::<Vec<_>>().join("\n"), String::from_utf8_lossy(&out.stderr).lines().take(3).collect::<Vec<_>>().join("\n"));
     }
 }

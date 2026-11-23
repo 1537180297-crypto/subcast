@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Layers, Loader2, Pause, Play, RefreshCw, Scissors, Sparkles, Square } from "lucide-react";
+import { ArrowDownUp, Check, Copy, Layers, Loader2, MoreHorizontal, Pause, Play, RefreshCw, Scissors, Sparkles, Square } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorText, type Episode, type Segment } from "../lib/api";
 import { clock } from "../lib/format";
@@ -9,6 +9,7 @@ import { useJobs } from "../lib/jobs";
 import { isZh, useZh } from "../lib/zh";
 import { useStore } from "../store";
 import { openVideoClipDialog } from "./VideoClipDialog";
+import { ClipHistory } from "./ClipHistory";
 
 /** Renders a highlight card's opening quote, automatically fetching a Chinese translation for English lines. */
 function HighlightQuote({ zh, orig }: { zh?: string; orig: string }) {
@@ -81,7 +82,8 @@ export function HighlightsPanel({
   useClipWarm(ep, segments);
   const [copying, setCopying] = useState<string | null>(null);
   // Picking clips for one montage (several stretches cut together, in time order).
-  const [picking, setPicking] = useState(false);
+  /** Ticking highlights: to cut them into one video, or to export each as its own. */
+  const [picking, setPicking] = useState<false | "montage" | "batch">(false);
   const [picked, setPicked] = useState<string[]>([]);
 
   const clips = useMemo(() => {
@@ -126,6 +128,14 @@ export function HighlightsPanel({
     setPicking(false);
     setPicked([]);
     openVideoClipDialog({ ep, segments, zh: mergedZh, clip: montageClip(chosen) });
+  };
+  // Each picked highlight as its own video: the dialog opens on the first to set things up, then exports them all.
+  const openBatch = (ids: string[]) => {
+    const chosen = clips.filter((c) => ids.includes(c.id));
+    if (chosen.length < 2) return;
+    setPicking(false);
+    setPicked([]);
+    openVideoClipDialog({ ep, segments, zh: mergedZh, clip: chosen[0], batch: chosen });
   };
   // The best clips, in time order, up to about three minutes: a one-click "best of".
   const bestOf = () => {
@@ -200,24 +210,26 @@ export function HighlightsPanel({
   return (
     <div className="hl-panel">
       <div className="hl-toolbar">
-        <span className="muted small">{t("共 {n} 段高光", { n: clips.length })}{bundle.intent ? ` · ${bundle.intent}` : ""}</span>
+        <span className="muted small hl-count">{t("共 {n} 段高光", { n: clips.length })}{bundle.intent ? ` · ${bundle.intent}` : ""}</span>
         <span className="spacer" />
         {ep.videoId && clips.length > 1 && !picking && (
           <>
             <button type="button" className="link-btn" onClick={bestOf} title={t("把评分最高的几段按时间顺序剪成一条")}>
               <Sparkles size={12} /> {t("精华合集")}
             </button>
-            <button type="button" className="link-btn" onClick={() => { setPicking(true); setPicked([]); }}>
-              <Layers size={12} /> {t("自选拼接")}
+            <button type="button" className="link-btn" onClick={() => { setPicking("batch"); setPicked([]); }} title={t("勾选几段，用同一套设置各导出一条")}>
+              <Scissors size={12} /> {t("批量导出")}
             </button>
           </>
         )}
-        <button type="button" className="link-btn" onClick={() => setSortBy(sortBy === "score" ? "time" : "score")}>
-          {sortBy === "score" ? t("按时间顺序") : t("按传播度")}
-        </button>
-        <button type="button" className="link-btn" onClick={() => setReasking(!reasking)}>
-          <RefreshCw size={12} /> {t("换方向重选")}
-        </button>
+        <ClipHistory episodeId={ep.id} />
+        <HighlightMore
+          canPick={!!ep.videoId && clips.length > 1 && !picking}
+          sortBy={sortBy}
+          onPick={() => { setPicking("montage"); setPicked([]); }}
+          onSort={() => setSortBy(sortBy === "score" ? "time" : "score")}
+          onReask={() => setReasking(!reasking)}
+        />
       </div>
 
       {reasking && (
@@ -234,12 +246,22 @@ export function HighlightsPanel({
 
       {picking && (
         <div className="hl-pickbar">
-          <span className="small">{picked.length ? t("已选 {n} 段，会按时间顺序拼成一条", { n: picked.length }) : t("勾选要拼在一起的片段")}</span>
+          <span className="small">
+            {picking === "batch"
+              ? (picked.length ? t("已选 {n} 段，每段导出一条视频", { n: picked.length }) : t("勾选要导出的片段"))
+              : (picked.length ? t("已选 {n} 段，会按时间顺序拼成一条", { n: picked.length }) : t("勾选要拼在一起的片段"))}
+          </span>
           <span className="spacer" />
           <button type="button" className="btn ghost sm" onClick={() => { setPicking(false); setPicked([]); }}>{t("取消")}</button>
-          <button type="button" className="btn primary sm" disabled={picked.length < 2} onClick={() => openMontage(picked)}>
-            <Scissors size={12} /> {t("拼成视频")}
-          </button>
+          {picking === "batch" ? (
+            <button type="button" className="btn primary sm" disabled={picked.length < 2} onClick={() => openBatch(picked)}>
+              <Scissors size={12} /> {t("设置并导出")}
+            </button>
+          ) : (
+            <button type="button" className="btn primary sm" disabled={picked.length < 2} onClick={() => openMontage(picked)}>
+              <Scissors size={12} /> {t("拼成视频")}
+            </button>
+          )}
         </div>
       )}
 
@@ -329,6 +351,31 @@ export function SeekHighlights({
           />
         );
       })}
+    </div>
+  );
+}
+
+/** The highlights toolbar's less-used actions, behind "⋯". */
+function HighlightMore({ canPick, sortBy, onPick, onSort, onReask }: { canPick: boolean; sortBy: "score" | "time"; onPick: () => void; onSort: () => void; onReask: () => void }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [open]);
+  const pick = (f: () => void) => () => { setOpen(false); f(); };
+  return (
+    <div className="menu-wrap" ref={box}>
+      <button type="button" className="icon-btn sm" aria-haspopup="menu" aria-expanded={open} title={t("更多")} aria-label={t("更多")} onClick={() => setOpen(!open)}><MoreHorizontal size={15} /></button>
+      {open && (
+        <div className="menu right" role="menu">
+          {canPick && <button role="menuitem" onClick={pick(onPick)}><Layers size={14} /> {t("自选拼接")}</button>}
+          <button role="menuitem" onClick={pick(onSort)}><ArrowDownUp size={14} /> {sortBy === "score" ? t("按时间顺序") : t("按传播度")}</button>
+          <button role="menuitem" onClick={pick(onReask)}><RefreshCw size={14} /> {t("换方向重选")}</button>
+        </div>
+      )}
     </div>
   );
 }

@@ -2304,7 +2304,9 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 /* Video Clip Studio modal */
 .modal.wide:has(.vclip-layout) { width: min(960px, calc(100vw - 32px)); height: min(760px, calc(100vh - 44px)); }
 .modal-body:has(> .vclip-layout) { display: flex; flex-direction: column; overflow: hidden; }
-.vclip-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 20px; }
+.vclip-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 20px; }
+.vclip-layout.wide-pv { grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); }
+.vclip-preview-col > * { max-width: 100%; }
 .vclip-layout + .modal-foot { flex: none; align-items: center; }
 
 .vclip-preview-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; align-items: center; }
@@ -2338,25 +2340,33 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .vclip-sec { display: flex; flex-direction: column; gap: 9px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
 .vclip-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .vclip-label { font-size: 12.5px; font-weight: 600; color: var(--text); }
-.vclip-bound-btns { display: flex; flex-wrap: wrap; gap: 6px; }
-.vclip-bound-btns .btn { gap: 3px; }
-.vclip-pads { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.vclip-pads label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.vclip-pads input[type=range], .vclip-crop-row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+/* 微调起止: start and end as two small cards, each with its time, a ‹ › sentence stepper and its padding. */
+.vclip-bounds { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vclip-bound { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); min-width: 0; }
+.vclip-bound-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.vclip-bound-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.vclip-nudge { margin-left: auto; display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--soft); }
+.vclip-nudge button { display: inline-grid; place-items: center; width: 26px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; }
+.vclip-nudge button:hover:not(:disabled) { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.vclip-nudge button:disabled { opacity: .35; cursor: default; }
+.vclip-pad { display: grid; grid-template-columns: auto minmax(0, 1fr) 40px; align-items: center; gap: 8px; }
+.vclip-pad .num { text-align: right; }
+.vclip-pad input[type=range], .vclip-crop-row input[type=range] { width: 100%; min-width: 0; accent-color: var(--accent); }
+.vclip-size-row { display: flex; align-items: center; gap: 8px; flex: 0 1 240px; min-width: 160px; }
+.vclip-size-row .num { width: 38px; text-align: right; }
 .vclip-crop-row { flex: 1; display: flex; align-items: center; gap: 8px; max-width: 240px; }
 
-.vclip-lines { max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); }
+.vclip-lines { margin-top: 10px; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); }
 .vclip-line { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
 .vclip-line:hover { background: var(--soft); }
 .vclip-line.on { background: var(--active-line); }
-.vclip-lt { font-size: 11px; color: var(--muted); padding-top: 2px; min-width: 36px; flex: none; }
+.vclip-lt { font-size: 11px; color: var(--muted); padding-top: 2px; min-width: 44px; flex: none; }
 .vclip-lbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .vclip-lzh { font-size: 12.5px; color: var(--text); }
 .vclip-lorig { font-size: 11.5px; color: var(--text-2); }
-.vclip-edit-btn { flex: none; font-size: 11px; opacity: .75; }
-.vclip-line:hover .vclip-edit-btn { opacity: 1; }
+.vclip-edit-btn { flex: none; font-size: 11px; opacity: 0; transition: opacity .12s var(--ease); }
+.vclip-line:hover .vclip-edit-btn, .vclip-line.on .vclip-edit-btn, .vclip-edit-btn:focus-visible { opacity: 1; }
 .vclip-edit-box { display: flex; flex-direction: column; gap: 5px; }
-.vclip-edit-box input { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 12px; }
 .vclip-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
 .vclip-sec .reading-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -2365,10 +2375,6 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .vclip-style-btn { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); cursor: pointer; font-size: 12px; color: var(--text-2); }
 .vclip-style-btn.on { border-color: var(--accent); color: var(--text); font-weight: 600; background: var(--accent-soft); }
 .vclip-swatch { width: 26px; height: 22px; display: grid; place-items: center; border-radius: 5px; font-weight: 700; font-size: 12px; flex: none; }
-.vclip-toggles { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 12.5px; color: var(--text-2); }
-.vclip-toggles label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
-.vclip-title-input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 13px; outline: none; }
-.vclip-title-input:focus { border-color: var(--accent); }
 
 .vclip-progress { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 12.5px; }
 .vclip-progress-top { display: flex; align-items: center; gap: 8px; }
@@ -2401,7 +2407,10 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .hl-title-btn { all: unset; cursor: pointer; }
 .hl-title-btn:hover { color: var(--accent-text); }
 .vclip-placeholder { position: absolute; inset: 0; overflow: hidden; }
-.vclip-yt { position: absolute; border: 0; pointer-events: none; }
+.vclip-yt { position: absolute; border: 0; pointer-events: none; opacity: 0; transition: opacity .25s var(--ease); }
+.vclip-yt.on { opacity: 1; }
+/* The old clip, frozen and softened while the new range downloads. */
+.vclip-video-box video.stale { filter: blur(6px) brightness(.72); transition: filter .2s var(--ease); pointer-events: none; }
 .vclip-pv-progress { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 6; display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 10px; background: rgba(14,14,18,0.78); color: #fff; font-size: 12px; overflow: hidden; backdrop-filter: blur(6px); }
 .vclip-pv-progress span:first-child { flex: 1; }
 .vclip-pv-progress i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); transition: width .4s linear; }
@@ -2482,3 +2491,59 @@ details.vclip-adv:not([open]) > summary { margin-bottom: 0; }
 .tf-clear:hover { background: var(--soft-hover); color: var(--text); }
 .pick-tools .tf { flex: 1 1 180px; }
 .check-note { margin: -4px 0 4px 24px; }
+
+/* Clip window: where-it's-going presets and the start/end strip under the preview. */
+.vclip-presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.vclip-preset { all: unset; box-sizing: border-box; cursor: pointer; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); font-size: 12.5px; color: var(--text-2); text-align: center; }
+.vclip-preset:hover { color: var(--text); border-color: var(--line-strong); }
+.vclip-preset.on { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); font-weight: 600; }
+.vclip-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+details.vclip-adv > summary .clamp1 { min-width: 0; max-width: 60%; }
+
+.vclip-rangebar { width: 100%; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; user-select: none; -webkit-user-select: none; }
+.vclip-rb-track { position: relative; height: 26px; border-radius: 7px; background: var(--soft); }
+.vclip-rb-seg { position: absolute; z-index: 1; top: 8px; height: 10px; border-radius: 3px; background: var(--line-strong); opacity: .55; cursor: pointer; }
+.vclip-rb-seg.in { background: var(--accent); opacity: .5; cursor: default; }
+.vclip-rb-sel { position: absolute; top: 0; bottom: 0; border-radius: 7px; background: var(--accent-soft); pointer-events: none; z-index: 0; }
+.vclip-rb-handle { all: unset; position: absolute; top: -2px; width: 12px; height: 30px; margin-left: -6px; border-radius: 4px; background: var(--accent); cursor: ew-resize; touch-action: none; z-index: 2; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.vclip-rb-handle::after { content: ""; position: absolute; left: 5px; top: 9px; width: 2px; height: 12px; border-radius: 1px; background: rgba(255,255,255,.85); }
+.vclip-rb-handle.drag, .vclip-rb-handle:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+.vclip-rb-meta { display: flex; justify-content: space-between; }
+
+/* ToggleChip: a pill switch. Off is a quiet outline; on is the accent tint with a filled check. */
+.toggle-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px 0 7px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--panel); color: var(--text-2); font-size: 12.5px; cursor: pointer; transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease); }
+.toggle-chip:hover { border-color: color-mix(in srgb, var(--ink) 22%, var(--line-strong)); color: var(--text); }
+.toggle-chip-mark { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--line-strong); color: #fff; transition: inherit; }
+.toggle-chip.on { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
+.toggle-chip.on .toggle-chip-mark { background: var(--accent); border-color: var(--accent); }
+/* Clip dialog text fields: a short label column and the field. */
+.vclip-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.vclip-fields { display: grid; gap: 8px; margin-top: 12px; }
+.vclip-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 10px; }
+.vclip-field > span:first-child { font-size: 12.5px; color: var(--text-2); }
+.vclip-edit-box .tf { background: var(--panel); }
+/* A folded section's summary line says what's inside; once it's open the fields say it themselves. */
+details.vclip-sec[open] > summary.vclip-sec-head > .small { visibility: hidden; }
+.vclip-sec > .vclip-chips { margin-top: 10px; }
+/* 最近导出: a compact list of files made from highlights. */
+.clip-hist { width: 340px; max-height: 360px; overflow-y: auto; padding: 6px; }
+.clip-hist-row { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
+.clip-hist-row:hover { background: var(--soft); }
+.clip-hist-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; font-size: 13px; }
+.clip-hist-row .icon-btn { opacity: 0; }
+.clip-hist-row:hover .icon-btn, .clip-hist-row .icon-btn:focus-visible { opacity: 1; }
+/* Opening check under the range bar: a dot, the reason, and a better start. */
+.vclip-opening { width: 100%; display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px; border-radius: 8px; background: color-mix(in srgb, var(--warn, #9a6700) 10%, transparent); color: var(--text-2); }
+.vclip-opening-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--warn, #9a6700); }
+.vclip-opening .small { flex: 1; min-width: 0; }
+.vclip-opening .link-btn { flex: none; white-space: nowrap; }
+.vclip-batch-note { margin: -4px 0 12px; padding: 8px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-text); }
+/* The highlights toolbar has grown: its buttons keep their words on one line and wrap as a whole. */
+.hl-toolbar { flex-wrap: wrap; row-gap: 2px; column-gap: 12px; }
+.hl-toolbar > .muted, .hl-toolbar .link-btn { white-space: nowrap; }
+.hl-toolbar .hl-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The recent-exports list sits in a .menu but its rows are two lines: undo the menu's fixed button height. */
+.menu.clip-hist .clip-hist-main { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; height: auto; min-height: 44px; padding: 6px 8px; width: auto; }
+.menu.clip-hist .clip-hist-main:hover { background: none; }
+.menu.clip-hist .icon-btn { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; flex: none; }
+.menu.clip-hist .menu-note { margin: 4px 8px 2px; }

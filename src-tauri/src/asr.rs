@@ -556,6 +556,69 @@ async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Ar
     Err(anyhow!("没有找到下载的音频"))
 }
 
+/// Downloads a video to keep (720p H.264 with the original AAC sound, one mp4) so a saved video episode plays
+/// from disk. Without FFmpeg to join the two streams, format 18 (360p, already one file) is the fallback.
+/// `progress` gets 0–1 from yt-dlp's own percentages (picture first, then sound).
+pub async fn youtube_video(ytdlp: &Path, ffmpeg: Option<&Path>, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>, progress: impl Fn(f64) + Send + Sync + Clone + 'static) -> Result<PathBuf> {
+    with_bot_fallback(|extra| {
+        let (c, p) = (cancel.clone(), progress.clone());
+        async move { youtube_video_with(ytdlp, ffmpeg, video_id, dir, c, &extra, p).await }
+    }).await
+}
+
+async fn youtube_video_with(ytdlp: &Path, ffmpeg: Option<&Path>, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>, extra: &[String], progress: impl Fn(f64)) -> Result<PathBuf> {
+    tokio::fs::create_dir_all(dir).await?;
+    let template = dir.join(format!("{video_id}.%(ext)s"));
+    warm_ytdlp(ytdlp).await;
+    let mut cmd = ytdlp_command(ytdlp);
+    match ffmpeg {
+        // yt-dlp's format sort puts the original-language audio first, so an AI dub isn't what gets saved.
+        Some(ff) => { cmd.args(["-f", "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/18", "--merge-output-format", "mp4", "--ffmpeg-location"]).arg(ff); }
+        None => { cmd.args(["-f", "18/best[ext=mp4]"]); }
+    }
+    cmd.args(["--no-playlist", "--no-part", "--newline"]).args(extra).arg("-o").arg(&template);
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().context("无法启动 yt-dlp")?;
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<f64>();
+    let reader = tokio::spawn(async move {
+        let Some(s) = stdout else { return };
+        let re = regex::Regex::new(r"\[download\]\s+([\d.]+)%").unwrap();
+        let mut lines = BufReader::new(s).lines();
+        while let Ok(Some(l)) = lines.next_line().await {
+            if let Some(v) = re.captures(&l).and_then(|c| c[1].parse::<f64>().ok()) { let _ = tx.send(v / 100.0); }
+        }
+    });
+    let tail = tokio::spawn(async move {
+        let mut text = String::new();
+        if let Some(s) = stderr { let mut lines = BufReader::new(s).lines(); while let Ok(Some(l)) = lines.next_line().await { text = l; } }
+        text
+    });
+    // Picture then sound, each 0–100%: the picture is most of the bytes.
+    let (mut part, mut last) = (0usize, 0.0f64);
+    loop {
+        while let Ok(v) = rx.try_recv() {
+            if v + 0.2 < last { part += 1; }
+            last = v;
+            progress(if part == 0 { v * 0.9 } else { 0.9 + v * 0.1 }.min(0.99));
+        }
+        if cancel.load(Ordering::Relaxed) { let _ = child.kill().await; return Err(anyhow!("已取消")); }
+        if let Some(status) = child.try_wait()? {
+            let _ = reader.await;
+            let last = tail.await.unwrap_or_default();
+            if !status.success() { return Err(anyhow!("下载 YouTube 视频失败：{}", last.chars().take(200).collect::<String>())); }
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(e) = entries.next_entry().await? {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with(video_id) && name.ends_with(".mp4") { return Ok(e.path()); }
+    }
+    Err(anyhow!("没有找到下载的视频"))
+}
+
 /// A playable address for videos whose owners block the embedded player: YouTube's HLS master playlist
 /// (adaptive quality, plays natively in WebKit) or, failing that, a single file with both audio and video.
 /// A stream the app's own <video> can play. `hls`: the WebView plays HLS natively (WebKit on macOS). Elsewhere
@@ -630,6 +693,13 @@ pub mod streams {
     }
 }
 
+/// How much a format's sound is the video's own: yt-dlp gives the original-language track a higher
+/// `language_preference` than YouTube's AI dubs (same bitrate, other language), so this goes first in any choice.
+pub fn audio_rank(f: &serde_json::Value) -> i64 {
+    let note = f["format_note"].as_str().unwrap_or("").to_lowercase();
+    f["language_preference"].as_i64().unwrap_or(0) + if note.contains("original") { 100 } else { 0 } - if note.contains("dubbed") { 100 } else { 0 }
+}
+
 async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) -> Result<String> {
     warm_ytdlp(ytdlp).await;
     let mut cmd = ytdlp_command(ytdlp);
@@ -648,7 +718,7 @@ async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) 
     // Progressive files with both audio and video (format 18, 360p, is the one nearly every video has).
     formats.iter().rev()
         .filter(|f| f["vcodec"].as_str().is_some_and(|v| v != "none") && f["acodec"].as_str().is_some_and(|a| a != "none") && f["protocol"].as_str() == Some("https"))
-        .max_by_key(|f| (f["ext"].as_str() == Some("mp4"), f["height"].as_i64().unwrap_or(0)))
+        .max_by_key(|f| (audio_rank(f), f["ext"].as_str() == Some("mp4"), f["height"].as_i64().unwrap_or(0)))
         .and_then(|f| f["url"].as_str().map(str::to_string))
         .ok_or_else(|| anyhow!("这个视频没有可直接播放的格式"))
 }
@@ -889,7 +959,8 @@ pub fn decode_mono(path: &Path, mut f: impl FnMut(u32, &[f32])) -> Result<()> {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) { hint.with_extension(ext); }
     let probed = symphonia::default::get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default()).map_err(|e| anyhow!("无法识别音频格式：{e}"))?;
     let mut format = probed.format;
-    let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL).ok_or_else(|| anyhow!("没有音轨"))?;
+    // A saved video carries a picture track too: the sound is the track with a sample rate.
+    let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some()).ok_or_else(|| anyhow!("没有音轨"))?;
     let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|e| anyhow!("不支持的音频编码：{e}"))?;
     let mut buf: Option<SampleBuffer<f32>> = None;
@@ -1101,3 +1172,23 @@ mod scan_tests {
     }
 }
 
+
+#[cfg(test)]
+mod video_file_tests {
+    use super::*;
+    /// A saved YouTube episode is now an mp4 with H.264 picture and AAC sound: transcription reads the sound.
+    #[test]
+    fn decodes_the_sound_of_a_video_file() {
+        let Some(ff) = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"].iter().map(Path::new).find(|p| p.exists()) else { return };
+        let dir = std::env::temp_dir().join(format!("subcast-asr-mp4-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("v.mp4");
+        let ok = std::process::Command::new(ff).args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=25:duration=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest"]).arg(&f).status().unwrap().success();
+        assert!(ok);
+        let pcm = decode_16k_mono(&f).unwrap();
+        assert!((pcm.len() as f64 / 16000.0 - 3.0).abs() < 0.3, "{} samples", pcm.len());
+        assert!(pcm.iter().any(|x| x.abs() > 0.05));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
