@@ -17,7 +17,7 @@ import { api, errorText, rawErrorText, type Episode, type ModelInfo, type Segmen
 import { clock, sizeMb } from "../lib/format";
 import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, switchYoutubeTrack, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
-import { ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
+import { ASR_SERVICES, CLOUD_ASR_MAIN, subtitleModeFor, subtitleModePatch, type Settings } from "../lib/settings";
 import { lang, t, tk, tr, useLang } from "../lib/i18n";
 import { looksEnglish } from "../lib/dict";
 import { EpisodeWords, LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget, type LearnMarks } from "./Learn";
@@ -225,7 +225,10 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const [aligning, setAligning] = useState(false);
   useEffect(() => { if (!canAlign) setAligning(false); }, [canAlign]);
   const wantsZh = transcript ? needsTranslation(transcript) : false;
-  const mode = wantsZh ? settings.subtitleMode : "original";
+  const epMode = subtitleModeFor(settings, ep);
+  const mode = epMode === "off" ? "off" : wantsZh ? epMode : "original";
+  // "关闭" only hides the subtitles over the video; the transcript here still shows, bilingual where it can.
+  const lineMode = mode === "off" ? (wantsZh ? "bilingual" : "original") : mode;
   const english = useMemo(
     () => (transcript ? looksEnglish(transcript.language, segments.slice(0, 20).map((x) => x.text).join(" ")) : false),
     [transcript, segments],
@@ -409,7 +412,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       setWin({ start: 0, end: rows.length, topPad: 0, bottomPad: 0 });
       return;
     }
-    const est = mode === "bilingual" ? 84 : 46;
+    const est = lineMode === "bilingual" ? 84 : 46;
     heightsRef.current = new Float32Array(rows.length).fill(est);
     const box = list.current;
     const st = box?.scrollTop ?? 0;
@@ -430,7 +433,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       if (changed) scheduleSync();
     });
     return () => cancelAnimationFrame(raf);
-  }, [virtual, rows.length, ep.id, mode, query, settings.subtitleSize, settings.subtitleFont, scheduleSync]);
+  }, [virtual, rows.length, ep.id, lineMode, query, settings.subtitleSize, settings.subtitleFont, scheduleSync]);
 
   useEffect(() => {
     if (!virtual) return;
@@ -468,7 +471,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       const w = box.clientWidth;
       if (virtual && Math.abs(w - lastWidthRef.current) > 8) {
         lastWidthRef.current = w;
-        heightsRef.current.fill(mode === "bilingual" ? 84 : 46);
+        heightsRef.current.fill(lineMode === "bilingual" ? 84 : 46);
         for (const [k, el] of rowRefs.current) {
           if (k < heightsRef.current.length) {
             const h = el.getBoundingClientRect().height;
@@ -480,7 +483,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     });
     ro.observe(box);
     return () => ro.disconnect();
-  }, [virtual, mode, scheduleSync, !!transcript, showHighlights]);
+  }, [virtual, lineMode, scheduleSync, !!transcript, showHighlights]);
 
   const scrollToPos = useCallback((pos: number, behavior: ScrollBehavior) => {
     const box = list.current;
@@ -558,11 +561,14 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const pending = wantsZh && (running || (!error && done < total));
   const start = (force?: "llm" | "google") => { setStartError(null); translateEpisode(ep, transcript, force).catch((e) => setStartError(rawErrorText(e))); };
 
-  const modeControl = wantsZh && (
+  const modeOptions = wantsZh
+    ? (["bilingual", "translation", "original", "off"] as const)
+    : (["original", "off"] as const);
+  const modeControl = (
     <div className="seg-control" role="radiogroup" aria-label={t("字幕显示（快捷键 C）")}>
-      {(["bilingual", "translation", "original"] as const).map((m) => (
-        <button key={m} role="radio" aria-checked={settings.subtitleMode === m} className={settings.subtitleMode === m ? "on" : ""} onClick={() => saveSettings({ subtitleMode: m })}>
-          {m === "bilingual" ? t("双语") : m === "translation" ? t("中文") : t("原文")}
+      {modeOptions.map((m) => (
+        <button key={m} role="radio" aria-checked={mode === m} className={mode === m ? "on" : ""} onClick={() => saveSettings(subtitleModePatch(settings, ep, m))}>
+          {m === "bilingual" ? t("双语") : m === "translation" ? t("中文") : m === "original" ? t("原文") : t("关闭")}
         </button>
       ))}
     </div>
@@ -675,7 +681,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
               zh={translation?.items[i]}
               active={i === active}
               playingActive={i === active && isPlaying}
-              mode={mode}
+              mode={lineMode}
               pending={pending}
               onSeek={aligning && canAlign ? anchorHere : (readingHere || (mode === "translation" && done > 0)) ? readAt : seek}
               query={query}

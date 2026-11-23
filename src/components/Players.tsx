@@ -11,6 +11,7 @@ import { BrowserAccess } from "./BrowserAccess";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
 import { offerPlayer, useStore, withdrawPlayer } from "../store";
+import { subtitleModeFor, subtitleModePatch } from "../lib/settings";
 import { IS_MAC, t, tr } from "../lib/i18n";
 import { audioSrc, noteCached, useOffline } from "../lib/offline";
 import { alignCurrent, toContent, toPlay } from "../lib/timemap";
@@ -69,7 +70,8 @@ export function noteListening(ep: Episode, playing: boolean) {
   if (heard.id !== ep.id) { flushHeard(); heard = { id: ep.id, show: ep.showId, secs: 0, at: now, translated: false }; }
   if (playing && heard.at) heard.secs += Math.min(2, (now - heard.at) / 1000);
   heard.at = playing ? now : 0;
-  heard.translated ||= useStore.getState().settings.subtitleMode !== "original";
+  const subMode = subtitleModeFor(useStore.getState().settings, ep);
+  heard.translated ||= subMode !== "original" && subMode !== "off";
   if (heard.secs >= 20 || (!playing && heard.secs > 0)) flushHeard();
 }
 
@@ -634,9 +636,13 @@ function VolumeControl() {
 }
 
 export function cycleMode() {
-  const { settings, saveSettings } = useStore.getState();
-  const order = ["bilingual", "translation", "original"] as const;
-  void saveSettings({ subtitleMode: order[(order.indexOf(settings.subtitleMode) + 1) % 3] });
+  const { settings, saveSettings, current, notify } = useStore.getState();
+  const order = ["bilingual", "translation", "original", "off"] as const;
+  const cur = subtitleModeFor(settings, current);
+  const next = order[(order.indexOf(cur) + 1) % order.length];
+  void saveSettings(subtitleModePatch(settings, current, next));
+  const label = next === "bilingual" ? t("双语") : next === "translation" ? t("中文") : next === "original" ? t("原文") : t("已关闭");
+  notify(t("字幕：{mode}", { mode: label }));
 }
 
 /** Steps the speed up or down one notch (for shortcuts). */

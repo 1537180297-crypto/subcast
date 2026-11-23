@@ -289,9 +289,33 @@ fn ffmpeg_cmd(bin: &Path) -> tokio::process::Command {
     cmd
 }
 
-/// Parses `Duration: HH:MM:SS.xx`, video `WxH`, and audio presence from `ffmpeg -hide_banner -i <file>` stderr.
-pub fn parse_video_meta(stderr: &str) -> (f64, u32, u32, bool) {
-    let dur = regex::Regex::new(r"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)")
+#[derive(Clone, Debug)]
+pub struct VideoMeta {
+    pub duration: f64,
+    pub width: u32,
+    pub height: u32,
+    pub has_audio: bool,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub pix_fmt: Option<String>,
+}
+
+impl VideoMeta {
+    /// True when the clip is already H.264 yuv420p (even dims) + AAC/silent, so we can remux with `-c copy`.
+    pub fn is_web_ready(&self) -> bool {
+        self.video_codec.as_deref() == Some("h264")
+            && self.pix_fmt.as_deref().is_some_and(|p| p.starts_with("yuv420p"))
+            && self.width > 0
+            && self.height > 0
+            && self.width % 2 == 0
+            && self.height % 2 == 0
+            && (!self.has_audio || self.audio_codec.as_deref() == Some("aac"))
+    }
+}
+
+/// Parses duration, dimensions, codecs, and pixel format from `ffmpeg -hide_banner -i <file>` stderr.
+pub fn parse_video_detail(stderr: &str) -> VideoMeta {
+    let duration = regex::Regex::new(r"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)")
         .ok()
         .and_then(|re| re.captures(stderr))
         .and_then(|c| {
@@ -302,19 +326,46 @@ pub fn parse_video_meta(stderr: &str) -> (f64, u32, u32, bool) {
         })
         .unwrap_or(0.0);
 
-    let dims = stderr.lines()
-        .find(|l| l.contains("Video:"))
+    let video_line = stderr.lines().find(|l| l.contains("Video:"));
+    let (width, height) = video_line
         .and_then(|line| {
             regex::Regex::new(r"\b(\d{3,5})x(\d{3,5})\b").ok()?.captures(line).and_then(|c| {
                 Some((c[1].parse::<u32>().ok()?, c[2].parse::<u32>().ok()?))
             })
         })
         .unwrap_or((1920, 1080));
-    let has_audio = stderr.lines().any(|l| l.contains("Audio:"));
-    (dur, dims.0, dims.1, has_audio)
+
+    let video_codec = video_line
+        .and_then(|line| line.split("Video:").nth(1))
+        .and_then(|rest| rest.trim().split(|c: char| c.is_whitespace() || c == ',' || c == '(').next())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
+
+    let pix_fmt = video_line.and_then(|line| {
+        regex::Regex::new(r"\b(yuv[a-z0-9_]+|rgb[a-z0-9_]+|nv12|gbrp[a-z0-9_]*)\b")
+            .ok()?
+            .captures(line)
+            .map(|c| c[1].to_ascii_lowercase())
+    });
+
+    let audio_line = stderr.lines().find(|l| l.contains("Audio:"));
+    let has_audio = audio_line.is_some();
+    let audio_codec = audio_line
+        .and_then(|line| line.split("Audio:").nth(1))
+        .and_then(|rest| rest.trim().split(|c: char| c.is_whitespace() || c == ',' || c == '(').next())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
+
+    VideoMeta { duration, width, height, has_audio, video_codec, audio_codec, pix_fmt }
 }
 
-pub async fn probe_video_meta(ffmpeg: &Path, path: &Path, fallback_dur: f64) -> (f64, u32, u32, bool) {
+/// Parses `Duration: HH:MM:SS.xx`, video `WxH`, and audio presence from `ffmpeg -hide_banner -i <file>` stderr.
+pub fn parse_video_meta(stderr: &str) -> (f64, u32, u32, bool) {
+    let m = parse_video_detail(stderr);
+    (m.duration, m.width, m.height, m.has_audio)
+}
+
+pub async fn probe_video_detail(ffmpeg: &Path, path: &Path, fallback_dur: f64) -> VideoMeta {
     let mut cmd = ffmpeg_cmd(ffmpeg);
     cmd.args(["-hide_banner", "-i"]).arg(path)
         .stdout(std::process::Stdio::null())
@@ -322,10 +373,24 @@ pub async fn probe_video_meta(ffmpeg: &Path, path: &Path, fallback_dur: f64) -> 
     let out = tokio::time::timeout(std::time::Duration::from_secs(15), cmd.output()).await;
     if let Ok(Ok(o)) = out {
         let stderr = String::from_utf8_lossy(&o.stderr);
-        let (d, w, h, has_audio) = parse_video_meta(&stderr);
-        return (if d > 0.1 { d } else { fallback_dur }, w, h, has_audio);
+        let mut m = parse_video_detail(&stderr);
+        if m.duration <= 0.1 { m.duration = fallback_dur; }
+        return m;
     }
-    (fallback_dur, 1920, 1080, true)
+    VideoMeta {
+        duration: fallback_dur,
+        width: 1920,
+        height: 1080,
+        has_audio: true,
+        video_codec: None,
+        audio_codec: None,
+        pix_fmt: None,
+    }
+}
+
+pub async fn probe_video_meta(ffmpeg: &Path, path: &Path, fallback_dur: f64) -> (f64, u32, u32, bool) {
+    let m = probe_video_detail(ffmpeg, path, fallback_dur).await;
+    (m.duration, m.width, m.height, m.has_audio)
 }
 
 /// Detects whether the source frame already has changing burned-in captions in its lower 35% band.
@@ -375,26 +440,36 @@ pub async fn detect_burned_subtitles(ffmpeg: &Path, path: &Path, duration: f64) 
     const SAMPLES: usize = 6;
     if duration <= 0.6 { return false; }
 
-    let mut raw_frames: Vec<Vec<u8>> = Vec::new();
+    let mut set = tokio::task::JoinSet::new();
     for i in 0..SAMPLES {
         let frac = 0.08 + 0.84 * (i as f64 / (SAMPLES - 1) as f64);
         let at = duration * frac;
-        let mut cmd = ffmpeg_cmd(ffmpeg);
-        cmd.args(["-v", "error", "-ss", &format!("{at:.2}"), "-i"]).arg(path)
-            .args([
-                "-frames:v", "1",
-                "-vf", &format!("crop=iw:ih*0.35:0:ih*0.65,scale={W}:{H},format=gray"),
-                "-f", "rawvideo", "-",
-            ])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-        if let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await {
-            if out.status.success() && out.stdout.len() == W * H {
-                raw_frames.push(out.stdout);
+        let ff = ffmpeg.to_path_buf();
+        let p = path.to_path_buf();
+        set.spawn(async move {
+            let mut cmd = ffmpeg_cmd(&ff);
+            cmd.args(["-v", "error", "-ss", &format!("{at:.2}"), "-i"]).arg(&p)
+                .args([
+                    "-frames:v", "1",
+                    "-vf", &format!("crop=iw:ih*0.35:0:ih*0.65,scale={W}:{H},format=gray"),
+                    "-f", "rawvideo", "-",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            if let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await {
+                if out.status.success() && out.stdout.len() == W * H {
+                    return Some((i, out.stdout));
+                }
             }
-        }
+            None
+        });
     }
-    let refs: Vec<&[u8]> = raw_frames.iter().map(|v| v.as_slice()).collect();
+    let mut indexed: Vec<(usize, Vec<u8>)> = Vec::with_capacity(SAMPLES);
+    while let Some(res) = set.join_next().await {
+        if let Ok(Some(item)) = res { indexed.push(item); }
+    }
+    indexed.sort_by_key(|(i, _)| *i);
+    let refs: Vec<&[u8]> = indexed.iter().map(|(_, v)| v.as_slice()).collect();
     decide_burned_subtitles(&refs, W, H)
 }
 
@@ -434,32 +509,48 @@ struct CachedFrames {
     best_frame: usize,
 }
 
-/// Extracts 5 candidate still frames as base64 JPEG data URLs and picks the sharpest non-blank frame.
+/// Extracts 5 candidate still frames concurrently as base64 JPEG data URLs and picks the sharpest non-blank frame.
 pub async fn extract_candidate_frames(ffmpeg: &Path, path: &Path, duration: f64) -> (Vec<String>, usize) {
     const FRACS: [f64; 5] = [0.10, 0.28, 0.48, 0.68, 0.85];
     let dur = duration.max(0.2);
-    let mut frames: Vec<String> = Vec::new();
+
+    let mut set = tokio::task::JoinSet::new();
+    for (idx, frac) in FRACS.into_iter().enumerate() {
+        let at = (dur * frac).max(0.05).min((dur - 0.08).max(0.05));
+        let ff = ffmpeg.to_path_buf();
+        let p = path.to_path_buf();
+        set.spawn(async move {
+            let mut cmd = ffmpeg_cmd(&ff);
+            cmd.args(["-v", "error", "-ss", &format!("{at:.2}"), "-i"]).arg(&p)
+                .args(["-frames:v", "1", "-vf", "scale=1280:-2", "-q:v", "4", "-f", "image2pipe", "-vcodec", "mjpeg", "-"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            if let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await {
+                if out.status.success() && out.stdout.len() > 256 {
+                    let len = out.stdout.len();
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&out.stdout);
+                    return Some((idx, len, format!("data:image/jpeg;base64,{b64}")));
+                }
+            }
+            None
+        });
+    }
+
+    let mut indexed: Vec<(usize, usize, String)> = Vec::with_capacity(FRACS.len());
+    while let Some(res) = set.join_next().await {
+        if let Ok(Some(item)) = res { indexed.push(item); }
+    }
+    indexed.sort_by_key(|(idx, _, _)| *idx);
+
+    let mut frames: Vec<String> = Vec::with_capacity(indexed.len());
     let mut best_idx = 0usize;
     let mut best_bytes = 0usize;
-
-    for frac in FRACS {
-        let at = (dur * frac).max(0.05).min((dur - 0.08).max(0.05));
-        let mut cmd = ffmpeg_cmd(ffmpeg);
-        cmd.args(["-v", "error", "-ss", &format!("{at:.2}"), "-i"]).arg(path)
-            .args(["-frames:v", "1", "-vf", "scale=1280:-2", "-q:v", "4", "-f", "image2pipe", "-vcodec", "mjpeg", "-"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-        if let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await {
-            if out.status.success() && out.stdout.len() > 256 {
-                let len = out.stdout.len();
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&out.stdout);
-                if len > best_bytes {
-                    best_bytes = len;
-                    best_idx = frames.len();
-                }
-                frames.push(format!("data:image/jpeg;base64,{b64}"));
-            }
+    for (_, len, url) in indexed {
+        if len > best_bytes {
+            best_bytes = len;
+            best_idx = frames.len();
         }
+        frames.push(url);
     }
     (frames, best_idx)
 }
@@ -474,41 +565,52 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
     let meta_path = dest.with_extension("meta.json");
     let frames_path = dest.with_extension("frames.json");
 
-    let meta = if let Ok(raw) = tokio::fs::read_to_string(&meta_path).await {
-        serde_json::from_str::<CachedMeta>(&raw).ok()
-    } else {
-        None
-    };
+    let (meta_raw, frames_raw) = tokio::join!(
+        tokio::fs::read_to_string(&meta_path),
+        tokio::fs::read_to_string(&frames_path),
+    );
+    let cached_meta = meta_raw.ok().and_then(|raw| serde_json::from_str::<CachedMeta>(&raw).ok());
+    let cached_frames = frames_raw
+        .ok()
+        .and_then(|raw| serde_json::from_str::<CachedFrames>(&raw).ok())
+        .filter(|cf| !cf.frames.is_empty());
 
-    let (duration, width, height, has_burned_subtitles) = if let Some(m) = meta {
-        (m.duration, m.width, m.height, m.has_burned_subtitles)
+    let (duration, width, height, need_burned) = if let Some(ref m) = cached_meta {
+        (m.duration, m.width, m.height, false)
     } else {
         let (d, w, h, _) = probe_video_meta(ffmpeg, dest, fallback_dur).await;
-        let burned = detect_burned_subtitles(ffmpeg, dest, d).await;
-        let _ = tokio::fs::write(&meta_path, serde_json::to_string(&CachedMeta {
-            duration: d, width: w, height: h, has_burned_subtitles: burned,
-        }).unwrap_or_default()).await;
-        (d, w, h, burned)
+        (d, w, h, true)
     };
 
-    let (frames, best_frame) = if let Ok(raw) = tokio::fs::read_to_string(&frames_path).await {
-        if let Ok(cf) = serde_json::from_str::<CachedFrames>(&raw) {
-            if !cf.frames.is_empty() {
+    let (has_burned_subtitles, (frames, best_frame)) = tokio::join!(
+        async {
+            if let Some(m) = cached_meta {
+                m.has_burned_subtitles
+            } else {
+                let burned = detect_burned_subtitles(ffmpeg, dest, duration).await;
+                if need_burned {
+                    let _ = tokio::fs::write(&meta_path, serde_json::to_string(&CachedMeta {
+                        duration, width, height, has_burned_subtitles: burned,
+                    }).unwrap_or_default()).await;
+                }
+                burned
+            }
+        },
+        async {
+            if let Some(cf) = cached_frames {
                 let best = cf.best_frame.min(cf.frames.len() - 1);
                 (cf.frames, best)
-            } else { extract_candidate_frames(ffmpeg, dest, duration).await }
-        } else {
-            extract_candidate_frames(ffmpeg, dest, duration).await
+            } else {
+                let res = extract_candidate_frames(ffmpeg, dest, duration).await;
+                if !res.0.is_empty() {
+                    let _ = tokio::fs::write(&frames_path, serde_json::to_string(&CachedFrames {
+                        frames: res.0.clone(), best_frame: res.1,
+                    }).unwrap_or_default()).await;
+                }
+                res
+            }
         }
-    } else {
-        let res = extract_candidate_frames(ffmpeg, dest, duration).await;
-        if !res.0.is_empty() {
-            let _ = tokio::fs::write(&frames_path, serde_json::to_string(&CachedFrames {
-                frames: res.0.clone(), best_frame: res.1,
-            }).unwrap_or_default()).await;
-        }
-        res
-    };
+    );
 
     PreparedClip {
         path: dest.to_string_lossy().into_owned(),
@@ -631,6 +733,34 @@ pub async fn encode_exact(ffmpeg: &Path, video: &Path, v_ss: f64, audio: &Path, 
     unreachable!()
 }
 
+/// Fast stream-copy remux with `+faststart` when source is already H.264/yuv420p/AAC.
+async fn fast_remux_mp4(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let tmp = output.with_extension("part.mp4");
+    let _ = tokio::fs::remove_file(&tmp).await;
+    let args: Vec<String> = vec![
+        "-y".into(),
+        "-i".into(), input.to_string_lossy().into_owned(),
+        "-c".into(), "copy".into(),
+        "-movflags".into(), "+faststart".into(),
+        tmp.to_string_lossy().into_owned(),
+    ];
+    match run_ffmpeg_with_progress(ffmpeg, None, &args, 0.0, cancel, |_| {}).await {
+        Ok(()) => {
+            tokio::fs::rename(&tmp, output).await?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            Err(e)
+        }
+    }
+}
+
 /// Encodes `input` (optionally trimmed by `trim_ss` / `trim_t`) into a standard H.264/yuv420p/AAC MP4.
 async fn normalize_mp4(
     ffmpeg: &Path,
@@ -656,7 +786,7 @@ async fn normalize_mp4(
         if attempt {
             args.extend(["-c:v".into(), "h264_videotoolbox".into(), "-b:v".into(), "5000k".into()]);
         } else {
-            args.extend(["-c:v".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "20".into()]);
+            args.extend(["-c:v".into(), "libx264".into(), "-preset".into(), "superfast".into(), "-crf".into(), "20".into()]);
         }
         args.extend([
             "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(),
@@ -881,24 +1011,107 @@ pub async fn prepare_segment(
         async move { download_youtube_section(&bin, &ff, &vid, start, end, &d, c).await }
     }).await?;
 
-    on_progress("trim", 0.65, "正在标准化片段画面…");
-    let norm = normalize_mp4(&ffmpeg, &raw, &dest, None, dur, &cancel, |p| {
-        on_progress("trim", 0.65 + p * 0.3, "正在标准化片段画面…");
-    }).await;
+    on_progress("trim", 0.72, "正在整理片段封装…");
+    let meta = probe_video_detail(&ffmpeg, &raw, dur).await;
+    let norm = if meta.is_web_ready() {
+        match fast_remux_mp4(&ffmpeg, &raw, &dest, &cancel).await {
+            Ok(()) => Ok(()),
+            Err(e) if cancel.load(Ordering::Relaxed) => Err(e),
+            Err(_) => normalize_mp4(&ffmpeg, &raw, &dest, None, dur, &cancel, |p| {
+                on_progress("trim", 0.72 + p * 0.23, "正在标准化片段画面…");
+            }).await,
+        }
+    } else {
+        normalize_mp4(&ffmpeg, &raw, &dest, None, dur, &cancel, |p| {
+            on_progress("trim", 0.72 + p * 0.23, "正在标准化片段画面…");
+        }).await
+    };
     let _ = tokio::fs::remove_file(&raw).await;
     norm?;
     on_progress("done", 1.0, "片段已就绪");
     Ok(finish_prepared(&ffmpeg, &dest, dur, false).await)
 }
 
-/// Builds the FFmpeg `-filter_complex` graph for layout framing + static overlay + timed cue PNGs + optional cover intro.
-pub fn build_filter_script(
+/// Reads `(width, height)` from a PNG header (IHDR chunk).
+pub fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if w > 0 && h > 0 { Some((w, h)) } else { None }
+}
+
+/// Generates a minimal fully-transparent RGBA PNG of `(w, h)` for FFmpeg concat demuxer gaps.
+fn make_transparent_png(w: u32, h: u32) -> Vec<u8> {
+    use flate2::{write::ZlibEncoder, Compression};
+    use std::io::Write;
+    let row_len = w as usize * 4 + 1;
+    let raw = vec![0u8; row_len * h as usize];
+    let mut enc = ZlibEncoder::new(Vec::new(), Compression::fast());
+    let _ = enc.write_all(&raw);
+    let idat = enc.finish().unwrap_or_default();
+
+    fn chunk(tag: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(12 + data.len());
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(tag);
+        out.extend_from_slice(data);
+        let mut crc = 0xffff_ffffu32;
+        for &byte in tag.iter().chain(data.iter()) {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+            }
+        }
+        out.extend_from_slice(&(!crc).to_be_bytes());
+        out
+    }
+
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&chunk(b"IHDR", &ihdr));
+    png.extend_from_slice(&chunk(b"IDAT", &idat));
+    png.extend_from_slice(&chunk(b"IEND", &[]));
+    png
+}
+
+/// Builds an FFmpeg `concat` demuxer script that sequences all timed cue PNGs into a single O(1) overlay stream.
+pub fn build_cues_concat_script(cues: &[(f64, f64)], total_dur: f64) -> String {
+    let mut lines = vec!["ffconcat version 1.0".to_string()];
+    let mut cursor = 0.0f64;
+    for (idx, &(s, e)) in cues.iter().enumerate() {
+        let start = s.max(cursor);
+        if start - cursor > 0.015 {
+            lines.push("file 'blank.png'".into());
+            lines.push(format!("duration {:.3}", start - cursor));
+        }
+        let dur = (e - start).max(0.05);
+        lines.push(format!("file 'c{idx}.png'"));
+        lines.push(format!("duration {dur:.3}"));
+        cursor = start + dur;
+    }
+    let tail = (total_dur - cursor).max(0.1);
+    lines.push("file 'blank.png'".into());
+    lines.push(format!("duration {tail:.3}"));
+    // Concat demuxer requires the final file entry repeated without duration so the previous item keeps its full duration.
+    lines.push("file 'blank.png'".into());
+    lines.join("\n")
+}
+
+/// Builds the FFmpeg `-filter_complex` graph.
+/// When `cue_stream_y` is `Some(y)`, all cues come from one concat demuxer stream (O(1) overlay).
+pub fn build_filter_graph(
     layout: &str,
     card_bg: &str,
     crop_x: f64,
     frame: Option<&Frame>,
     has_static: bool,
     cues: &[(f64, f64, i32)],
+    cue_stream_y: Option<i32>,
     cover_mode: &str,
     cover_input_idx: Option<usize>,
     has_audio: bool,
@@ -920,9 +1133,12 @@ pub fn build_filter_script(
             };
             parts.push(format!("[0:v]{fit_box},setsar=1,pad={w}:{h}:{vx}:{vy}:color={hex}[base]", vx = f.vx, vy = f.vy));
         } else if f.fit == "card" {
-            // Background blurred at quarter size (as good to the eye, ~7x cheaper than blurring the full frame).
+            // Background blurred at 1/8 size with fast bilinear scaling (~4x cheaper than 1/4, ~64x cheaper than full frame).
             let bg = match card_bg {
-                "blur" => format!("[bg]scale={qw}:{qh}:force_original_aspect_ratio=increase,crop={qw}:{qh},boxblur=6:2,eq=brightness=-0.22:saturation=0.85,scale={w}:{h},setsar=1[bg2]", qw = even(w / 4), qh = even(h / 4)),
+                "blur" => format!(
+                    "[bg]scale={qw}:{qh}:force_original_aspect_ratio=increase:flags=fast_bilinear,crop={qw}:{qh},boxblur=4:2,eq=brightness=-0.22:saturation=0.85,scale={w}:{h}:flags=bilinear,setsar=1[bg2]",
+                    qw = even((w / 8).max(64)), qh = even((h / 8).max(64))
+                ),
                 other => {
                     let hex = match other { "paper" => "#f5f2eb", "white" => "#ffffff", _ => "#141315" };
                     format!("[bg]scale={w}:{h},drawbox=x=0:y=0:w=iw:h=ih:color={hex}:t=fill,setsar=1[bg2]")
@@ -949,17 +1165,14 @@ pub fn build_filter_script(
             if card_bg == "blur" {
                 parts.push(
                     "[0:v]split[fg][bg];\
-                     [bg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,eq=brightness=-0.22:saturation=0.85,scale=1080:1920,setsar=1[bg2];\
+                     [bg]scale=136:240:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=136:240,boxblur=4:2,eq=brightness=-0.22:saturation=0.85,scale=1080:1920:flags=bilinear,setsar=1[bg2];\
                      [fg]scale=1080:640:force_original_aspect_ratio=decrease,setsar=1[fg2];\
                      [bg2][fg2]overlay=(W-w)/2:560+(640-h)/2[base]".into()
                 );
             } else {
                 let hex = if card_bg == "paper" { "#f5f2eb" } else { "#141315" };
                 parts.push(format!(
-                    "[0:v]split[fg][bg];\
-                     [bg]scale=1080:1920,drawbox=x=0:y=0:w=iw:h=ih:color={hex}:t=fill,setsar=1[bg2];\
-                     [fg]scale=1032:620:force_original_aspect_ratio=decrease,setsar=1[fg2];\
-                     [bg2][fg2]overlay=(W-w)/2:568+(620-h)/2[base]"
+                    "[0:v]scale=1032:620:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:568+(620-ih)/2:color={hex},setsar=1[base]"
                 ));
             }
         }
@@ -985,15 +1198,22 @@ pub fn build_filter_script(
         next_input += 1;
     }
 
-    for (idx, &(s, e, y)) in cues.iter().enumerate() {
-        let out_label = format!("vc{idx}");
-        let start = s.max(0.0);
-        let end = e.max(start + 0.05);
+    if let Some(y) = cue_stream_y {
         parts.push(format!(
-            "[{cur}][{next_input}:v]overlay=0:{y}:enable='between(t,{start:.3},{end:.3})':eof_action=repeat:format=auto[{out_label}]"
+            "[{cur}][{next_input}:v]overlay=0:{y}:eof_action=pass:format=auto[vc]"
         ));
-        cur = out_label;
-        next_input += 1;
+        cur = "vc".into();
+    } else {
+        for (idx, &(s, e, y)) in cues.iter().enumerate() {
+            let out_label = format!("vc{idx}");
+            let start = s.max(0.0);
+            let end = e.max(start + 0.05);
+            parts.push(format!(
+                "[{cur}][{next_input}:v]overlay=0:{y}:enable='between(t,{start:.3},{end:.3})':eof_action=repeat:format=auto[{out_label}]"
+            ));
+            cur = out_label;
+            next_input += 1;
+        }
     }
 
     match (cover_input_idx, cover_mode) {
@@ -1017,6 +1237,21 @@ pub fn build_filter_script(
     }
 
     parts.join(";")
+}
+
+/// Builds the FFmpeg `-filter_complex` graph for layout framing + static overlay + timed cue PNGs + optional cover intro.
+pub fn build_filter_script(
+    layout: &str,
+    card_bg: &str,
+    crop_x: f64,
+    frame: Option<&Frame>,
+    has_static: bool,
+    cues: &[(f64, f64, i32)],
+    cover_mode: &str,
+    cover_input_idx: Option<usize>,
+    has_audio: bool,
+) -> String {
+    build_filter_graph(layout, card_bg, crop_x, frame, has_static, cues, None, cover_mode, cover_input_idx, has_audio)
 }
 
 /// Plays the source at `speed`: picture timestamps divided, audio through atempo; the rest of the graph
@@ -1116,6 +1351,11 @@ pub async fn render_clip(
     })
 }
 
+enum ExtraInput {
+    File(String),
+    Concat(String),
+}
+
 async fn render_into(
     ffmpeg: &Path,
     raw_path: &Path,
@@ -1126,49 +1366,97 @@ async fn render_into(
     cancel: &AtomicBool,
     on_progress: &mut impl FnMut(&str, f64, &str),
 ) -> Result<()> {
-    let mut input_names: Vec<String> = Vec::new();
+    let mut extra_inputs: Vec<ExtraInput> = Vec::new();
     let has_static = if let Some(png) = req.static_overlay_png.as_deref().filter(|s| !s.is_empty()) {
         tokio::fs::write(work_dir.join("s.png"), decode_png_base64(png)?).await?;
-        input_names.push("s.png".into());
+        extra_inputs.push(ExtraInput::File("s.png".into()));
         true
     } else {
         false
     };
 
-    let mut cue_meta: Vec<(f64, f64, i32)> = Vec::with_capacity(req.cues.len());
+    // Decode & write all cue PNGs concurrently, recording dimensions to check if O(1) concat stream applies.
+    let mut write_set = tokio::task::JoinSet::new();
     for (idx, cue) in req.cues.iter().enumerate() {
-        let name = format!("c{idx}.png");
-        tokio::fs::write(work_dir.join(&name), decode_png_base64(&cue.png_base64)?).await?;
-        input_names.push(name);
-        cue_meta.push((cue.start, cue.end, cue.y));
+        let dir = work_dir.to_path_buf();
+        let b64 = cue.png_base64.clone();
+        write_set.spawn(async move {
+            let bytes = decode_png_base64(&b64)?;
+            let dims = png_dimensions(&bytes);
+            let name = format!("c{idx}.png");
+            tokio::fs::write(dir.join(&name), &bytes).await?;
+            Ok::<(usize, Option<(u32, u32)>), anyhow::Error>((idx, dims))
+        });
     }
+    let mut cue_dims: Vec<Option<(u32, u32)>> = vec![None; req.cues.len()];
+    while let Some(res) = write_set.join_next().await {
+        let (idx, dims) = res.context("字幕图层写入任务异常")??;
+        cue_dims[idx] = dims;
+    }
+
+    let speed = if req.speed > 0.0 { req.speed.clamp(0.5, 2.0) } else { 1.0 };
+    let cue_meta: Vec<(f64, f64, i32)> = req.cues.iter().map(|c| (c.start, c.end, c.y)).collect();
+    let uniform_concat = if req.cues.len() >= 2 {
+        let first_y = req.cues[0].y;
+        if let Some((w, h)) = cue_dims[0] {
+            if req.cues.iter().all(|c| c.y == first_y) && cue_dims.iter().all(|d| *d == Some((w, h))) {
+                Some((first_y, w, h))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let cue_stream_y = if let Some((y, w, h)) = uniform_concat {
+        let blank = make_transparent_png(w, h);
+        let times: Vec<(f64, f64)> = req.cues.iter().map(|c| (c.start, c.end)).collect();
+        let script = build_cues_concat_script(&times, (req.duration.max(1.0)) / speed);
+        tokio::try_join!(
+            tokio::fs::write(work_dir.join("blank.png"), &blank),
+            tokio::fs::write(work_dir.join("cues.txt"), script.as_bytes()),
+        )?;
+        extra_inputs.push(ExtraInput::Concat("cues.txt".into()));
+        Some(y)
+    } else {
+        for idx in 0..req.cues.len() {
+            extra_inputs.push(ExtraInput::File(format!("c{idx}.png")));
+        }
+        None
+    };
 
     let cover_mode = req.cover_mode.as_str();
     let need_cover_input = cover_bytes.is_some() && (matches!(cover_mode, "flash" | "hold") || req.embed_thumbnail);
     let cover_input_idx = if need_cover_input {
         tokio::fs::write(work_dir.join("cover.png"), cover_bytes.unwrap()).await?;
-        input_names.push("cover.png".into());
-        Some(input_names.len())
+        extra_inputs.push(ExtraInput::File("cover.png".into()));
+        Some(extra_inputs.len())
     } else {
         None
     };
 
-    let (_, _, _, has_audio) = probe_video_meta(ffmpeg, raw_path, req.duration).await;
-    let filter = build_filter_script(
+    let meta = probe_video_detail(ffmpeg, raw_path, req.duration).await;
+    let has_audio = meta.has_audio;
+    let filter = build_filter_graph(
         &req.layout,
         &req.card_bg,
         req.crop_x,
         req.frame.as_ref(),
         has_static,
         &cue_meta,
+        cue_stream_y,
         cover_mode,
         cover_input_idx,
         has_audio,
     );
     let tmp_out = work_dir.join("out.mp4");
     let use_vt = has_videotoolbox(ffmpeg);
-    let speed = if req.speed > 0.0 { req.speed.clamp(0.5, 2.0) } else { 1.0 };
     let filter = with_speed(&filter, speed, has_audio);
+    let audio_map = if has_audio && filter.contains("[aout]") { "[aout]" } else { "0:a?" };
+    let can_copy_audio = audio_map == "0:a?" && meta.audio_codec.as_deref() == Some("aac");
     let dur = req.duration.max(1.0) / speed + if cover_input_idx.is_some() && cover_mode == "hold" { 1.0 } else { 0.0 };
 
     on_progress("render", 0.12, "正在合成视频…");
@@ -1176,15 +1464,17 @@ async fn render_into(
     for attempt in [use_vt, false] {
         // The clip proper (after the stream copy's lead), exactly.
         let mut args: Vec<String> = vec!["-y".into(), "-ss".into(), format!("{:.3}", req.lead.max(0.0)), "-t".into(), format!("{:.3}", req.duration), "-i".into(), raw_path.to_string_lossy().into_owned()];
-        for name in &input_names {
-            args.push("-i".into());
-            args.push(name.clone());
+        for inp in &extra_inputs {
+            match inp {
+                ExtraInput::File(name) => {
+                    args.push("-i".into());
+                    args.push(name.clone());
+                }
+                ExtraInput::Concat(list) => {
+                    args.extend(["-f".into(), "concat".into(), "-safe".into(), "0".into(), "-i".into(), list.clone()]);
+                }
+            }
         }
-        let audio_map = if has_audio && filter.contains("[aout]") {
-            "[aout]"
-        } else {
-            "0:a?"
-        };
         args.extend([
             "-filter_complex".into(), filter.clone(),
             "-map".into(), "[vout]".into(),
@@ -1193,7 +1483,7 @@ async fn render_into(
         if attempt {
             args.extend(["-c:v:0".into(), "h264_videotoolbox".into(), "-b:v:0".into(), "10M".into(), "-maxrate:v:0".into(), "14M".into(), "-bufsize:v:0".into(), "20M".into()]);
         } else {
-            args.extend(["-c:v:0".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "19".into()]);
+            args.extend(["-c:v:0".into(), "libx264".into(), "-preset".into(), "superfast".into(), "-crf".into(), "19".into()]);
         }
         if let Some(cidx) = cover_input_idx.filter(|_| req.embed_thumbnail) {
             args.extend([
@@ -1203,8 +1493,12 @@ async fn render_into(
                 "-disposition:v:1".into(), "attached_pic".into(),
             ]);
         }
+        if can_copy_audio {
+            args.extend(["-c:a".into(), "copy".into()]);
+        } else {
+            args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
+        }
         args.extend([
-            "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(),
             "-movflags".into(), "+faststart".into(),
             tmp_out.to_string_lossy().into_owned(),
         ]);
@@ -1245,23 +1539,29 @@ mod tests {
         assert!(l.ends_with("format=yuv420p[vout]"));
 
         let c_blur = build_filter_script("portrait_card", "blur", 0.5, None, false, &[(0.0, 1.5, 1300)], "hold", Some(2), true);
-        assert!(c_blur.contains("boxblur=6:2"));
+        assert!(c_blur.contains("boxblur=4:2"));
         assert!(c_blur.contains("[base][1:v]overlay=0:1300"));
         assert!(c_blur.contains("tpad=start_duration=1.000:start_mode=clone"));
         assert!(c_blur.contains("[0:a]adelay=1000:all=1[aout]"));
 
+        let c_concat = build_filter_graph("portrait_card", "blur", 0.5, None, true, &[], Some(1236), "flash", Some(3), true);
+        assert!(c_concat.contains("[v0][2:v]overlay=0:1236:eof_action=pass:format=auto[vc]"));
+        assert!(c_concat.contains("[vc][3:v]overlay=0:0:enable='lt(t,0.140)'"));
+
         let c_hold_silent = build_filter_script("portrait_card", "night", 0.5, None, true, &[], "hold", Some(2), false);
-        assert!(c_hold_silent.contains("color=#141315:t=fill"));
+        assert!(c_hold_silent.contains("pad=1080:1920"));
+        assert!(c_hold_silent.contains("color=#141315"));
         assert!(c_hold_silent.contains("tpad=start_duration=1.000"));
         assert!(!c_hold_silent.contains("adelay="));
 
         let c_paper = build_filter_script("portrait_card", "paper", 0.5, None, false, &[], "none", None, false);
-        assert!(c_paper.contains("color=#f5f2eb:t=fill"));
+        assert!(c_paper.contains("pad=1080:1920"));
+        assert!(c_paper.contains("color=#f5f2eb"));
 
         let fill = build_filter_script("portrait_fill", "blur", 0.25, None, false, &[], "none", None, true);
         let card = Frame { w: 1080, h: 1440, fit: "card".into(), vx: 0, vy: 380, vw: 1080, vh: 608, crop_box: false };
         let g = build_filter_script("x", "blur", 0.5, Some(&card), false, &[], "none", None, true);
-        assert!(g.contains("scale=270:360") && g.contains("scale=1080:1440") && g.contains("overlay=0+(1080-w)/2:380+(608-h)/2[base]"), "{g}");
+        assert!(g.contains("scale=134:180") && g.contains("scale=1080:1440:flags=bilinear") && g.contains("overlay=0+(1080-w)/2:380+(608-h)/2[base]"), "{g}");
         let sq = Frame { w: 1080, h: 1080, fit: "fill".into(), vx: 0, vy: 0, vw: 0, vh: 0, crop_box: false };
         let zoomed = Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 560, vw: 1080, vh: 810, crop_box: true };
         assert!(build_filter_script("x", "night", 0.7, Some(&zoomed), false, &[], "none", None, true).contains("crop=1080:810:(iw-1080)*0.7000"));
@@ -1431,8 +1731,42 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             save_cover_sidecar: false,
             landscape_cover_png: None,
         };
-        let res_hold = render_clip(&data, req_hold, cancel, |_, _, _| {}).await.unwrap();
+        let res_hold = render_clip(&data, req_hold, cancel.clone(), |_, _, _| {}).await.unwrap();
         assert!(std::fs::metadata(&res_hold.video_path).unwrap().len() > 10_000);
+
+        // Multi-cue O(1) concat demuxer stream + downscaled blur smoke test (12 uniform cues)
+        let out_concat = data.join("out-concat.mp4");
+        let cue_png = minimal_rgba_png_b64(1080, 200, 255, 220, 80, 180);
+        let many_cues: Vec<CueOverlay> = (0..12)
+            .map(|i| CueOverlay {
+                start: i as f64 * 0.15,
+                end: i as f64 * 0.15 + 0.12,
+                y: 1236,
+                png_base64: cue_png.clone(),
+            })
+            .collect();
+        let req_concat = RenderRequest {
+            frame: Some(Frame { w: 1080, h: 1920, fit: "card".into(), vx: 0, vy: 556, vw: 1080, vh: 810, crop_box: true }),
+            output_dir: None,
+            lead: 0.0,
+            speed: 1.0,
+            raw_path: src.to_string_lossy().into_owned(),
+            output_path: Some(out_concat.to_string_lossy().into_owned()),
+            default_name: "smoke-concat".into(),
+            layout: "frame".into(),
+            card_bg: "blur".into(),
+            crop_x: 0.5,
+            duration: 2.0,
+            static_overlay_png: Some(minimal_rgba_png_b64(1080, 1920, 0, 0, 0, 0)),
+            cues: many_cues,
+            cover_png: Some(minimal_rgba_png_b64(1080, 1920, 24, 24, 28, 255)),
+            cover_mode: "flash".into(),
+            embed_thumbnail: true,
+            save_cover_sidecar: false,
+            landscape_cover_png: None,
+        };
+        let res_concat = render_clip(&data, req_concat, cancel, |_, _, _| {}).await.unwrap();
+        assert!(std::fs::metadata(&res_concat.video_path).unwrap().len() > 10_000);
         let _ = std::fs::remove_dir_all(&data);
     }
 }

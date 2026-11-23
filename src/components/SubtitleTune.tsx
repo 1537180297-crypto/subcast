@@ -4,17 +4,33 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ALargeSmall } from "lucide-react";
 import { useStore } from "../store";
+import type { Episode } from "../lib/api";
 import { t, useLang } from "../lib/i18n";
+import { subtitleModeFor, subtitleModePatch, type SubtitleMode } from "../lib/settings";
 import { ACTIONS, prettyCombo } from "../lib/shortcuts";
 import { Seg, SubSizeSliders } from "./ReadingSettings";
 import { toggleTheater } from "./Players";
 
-export function SubtitleTune() {
+export function SubtitleTune({ ep }: { ep?: Episode }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useLang((s) => s.lang);
-  const s = useStore(useShallow((x) => ({ subtitleScale: x.settings.subtitleScale, subtitleOrigScale: x.settings.subtitleOrigScale, subtitleLift: x.settings.subtitleLift, subtitleMode: x.settings.subtitleMode, subtitleLook: x.settings.subtitleLook, shortcuts: x.settings.shortcuts })));
+  const s = useStore(useShallow((x) => {
+    const target = ep ?? x.current;
+    return {
+      subtitleScale: x.settings.subtitleScale,
+      subtitleOrigScale: x.settings.subtitleOrigScale,
+      subtitleLift: x.settings.subtitleLift,
+      subtitleMode: subtitleModeFor(x.settings, target),
+      subtitleLook: x.settings.subtitleLook,
+      shortcuts: x.settings.shortcuts,
+    };
+  }));
   const save = useStore((x) => x.saveSettings);
+  const saveMode = (v: SubtitleMode) => {
+    const st = useStore.getState();
+    void save(subtitleModePatch(st.settings, ep ?? st.current, v));
+  };
   useEffect(() => {
     if (!open) return;
     const away = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
@@ -34,7 +50,7 @@ export function SubtitleTune() {
           <SubSizeSliders />
           <div className="sub-tune-row">
             <span>{t("显示")}</span>
-            <Seg value={s.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")]]} onChange={(v) => void save({ subtitleMode: v })} />
+            <Seg value={s.subtitleMode} options={[["bilingual", t("双语")], ["translation", t("中文")], ["original", t("原文")], ["off", t("关闭")]]} onChange={saveMode} />
           </div>
           <div className="sub-tune-row">
             <span>{t("样式")}</span>

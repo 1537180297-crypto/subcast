@@ -3,7 +3,7 @@ import { ask } from "../lib/confirm";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X, Youtube } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X, Youtube } from "lucide-react";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
@@ -12,6 +12,7 @@ import { isChineseUi, t, useLang } from "../lib/i18n";
 import { HOME_SHOW_FEED, showLinks } from "../lib/showLinks";
 import { AlsoOn, HomeShowBanner, YtButton, usePromo } from "./YtPromo";
 import { useShowName, useZh } from "../lib/zh";
+import { showAliasPatch } from "../lib/settings";
 import { useStore } from "../store";
 import { SkeletonFeed } from "./Skeleton";
 import { EmptyState, FlatLineArt, HeadphonesArt, NightNote, TrayArt } from "./Illustrations";
@@ -57,9 +58,9 @@ function useScrollRestore(key: string, ready: boolean) {
 
 // ---- episode rows -------------------------------------------------------------------------------
 
-function ShowName({ title }: { title?: string }) {
+function ShowName({ title, showId }: { title?: string; showId?: string }) {
   if (!title) return null;
-  const { zh, orig } = useShowName(title);
+  const { zh, orig } = useShowName(title, showId);
   return <span className="show-name">{zh ?? orig}</span>;
 }
 
@@ -143,7 +144,7 @@ const EpisodeRow = memo(function EpisodeRow({ ep, showShow, hit, query }: { ep: 
                 : t("看到 {at}", { at: clockShort(progress) })}
             </span>
           )}
-          {showShow && ep.showId !== "single" && <ShowName title={ep.showTitle} />}
+          {showShow && ep.showId !== "single" && <ShowName title={ep.showTitle} showId={ep.showId} />}
           <span>{date(ep.published)}</span>
           {ep.duration ? <span>{duration(ep.duration)}</span> : null}
         </p>
@@ -229,7 +230,7 @@ function ContinueHero({ ep }: { ep: Episode }) {
         {pct > 0 && <span className="hero-bar" aria-hidden><span style={{ width: `${pct}%` }} /></span>}
       </div>
       <div className="hero-meta">
-        <p className="meta-line">{t("继续收听")}{ep.showTitle && ep.showId !== "single" ? <> · <ShowName title={ep.showTitle} /></> : null}</p>
+        <p className="meta-line">{t("继续收听")}{ep.showTitle && ep.showId !== "single" ? <> · <ShowName title={ep.showTitle} showId={ep.showId} /></> : null}</p>
         <p className="hero-title">{zh ?? ep.title}</p>
         {zh && zh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
         <div className="hero-foot">
@@ -243,7 +244,7 @@ function ContinueHero({ ep }: { ep: Episode }) {
 
 function ShowTile({ show }: { show: Show }) {
   const go = useStore((s) => s.go);
-  const { zh, orig } = useShowName(show.title);
+  const { zh, orig } = useShowName(show.title, show.id);
   return (
     <div className="show-tile" role="button" tabIndex={0} onClick={() => go({ kind: "show", id: show.id })} onKeyDown={(e) => e.key === "Enter" && go({ kind: "show", id: show.id })}>
       <div className="tile-cover">{show.cover ? <img src={show.cover} alt="" loading="lazy" decoding="async" /> : <div className="cover-fallback">{orig.slice(0, 1)}</div>}</div>
@@ -288,7 +289,7 @@ function EpisodeCard({ ep, wide }: { ep: Episode; wide?: boolean }) {
       </div>
       <p className="ep-kicker">
         {status === "unseen" && <span className="unseen-dot" aria-hidden />}
-        {ep.showId !== "single" && <ShowName title={ep.showTitle} />}
+        {ep.showId !== "single" && <ShowName title={ep.showTitle} showId={ep.showId} />}
         <span>{status === "in-progress" && leftMin ? t("看到 {pct}% · 剩 {n} 分钟", { pct, n: leftMin }) : date(ep.published)}</span>
       </p>
       <p className="card-title">{zh ?? ep.title}</p>
@@ -516,7 +517,9 @@ export function ShowView({ id }: { id: string }) {
   const [expanded, setExpanded] = useState(false);
   const [showOrig, setShowOrig] = useState(false);
   const [menu, setMenu] = useState(false);
-  const names = useShowName(show?.title ?? "");
+  const [renaming, setRenaming] = useState(false);
+  const [aliasDraft, setAliasDraft] = useState("");
+  const names = useShowName(show?.title ?? "", id);
   const desc = (show?.description ?? "").replace(/<[^>]+>/g, "").trim().slice(0, 1500);
   const descZh = useZh(desc);
   useEffect(() => {
@@ -584,6 +587,16 @@ export function ShowView({ id }: { id: string }) {
     await reloadShows();
     go({ kind: "latest" });
   };
+  const startRename = () => {
+    setMenu(false);
+    setAliasDraft(names.aliased ? (names.zh ?? names.orig) : "");
+    setRenaming(true);
+  };
+  const commitRename = () => {
+    const st = useStore.getState();
+    void st.saveSettings(showAliasPatch(st.settings, id, aliasDraft));
+    setRenaming(false);
+  };
   const descText = showOrig || !descZh ? desc : descZh;
   const links = showLinks(show.feedUrl);
   return (
@@ -592,7 +605,32 @@ export function ShowView({ id }: { id: string }) {
         {show.cover ? <img src={show.cover} alt="" /> : <div className="cover-fallback" />}
         <div className="show-info">
           <p className="meta-line">{show.kind === "youtube" ? t("YouTube 频道") : show.kind === "xiaoyuzhou" ? t("小宇宙") : t("播客")}{show.author && show.author !== show.title ? ` · ${show.author}` : ""}</p>
-          <h1 className="show-title-h">{names.zh ?? names.orig}</h1>
+          {renaming ? (
+            <div className="show-rename-row">
+              <input
+                className="show-rename-input"
+                value={aliasDraft}
+                autoFocus
+                placeholder={names.orig}
+                aria-label={t("自定义节目名")}
+                onChange={(e) => setAliasDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                  if (e.key === "Escape") { e.stopPropagation(); setRenaming(false); }
+                }}
+              />
+              <button type="button" className="btn primary sm" onClick={commitRename}>{t("保存")}</button>
+              <button type="button" className="btn ghost sm" onClick={() => setRenaming(false)}>{t("取消")}</button>
+              {names.aliased && (
+                <button type="button" className="link-btn small" onClick={() => { const st = useStore.getState(); void st.saveSettings(showAliasPatch(st.settings, id, "")); setRenaming(false); }}>{t("恢复原名")}</button>
+              )}
+            </div>
+          ) : (
+            <div className="show-title-row">
+              <h1 className="show-title-h">{names.zh ?? names.orig}</h1>
+              <button type="button" className="icon-btn sm show-rename-btn" title={t("重命名")} aria-label={t("重命名")} onClick={startRename}><Pencil size={14} /></button>
+            </div>
+          )}
           {(names.zh || names.orig !== show.title) && <span className="orig-line clamp1">{show.title}</span>}
           {desc && (
             <>
@@ -611,6 +649,7 @@ export function ShowView({ id }: { id: string }) {
               <button className="btn ghost sm" onClick={() => setMenu(!menu)} aria-haspopup="menu" aria-expanded={menu}><MoreHorizontal size={14} /> {t("更多")}</button>
               {menu && (
                 <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
+                  <button role="menuitem" onClick={startRename}><Pencil size={14} /> {t("重命名…")}</button>
                   <button role="menuitem" disabled={unwatchedCount === 0} onClick={markAll}><CheckCircle2 size={14} /> {t("全部标为已看")}</button>
                   <button role="menuitem" className="danger" onClick={remove}>{t("取消订阅")}</button>
                 </div>
