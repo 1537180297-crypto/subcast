@@ -82,7 +82,8 @@ export function HighlightsPanel({
   useClipWarm(ep, segments);
   const [copying, setCopying] = useState<string | null>(null);
   // Picking clips for one montage (several stretches cut together, in time order).
-  const [picking, setPicking] = useState(false);
+  /** Ticking highlights: to cut them into one video, or to export each as its own. */
+  const [picking, setPicking] = useState<false | "montage" | "batch">(false);
   const [picked, setPicked] = useState<string[]>([]);
 
   const clips = useMemo(() => {
@@ -127,6 +128,14 @@ export function HighlightsPanel({
     setPicking(false);
     setPicked([]);
     openVideoClipDialog({ ep, segments, zh: mergedZh, clip: montageClip(chosen) });
+  };
+  // Each picked highlight as its own video: the dialog opens on the first to set things up, then exports them all.
+  const openBatch = (ids: string[]) => {
+    const chosen = clips.filter((c) => ids.includes(c.id));
+    if (chosen.length < 2) return;
+    setPicking(false);
+    setPicked([]);
+    openVideoClipDialog({ ep, segments, zh: mergedZh, clip: chosen[0], batch: chosen });
   };
   // The best clips, in time order, up to about three minutes: a one-click "best of".
   const bestOf = () => {
@@ -208,8 +217,11 @@ export function HighlightsPanel({
             <button type="button" className="link-btn" onClick={bestOf} title={t("把评分最高的几段按时间顺序剪成一条")}>
               <Sparkles size={12} /> {t("精华合集")}
             </button>
-            <button type="button" className="link-btn" onClick={() => { setPicking(true); setPicked([]); }}>
+            <button type="button" className="link-btn" onClick={() => { setPicking("montage"); setPicked([]); }}>
               <Layers size={12} /> {t("自选拼接")}
+            </button>
+            <button type="button" className="link-btn" onClick={() => { setPicking("batch"); setPicked([]); }} title={t("勾选几段，用同一套设置各导出一条")}>
+              <Scissors size={12} /> {t("批量导出")}
             </button>
           </>
         )}
@@ -236,12 +248,22 @@ export function HighlightsPanel({
 
       {picking && (
         <div className="hl-pickbar">
-          <span className="small">{picked.length ? t("已选 {n} 段，会按时间顺序拼成一条", { n: picked.length }) : t("勾选要拼在一起的片段")}</span>
+          <span className="small">
+            {picking === "batch"
+              ? (picked.length ? t("已选 {n} 段，每段导出一条视频", { n: picked.length }) : t("勾选要导出的片段"))
+              : (picked.length ? t("已选 {n} 段，会按时间顺序拼成一条", { n: picked.length }) : t("勾选要拼在一起的片段"))}
+          </span>
           <span className="spacer" />
           <button type="button" className="btn ghost sm" onClick={() => { setPicking(false); setPicked([]); }}>{t("取消")}</button>
-          <button type="button" className="btn primary sm" disabled={picked.length < 2} onClick={() => openMontage(picked)}>
-            <Scissors size={12} /> {t("拼成视频")}
-          </button>
+          {picking === "batch" ? (
+            <button type="button" className="btn primary sm" disabled={picked.length < 2} onClick={() => openBatch(picked)}>
+              <Scissors size={12} /> {t("设置并导出")}
+            </button>
+          ) : (
+            <button type="button" className="btn primary sm" disabled={picked.length < 2} onClick={() => openMontage(picked)}>
+              <Scissors size={12} /> {t("拼成视频")}
+            </button>
+          )}
         </div>
       )}
 

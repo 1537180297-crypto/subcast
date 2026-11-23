@@ -34,6 +34,8 @@ export interface ClipModalTarget {
   segments: Segment[];
   zh?: (string | null | undefined)[];
   clip: HighlightClip;
+  /** Batch export: these highlights, one after another, with the settings chosen on the first. */
+  batch?: HighlightClip[];
 }
 
 export const useClipModal = create<{ target: ClipModalTarget | null }>(() => ({ target: null }));
@@ -665,8 +667,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     }
   };
 
-  const runExport = async (askPath: boolean) => {
-    if (busyJob) return;
+  /** Exports the clip as set up now; true when a file was written (batch export goes on from there). */
+  const runExport = async (askPath: boolean): Promise<boolean> => {
+    if (busyJob) return false;
     setExported(null);
     setError(null);
     setNeedsSetup(false);
@@ -679,11 +682,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         defaultPath: `${defaultName}.mp4`,
         filters: [{ name: "MP4", extensions: ["mp4"] }],
       }).catch(() => null);
-      if (!customPath) return;
+      if (!customPath) return false;
     }
 
     const prep = await ensurePrepared();
-    if (!prep) return;
+    if (!prep) return false;
 
     const jobId = `vclip-render-${Date.now()}`;
     const startedAt = performance.now();
@@ -815,8 +818,10 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         label: t("打开文件夹"),
         run: () => void api.revealFile(result.videoPath).catch(() => {}),
       });
+      return true;
     } catch (e) {
       if (!rawErrorText(e).includes("已取消")) setError(errorText(e)); // i18n-ignore
+      return false;
     } finally {
       setBusyJob(null);
     }
@@ -895,6 +900,40 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   // Modal-scoped keyboard shortcuts: Space play/pause, ←/→ seek 2s, ⌘/Ctrl+Enter export.
   const runExportRef = useRef(runExport);
   runExportRef.current = runExport;
+
+  // Batch export: each highlight in turn gets its range and titles, then the same export as the button.
+  const batch = target.batch && target.batch.length > 1 ? target.batch : null;
+  const [run, setRun] = useState<{ i: number; ok: number; step: "set" | "export" } | null>(null);
+  const stopBatch = useRef(false);
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!run || !batch) return;
+    if (run.step === "set") {
+      const c = batch[run.i];
+      setStartIdx(Math.max(0, Math.min(segments.length - 1, c.startIdx)));
+      setEndIdx(Math.max(c.startIdx, Math.min(segments.length - 1, c.endIdx)));
+      setTitle(c.title);
+      setCoverHook(c.coverHook || c.title);
+      setCoverSub(c.coverSub || "");
+      setRun({ ...run, step: "export" });
+      return;
+    }
+    // A render later, so the export reads this clip's range and titles.
+    let live = true;
+    void runExportRef.current(false).then((ok) => {
+      if (!live) return;
+      const done = { ...run, ok: run.ok + (ok ? 1 : 0) };
+      if (stopBatch.current || run.i + 1 >= batch.length) {
+        setRun(null);
+        stopBatch.current = false;
+        setStopping(false);
+        notify(t("批量导出完成：{ok}/{n} 段", { ok: done.ok, n: batch.length }));
+        return;
+      }
+      setRun({ i: run.i + 1, ok: done.ok, step: "set" });
+    });
+    return () => { live = false; };
+  }, [run?.i, run?.step]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -993,6 +1032,12 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   return (
     <Modal title={t("剪成视频")} onClose={requestClose} wide>
       {/* Square and landscape clips get half the dialog so the preview isn't a postage stamp; portrait keeps a slim column. */}
+      {batch && (
+        <p className="vclip-batch-note small">
+          {run ? t("正在依次导出，第 {i}/{n} 段：{title}", { i: run.i + 1, n: batch.length, title: batch[run.i].title })
+            : t("批量导出 {n} 段：用第一段把比例、字幕和封面设好，每段会用同样的设置、自己的标题导出。", { n: batch.length })}
+        </p>
+      )}
       <div className={`vclip-layout${geo.W >= geo.H ? " wide-pv" : ""}`}>
         {/* Left: live WYSIWYG video / cover preview */}
         <div className="vclip-preview-col" ref={pvColRef}>
@@ -1341,7 +1386,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                         <span className="vclip-bound-name">{label}</span>
                         {!montage && <span className="num small muted">{clock(at)}</span>}
                         {!montage && (
-                          <span className="vclip-step" role="group" aria-label={label}>
+                          <span className="vclip-nudge" role="group" aria-label={label}>
                             <button type="button" disabled={noEarlier} onClick={earlier} title={t("提前一句")} aria-label={t("提前一句")}><ChevronLeft size={14} /></button>
                             <button type="button" disabled={noLater} onClick={later} title={t("推后一句")} aria-label={t("推后一句")}><ChevronRight size={14} /></button>
                           </span>
@@ -1595,9 +1640,21 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         <button type="button" className="btn" disabled={!!busyJob} onClick={() => void runExport(true)}>
           {t("另存为…")}
         </button>
-        <button type="button" className="btn primary" disabled={!!busyJob} onClick={() => void runExport(false)} title={`${t("导出 MP4")} (${kbd("⌘↵")})`}>
-          <Scissors size={14} /> {t("导出 MP4")}
-        </button>
+        {batch ? (
+          run ? (
+            <button type="button" className="btn primary" onClick={() => { stopBatch.current = true; setStopping(true); }} disabled={stopping}>
+              <Loader2 size={14} className="spin" /> {stopping ? t("本段导出后停止") : t("正在导出第 {i}/{n} 段 · 点此在本段后停止", { i: run.i + 1, n: batch.length })}
+            </button>
+          ) : (
+            <button type="button" className="btn primary" disabled={!!busyJob} onClick={() => { stopBatch.current = false; setRun({ i: 0, ok: 0, step: "set" }); }} title={t("用现在的设置依次导出选中的每一段")}>
+              <Scissors size={14} /> {t("导出这 {n} 段", { n: batch.length })}
+            </button>
+          )
+        ) : (
+          <button type="button" className="btn primary" disabled={!!busyJob} onClick={() => void runExport(false)} title={`${t("导出 MP4")} (${kbd("⌘↵")})`}>
+            <Scissors size={14} /> {t("导出 MP4")}
+          </button>
+        )}
       </div>
     </Modal>
   );

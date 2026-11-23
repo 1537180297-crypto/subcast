@@ -1750,6 +1750,18 @@ const dict: Record<string, string> = {
   "人物一直在同一位置": "They stay in one place",
   "没找到人物，用下面的位置": "No one found; uses the position below",
   "自动": "Auto",
+  "勾选几段，用同一套设置各导出一条": "Tick several highlights and export each with the same settings",
+  "批量导出": "Batch export",
+  "已选 {n} 段，每段导出一条视频": "{n} picked, each becomes its own video",
+  "勾选要导出的片段": "Tick the highlights to export",
+  "设置并导出": "Set up and export",
+  "批量导出完成：{ok}/{n} 段": "Batch export done: {ok}/{n}",
+  "正在依次导出，第 {i}/{n} 段：{title}": "Exporting {i}/{n}: {title}",
+  "批量导出 {n} 段：用第一段把比例、字幕和封面设好，每段会用同样的设置、自己的标题导出。": "Batch export of {n}: set the aspect, subtitles and cover on the first one; each exports with the same settings and its own titles.",
+  "正在导出第 {i}/{n} 段 · 点此在本段后停止": "Exporting {i}/{n} · click to stop after this one",
+  "用现在的设置依次导出选中的每一段": "Export each picked highlight with these settings",
+  "导出这 {n} 段": "Export these {n}",
+  "本段导出后停止": "Stopping after this one",
 };
 
 export default dict;
