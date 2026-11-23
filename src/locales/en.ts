@@ -1508,10 +1508,6 @@ const dict: Record<string, string> = {
   "SubCast 切片": "SubCast Clip",
   "视频切片已导出到 {path}": "Video clip exported to {path}",
   "发布文案已复制": "Post copy copied",
-  "前一句": "Add prev",
-  "缩首句": "Trim start",
-  "缩尾句": "Trim end",
-  "后一句": "Add next",
   "开头留白": "Lead-in",
   "结尾留白": "Tail",
   "中文译文": "Chinese translation",
@@ -1712,6 +1708,10 @@ const dict: Record<string, string> = {
   "16:9 横屏铺满，保留停顿，封面另存": "16:9 landscape filled, pauses kept, cover saved separately",
   "朋友圈 · 公众号": "WeChat Moments · Articles",
   "1:1 方形，片头定格 1 秒封面": "1:1 square, cover held for 1 second at the start",
+  "开头": "Start",
+  "结尾": "End",
+  "提前一句": "One sentence earlier",
+  "推后一句": "One sentence later",
 };
 
 export default dict;

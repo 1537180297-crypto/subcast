@@ -2305,6 +2305,8 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .modal.wide:has(.vclip-layout) { width: min(960px, calc(100vw - 32px)); height: min(760px, calc(100vh - 44px)); }
 .modal-body:has(> .vclip-layout) { display: flex; flex-direction: column; overflow: hidden; }
 .vclip-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 20px; }
+.vclip-layout.wide-pv { grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); }
+.vclip-preview-col > * { max-width: 100%; }
 .vclip-layout + .modal-foot { flex: none; align-items: center; }
 
 .vclip-preview-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; align-items: center; }
@@ -2338,23 +2340,32 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .vclip-sec { display: flex; flex-direction: column; gap: 9px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
 .vclip-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .vclip-label { font-size: 12.5px; font-weight: 600; color: var(--text); }
-.vclip-bound-btns { display: flex; flex-wrap: wrap; gap: 6px; }
-.vclip-bound-btns .btn { gap: 3px; }
-.vclip-pads { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.vclip-pads label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.vclip-pads input[type=range], .vclip-crop-row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+/* 微调起止: start and end as two small cards, each with its time, a ‹ › sentence stepper and its padding. */
+.vclip-bounds { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vclip-bound { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); min-width: 0; }
+.vclip-bound-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.vclip-bound-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.vclip-step { margin-left: auto; display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--soft); }
+.vclip-step button { display: inline-grid; place-items: center; width: 26px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; }
+.vclip-step button:hover:not(:disabled) { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.vclip-step button:disabled { opacity: .35; cursor: default; }
+.vclip-pad { display: grid; grid-template-columns: auto minmax(0, 1fr) 40px; align-items: center; gap: 8px; }
+.vclip-pad .num { text-align: right; }
+.vclip-pad input[type=range], .vclip-crop-row input[type=range] { width: 100%; min-width: 0; accent-color: var(--accent); }
+.vclip-size-row { display: flex; align-items: center; gap: 8px; flex: 0 1 240px; min-width: 160px; }
+.vclip-size-row .num { width: 38px; text-align: right; }
 .vclip-crop-row { flex: 1; display: flex; align-items: center; gap: 8px; max-width: 240px; }
 
-.vclip-lines { max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); }
+.vclip-lines { margin-top: 10px; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); }
 .vclip-line { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
 .vclip-line:hover { background: var(--soft); }
 .vclip-line.on { background: var(--active-line); }
-.vclip-lt { font-size: 11px; color: var(--muted); padding-top: 2px; min-width: 36px; flex: none; }
+.vclip-lt { font-size: 11px; color: var(--muted); padding-top: 2px; min-width: 44px; flex: none; }
 .vclip-lbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .vclip-lzh { font-size: 12.5px; color: var(--text); }
 .vclip-lorig { font-size: 11.5px; color: var(--text-2); }
-.vclip-edit-btn { flex: none; font-size: 11px; opacity: .75; }
-.vclip-line:hover .vclip-edit-btn { opacity: 1; }
+.vclip-edit-btn { flex: none; font-size: 11px; opacity: 0; transition: opacity .12s var(--ease); }
+.vclip-line:hover .vclip-edit-btn, .vclip-line.on .vclip-edit-btn, .vclip-edit-btn:focus-visible { opacity: 1; }
 .vclip-edit-box { display: flex; flex-direction: column; gap: 5px; }
 .vclip-edit-box input { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 12px; }
 .vclip-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
@@ -2401,7 +2412,10 @@ canvas.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-
 .hl-title-btn { all: unset; cursor: pointer; }
 .hl-title-btn:hover { color: var(--accent-text); }
 .vclip-placeholder { position: absolute; inset: 0; overflow: hidden; }
-.vclip-yt { position: absolute; border: 0; pointer-events: none; }
+.vclip-yt { position: absolute; border: 0; pointer-events: none; opacity: 0; transition: opacity .25s var(--ease); }
+.vclip-yt.on { opacity: 1; }
+/* The old clip, frozen and softened while the new range downloads. */
+.vclip-video-box video.stale { filter: blur(6px) brightness(.72); transition: filter .2s var(--ease); pointer-events: none; }
 .vclip-pv-progress { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 6; display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 10px; background: rgba(14,14,18,0.78); color: #fff; font-size: 12px; overflow: hidden; backdrop-filter: blur(6px); }
 .vclip-pv-progress span:first-child { flex: 1; }
 .vclip-pv-progress i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); transition: width .4s linear; }

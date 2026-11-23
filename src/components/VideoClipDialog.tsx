@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { Check, Copy, FolderOpen, Image as ImageIcon, Loader2, Minus, Pause, Play, Plus, RotateCcw, Scissors, Volume2, VolumeX } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, FolderOpen, Image as ImageIcon, Loader2, Pause, Play, RotateCcw, Scissors, Volume2, VolumeX } from "lucide-react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorText, rawErrorText, type Episode, type RenderVideoClipResult, type Segment, type VideoClipProgress } from "../lib/api";
@@ -441,6 +441,10 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
 
   const posterBackdrop = ep.cover || (ep.videoId ? `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg` : undefined);
   const preparedValid = !!prepared && prepared.key === rangesKey;
+  const preparedValidRef = useRef(preparedValid);
+  preparedValidRef.current = preparedValid;
+  // A new range is being fetched: the old clip holds still under the progress instead of playing on.
+  useEffect(() => { if (!preparedValid) videoRef.current?.pause(); }, [preparedValid]);
   // Pauses to cut (raw clip time) and the clip's length once they're gone.
   const pauses = useMemo(
     () => (removePauses && preparedValid && prepared ? pauseCuts(prepared.silences, prepared.duration) : null),
@@ -891,6 +895,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   // spill into the footer on a short window.
   const pvColRef = useRef<HTMLDivElement>(null);
   const [pvRoom, setPvRoom] = useState(520);
+  const [pvRoomW, setPvRoomW] = useState(340);
   useEffect(() => {
     const col = pvColRef.current;
     if (!col) return;
@@ -900,14 +905,15 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       const others = kids.filter((k) => !k.classList.contains("vclip-stage")).reduce((n, k) => n + k.offsetHeight, 0);
       const room = Math.floor(col.clientHeight - others - gap * Math.max(0, kids.length - 1));
       setPvRoom(Math.max(180, room));
+      setPvRoomW(Math.max(200, col.clientWidth));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(col);
     for (const k of Array.from(col.children)) if (!k.classList.contains("vclip-stage")) ro.observe(k);
     return () => ro.disconnect();
-  }, [pvView, montage, segments.length > 1, preparedValid]);
-  const pvScale = Math.min(440 / geo.W, Math.min(520, pvRoom) / geo.H);
+  }, [pvView, montage, segments.length > 1, preparedValid, geo.W > geo.H]);
+  const pvScale = Math.min(Math.min(440, pvRoomW) / geo.W, Math.min(520, pvRoom) / geo.H);
   const stageStyle: React.CSSProperties = { width: Math.round(geo.W * pvScale), height: Math.round(geo.H * pvScale), flex: "none" };
   const boxStyle: React.CSSProperties = {
     left: `${(geo.video.x / geo.W) * 100}%`, top: `${(geo.video.y / geo.H) * 100}%`,
@@ -926,12 +932,33 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         ? { width: "100%", height: `${(boxRatio / srcRatio) * 100}%`, top: `${((1 - boxRatio / srcRatio) / 2) * 100}%`, left: 0 }
         : { height: "100%", width: `${(srcRatio / boxRatio) * 100}%`, left: `${((1 - srcRatio / boxRatio) / 2) * 100}%`, top: 0 };
   // Scaled up so YouTube's own title bar and controls fall outside the box (a stand-in until the cut is ready).
+  // The YouTube stand-in stays hidden until it really plays, and goes away on an error (embedding blocked, no
+  // referrer in a debug build...): the poster shows instead of YouTube's error page.
+  const ytRef = useRef<HTMLIFrameElement>(null);
+  const [ytShown, setYtShown] = useState(false);
+  const [ytFailed, setYtFailed] = useState(false);
+  useEffect(() => { setYtShown(false); setYtFailed(false); }, [ep.videoId, clipStart, clipEnd]);
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      if (!/youtube(-nocookie)?\.com$/.test(new URL(e.origin || "http://x").hostname)) return;
+      if (e.source !== ytRef.current?.contentWindow) return;
+      let m: { event?: string; info?: unknown } | null = null;
+      try { m = typeof e.data === "string" ? JSON.parse(e.data) : e.data; } catch { return; }
+      if (!m) return;
+      if (m.event === "onError") setYtFailed(true);
+      const state = m.event === "onStateChange" ? m.info : m.event === "infoDelivery" ? (m.info as { playerState?: number } | null)?.playerState : undefined;
+      if (state === 1) setYtShown(true);
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
   const ytFrameStyle: React.CSSProperties = { ...ytFrameBase, transform: "scale(1.35)", transformOrigin: "center" };
   const preparing = !!busyJob && ["download", "ffmpeg", "trim"].includes(busyJob.stage);
 
   return (
     <Modal title={t("剪成视频")} onClose={requestClose} wide>
-      <div className="vclip-layout">
+      {/* Square and landscape clips get half the dialog so the preview isn't a postage stamp; portrait keeps a slim column. */}
+      <div className={`vclip-layout${geo.W >= geo.H ? " wide-pv" : ""}`}>
         {/* Left: live WYSIWYG video / cover preview */}
         <div className="vclip-preview-col" ref={pvColRef}>
           <div className="vclip-pv-switch">
@@ -961,15 +988,17 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 <img src={posterBackdrop} alt="" className="vclip-blur-bg" />
               )}
               <div className="vclip-video-box" style={boxStyle}>
-                {preparedValid && prepared ? (
+                {prepared ? (
                   <video
                     ref={videoRef}
+                    className={preparedValid ? undefined : "stale"}
                     src={convertFileSrc(prepared.path)}
                     autoPlay
                     playsInline
                     muted={pvMuted}
                     onLoadedMetadata={(e) => {
                       const v = e.currentTarget;
+                      if (!preparedValidRef.current) { v.pause(); return; }
                       v.currentTime = prepared.lead;
                       v.playbackRate = speed;
                       // With sound; where the system won't autoplay sound, it plays muted and says so.
@@ -992,20 +1021,23 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                       if (s.playing) s.player?.toggle();
                     }}
                     onPause={() => setPvPlaying(false)}
-                    onClick={togglePreviewPlay}
+                    onClick={preparedValid ? togglePreviewPlay : undefined}
                   />
                 ) : (
                   <div className="vclip-placeholder">
                     {/* While the stretch downloads, YouTube plays it in place (muted), framed like the export. */}
-                    {ep.videoId && !montage ? (
+                    {posterBackdrop && <img src={posterBackdrop} alt="" style={mediaStyle} />}
+                    {ep.videoId && !montage && !ytFailed && (
                       <iframe
-                        className="vclip-yt"
+                        ref={ytRef}
+                        className={`vclip-yt${ytShown ? " on" : ""}`}
                         title={t("预览")}
                         style={ytFrameStyle}
+                        onLoad={() => ytRef.current?.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: 1, channel: "widget" }), "*")}
                         allow="autoplay; encrypted-media"
-                        src={`https://www.youtube.com/embed/${ep.videoId}?start=${Math.floor(clipStart)}&end=${Math.ceil(clipEnd)}&autoplay=1&mute=0&controls=0&playsinline=1&rel=0&modestbranding=1&loop=1&playlist=${ep.videoId}&disablekb=1&iv_load_policy=3&cc_load_policy=0&origin=${encodeURIComponent(location.origin)}`}
+                        src={`https://www.youtube.com/embed/${ep.videoId}?start=${Math.floor(clipStart)}&end=${Math.ceil(clipEnd)}&autoplay=1&mute=0&controls=0&playsinline=1&rel=0&modestbranding=1&loop=1&playlist=${ep.videoId}&disablekb=1&iv_load_policy=3&cc_load_policy=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`}
                       />
-                    ) : posterBackdrop ? <img src={posterBackdrop} alt="" style={mediaStyle} /> : null}
+                    )}
                   </div>
                 )}
               </div>
@@ -1162,6 +1194,13 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     onChange={setSubLang}
                   />
                 </div>}
+                {addSubs && <div className="reading-row">
+                  <span>{t("字幕大小")}</span>
+                  <div className="vclip-crop-row vclip-size-row">
+                    <input type="range" min={0.7} max={1.5} step={0.05} value={subScale} onChange={(e) => setSubScale(Number(e.target.value))} aria-label={t("字幕大小")} />
+                    <span className="num small muted">{Math.round(subScale * 100)}%</span>
+                  </div>
+                </div>}
               </section>
               {(card || (!card && aspect !== "source") || geo.cropBox) && (
                 <details className="vclip-sec vclip-adv">
@@ -1199,7 +1238,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               )}
               {addSubs && (
                 <details className="vclip-sec vclip-adv">
-                  <summary className="vclip-sec-head"><span className="vclip-label">{t("字幕样式")}</span><span className="small muted">{t(SUB_STYLES.find((x) => x.id === subStyle)?.name ?? "")} · {Math.round(subScale * 100)}%</span></summary>
+                  <summary className="vclip-sec-head"><span className="vclip-label">{t("字幕样式")}</span><span className="small muted">{t(SUB_STYLES.find((x) => x.id === subStyle)?.name ?? "")}</span></summary>
                   <div className="vclip-styles">
                     {SUB_STYLES.map((st) => (
                       <button key={st.id} type="button" className={`vclip-style-btn ${subStyle === st.id ? "on" : ""}`} onClick={() => setSubStyle(st.id)}>
@@ -1207,13 +1246,6 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                         <span>{t(st.name)}</span>
                       </button>
                     ))}
-                  </div>
-                  <div className="reading-row">
-                    <span>{t("字幕大小")}</span>
-                    <div className="vclip-crop-row">
-                      <input type="range" min={0.7} max={1.5} step={0.05} value={subScale} onChange={(e) => setSubScale(Number(e.target.value))} />
-                      <span className="num small muted">{Math.round(subScale * 100)}%</span>
-                    </div>
                   </div>
                   {!card && prepared?.hasBurnedSubtitles && (
                     <label className="vclip-sub-toggle"><input type="checkbox" checked={liftBurned} onChange={(e) => setLiftBurned(e.target.checked)} /> {t("避让原字幕")}</label>
@@ -1237,15 +1269,34 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                   <span className="vclip-label">{t("微调起止与字幕文字")}</span>
                   <span className="num small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span>
                 </summary>
-                {!montage && <div className="vclip-bound-btns">
-                  <button type="button" className="btn ghost sm" disabled={startIdx <= 0} onClick={() => setStartIdx((i) => Math.max(0, i - 1))}><Plus size={12} /> {t("前一句")}</button>
-                  <button type="button" className="btn ghost sm" disabled={startIdx >= endIdx} onClick={() => setStartIdx((i) => Math.min(endIdx, i + 1))}><Minus size={12} /> {t("缩首句")}</button>
-                  <button type="button" className="btn ghost sm" disabled={endIdx <= startIdx} onClick={() => setEndIdx((i) => Math.max(startIdx, i - 1))}><Minus size={12} /> {t("缩尾句")}</button>
-                  <button type="button" className="btn ghost sm" disabled={endIdx >= segments.length - 1} onClick={() => setEndIdx((i) => Math.min(segments.length - 1, i + 1))}><Plus size={12} /> {t("后一句")}</button>
-                </div>}
-                <div className="vclip-pads">
-                  <label className="small muted">{t("开头留白")} <input type="range" min={-0.3} max={1.0} step={0.05} value={padBefore} onChange={(e) => setPadBefore(Number(e.target.value))} /><span className="num">{padBefore.toFixed(2)}s</span></label>
-                  <label className="small muted">{t("结尾留白")} <input type="range" min={-0.3} max={1.2} step={0.05} value={padAfter} onChange={(e) => setPadAfter(Number(e.target.value))} /><span className="num">{padAfter.toFixed(2)}s</span></label>
+                {/* Start and end side by side: where each sits, a sentence earlier or later, and its lead-in or tail. */}
+                <div className="vclip-bounds">
+                  {([
+                    ["start", t("开头"), clipStart, padBefore, setPadBefore, -0.3, 1.0,
+                      startIdx <= 0, () => setStartIdx((i) => Math.max(0, i - 1)),
+                      startIdx >= endIdx, () => setStartIdx((i) => Math.min(endIdx, i + 1))],
+                    ["end", t("结尾"), clipEnd, padAfter, setPadAfter, -0.3, 1.2,
+                      endIdx <= startIdx, () => setEndIdx((i) => Math.max(startIdx, i - 1)),
+                      endIdx >= segments.length - 1, () => setEndIdx((i) => Math.min(segments.length - 1, i + 1))],
+                  ] as const).map(([key, label, at, pad, setPad, lo, hi, noEarlier, earlier, noLater, later]) => (
+                    <div className="vclip-bound" key={key}>
+                      <div className="vclip-bound-head">
+                        <span className="vclip-bound-name">{label}</span>
+                        {!montage && <span className="num small muted">{clock(at)}</span>}
+                        {!montage && (
+                          <span className="vclip-step" role="group" aria-label={label}>
+                            <button type="button" disabled={noEarlier} onClick={earlier} title={t("提前一句")} aria-label={t("提前一句")}><ChevronLeft size={14} /></button>
+                            <button type="button" disabled={noLater} onClick={later} title={t("推后一句")} aria-label={t("推后一句")}><ChevronRight size={14} /></button>
+                          </span>
+                        )}
+                      </div>
+                      <label className="vclip-pad">
+                        <span className="small muted">{key === "start" ? t("开头留白") : t("结尾留白")}</span>
+                        <input type="range" min={lo} max={hi} step={0.05} value={pad} onChange={(e) => setPad(Number(e.target.value))} />
+                        <span className="num small muted">{pad.toFixed(2)}s</span>
+                      </label>
+                    </div>
+                  ))}
                 </div>
                 <div className="vclip-lines" ref={linesRef}>
                   {clipLineIdx.map((idx, k) => {
