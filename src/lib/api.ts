@@ -99,6 +99,8 @@ export interface RenderVideoClipRequest {
   landscapeCoverPng?: string | null;
   /** Stretches to keep (clip time, before speed); cue times already on the cut clock. */
   keepRanges?: [number, number][];
+  /** Even the sound to −14 LUFS. */
+  loudness?: boolean;
 }
 export interface RenderVideoClipResult { videoPath: string; coverPath?: string | null; landscapeCoverPath?: string | null }
 export interface VideoClipProgress { jobId: string; stage: string; progress: number; message: string }

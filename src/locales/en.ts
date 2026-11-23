@@ -1724,6 +1724,9 @@ const dict: Record<string, string> = {
   "原声": "Original",
   "YouTube 可能按地区自动播放 AI 配音，点这里改回原声": "YouTube may play an AI dub based on your region; switch back to the original audio",
   "听到的是配音？换成原声": "Hearing a dub? Use original audio",
+  "按 -14 LUFS 统一响度，抖音、视频号、B站、YouTube 都按这个标准播放": "Evens the sound to −14 LUFS, the level Douyin, Channels, Bilibili and YouTube play at",
+  "音量统一": "Even loudness",
+  "不同节目导出后一样响": "Clips from different shows play equally loud",
 };
 
 export default dict;

@@ -108,6 +108,10 @@ pub struct RenderRequest {
     /// Cue times arrive already on the cut (and sped-up) clock.
     #[serde(default)]
     pub keep_ranges: Vec<(f64, f64)>,
+    /// Bring the sound to −14 LUFS (what the short-video platforms normalise to), so every clip plays at the
+    /// same level whatever show it came from.
+    #[serde(default)]
+    pub loudness: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1327,6 +1331,36 @@ pub fn with_speed(filter: &str, speed: f64, has_audio: bool) -> String {
     f
 }
 
+/// Integrated loudness the platforms play at (YouTube, TikTok/Douyin, Bilibili all sit around −14 LUFS).
+pub const TARGET_LUFS: f64 = -14.0;
+
+/// Ends the sound chain with a fixed gain to the target loudness and a limiter so the peaks stay under
+/// −1.5 dBTP; whatever left as `[aout]` (or the untouched `[0:a]`) goes through it. Last, so speed and cuts are
+/// already in. A measured gain plus a limiter is steadier than loudnorm's single pass, which pumps on speech
+/// and fell 2 LU short on a real clip.
+pub fn with_loudness(filter: &str, has_audio: bool, gain_db: f64) -> String {
+    if !has_audio { return filter.to_string(); }
+    let tail = format!("volume={gain_db:.2}dB,alimiter=limit=0.84:level=disabled,aresample=48000[aout]");
+    if filter.contains("[aout]") { format!("{};[apre]{tail}", filter.replace("[aout]", "[apre]")) }
+    else { format!("{filter};[0:a]{tail}") }
+}
+
+/// Integrated loudness (LUFS) of `path` from `lead` for `duration` s; `None` for silence or a failed read.
+/// EBU R128 gating leaves pauses out, so cutting them later barely moves it.
+async fn measure_lufs(ffmpeg: &Path, path: &Path, lead: f64, duration: f64) -> Option<f64> {
+    let out = tokio::process::Command::new(ffmpeg)
+        .args(["-hide_banner", "-nostats", "-ss", &format!("{:.3}", lead.max(0.0)), "-t", &format!("{duration:.3}"), "-i"])
+        .arg(path)
+        .args(["-vn", "-af", "ebur128", "-f", "null", "-"])
+        .output().await.ok()?;
+    parse_lufs(&String::from_utf8_lossy(&out.stderr))
+}
+
+fn parse_lufs(log: &str) -> Option<f64> {
+    let v: f64 = log.rsplit("I:").next()?.split_whitespace().next()?.parse().ok()?;
+    (v.is_finite() && v > -60.0).then_some(v)
+}
+
 /// The kept stretches, sorted, clamped to `0..duration`, overlaps merged; empty when they keep it all.
 pub fn normalize_keep(keep: &[(f64, f64)], duration: f64) -> Vec<(f64, f64)> {
     let mut v: Vec<(f64, f64)> = keep.iter()
@@ -1571,6 +1605,10 @@ async fn render_into(
     let use_vt = has_videotoolbox(ffmpeg);
     let filter = with_speed(&filter, speed, has_audio);
     let filter = with_keep(&filter, &keep, has_audio);
+    let gain = if req.loudness && has_audio {
+        measure_lufs(ffmpeg, raw_path, req.lead, req.duration).await.map(|l| (TARGET_LUFS - l).clamp(-20.0, 20.0))
+    } else { None };
+    let filter = match gain { Some(g) => with_loudness(&filter, has_audio, g), None => filter };
     let audio_map = if has_audio && filter.contains("[aout]") { "[aout]" } else { "0:a?" };
     let can_copy_audio = audio_map == "0:a?" && meta.audio_codec.as_deref() == Some("aac");
     let dur = kept_dur.max(1.0) / speed + if cover_input_idx.is_some() && cover_mode == "hold" { 1.0 } else { 0.0 };
@@ -1817,7 +1855,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "flash".into(),
             embed_thumbnail: true,
             save_cover_sidecar: true,
-            landscape_cover_png: Some(minimal_rgba_png_b64(1920, 1080, 24, 24, 28, 255)), keep_ranges: vec![],
+            landscape_cover_png: Some(minimal_rgba_png_b64(1920, 1080, 24, 24, 28, 255)), keep_ranges: vec![], loudness: false,
         };
         let cancel = Arc::new(AtomicBool::new(false));
         let res = render_clip(&data, req_flash, cancel.clone(), |_, _, _| {}).await.unwrap();
@@ -1845,7 +1883,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "hold".into(),
             embed_thumbnail: true,
             save_cover_sidecar: false,
-            landscape_cover_png: None, keep_ranges: vec![],
+            landscape_cover_png: None, keep_ranges: vec![], loudness: false,
         };
         let res_hold = render_clip(&data, req_hold, cancel.clone(), |_, _, _| {}).await.unwrap();
         assert!(std::fs::metadata(&res_hold.video_path).unwrap().len() > 10_000);
@@ -1879,7 +1917,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             cover_mode: "flash".into(),
             embed_thumbnail: true,
             save_cover_sidecar: false,
-            landscape_cover_png: None, keep_ranges: vec![],
+            landscape_cover_png: None, keep_ranges: vec![], loudness: false,
         };
         let res_concat = render_clip(&data, req_concat, cancel, |_, _, _| {}).await.unwrap();
         assert!(std::fs::metadata(&res_concat.video_path).unwrap().len() > 10_000);
@@ -1927,7 +1965,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
             .args([
                 "-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=4",
                 "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
-                "-af", "volume=enable='between(t,1.2,2.4)':volume=0",
+                "-af", "volume=0.5,volume=enable='between(t,1.2,2.4)':volume=0",
                 "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest",
             ])
             .arg(&src)
@@ -1949,11 +1987,18 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
                 cover_png: Some(minimal_rgba_png_b64(1080, 1920, 24, 24, 28, 255)), cover_mode: mode.into(),
                 embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
                 keep_ranges: vec![(0.0, 1.3), (2.3, 4.0)],
+                // The second pass also evens the loudness: a quiet tone comes out near −14 LUFS.
+                loudness: mode == "hold",
             };
             let res = render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
             let (d, _, _, audio) = probe_video_meta(&ffmpeg, Path::new(&res.video_path), 0.0).await;
             let want = 3.0 / speed + if mode == "hold" { 1.0 } else { 0.0 };
             assert!(audio && (d - want).abs() < 0.2, "{mode}: {d} vs {want}");
+            let meter = std::process::Command::new(&ffmpeg).args(["-hide_banner", "-nostats", "-i", &res.video_path, "-af", "ebur128", "-f", "null", "-"]).output().unwrap();
+            let log = String::from_utf8_lossy(&meter.stderr);
+            let lufs = parse_lufs(&log).unwrap_or(f64::NAN);
+            if mode == "hold" { assert!((lufs - TARGET_LUFS).abs() < 1.5, "loudness {lufs}"); }
+            else { assert!(lufs < TARGET_LUFS - 3.0, "untouched tone should stay quiet: {lufs}"); }
         }
         let _ = std::fs::remove_dir_all(&data);
     }
@@ -2002,7 +2047,7 @@ mod render_live {
             raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
             layout: "frame".into(), card_bg: "blur".into(), crop_x: 0.7, duration: 105.16,
             static_overlay_png: Some(png(1080, 1920)), cues, cover_png: None, cover_mode: "none".into(),
-            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![],
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![], loudness: false,
         };
         let t = std::time::Instant::now();
         render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
@@ -2027,7 +2072,7 @@ mod render_live {
             raw_path: src.to_string_lossy().into(), output_path: Some(out.to_string_lossy().into()), default_name: "t".into(),
             layout: "frame".into(), card_bg: "night".into(), crop_x: 0.5, duration: 105.16,
             static_overlay_png: None, cues: vec![], cover_png: None, cover_mode: "none".into(),
-            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![],
+            embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None, keep_ranges: vec![], loudness: false,
         };
         let t = std::time::Instant::now();
         render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();

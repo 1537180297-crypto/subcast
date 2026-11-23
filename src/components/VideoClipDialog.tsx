@@ -72,6 +72,7 @@ interface ClipPrefs {
   saveCoverSidecar?: boolean;
   extraLandscapeCover?: boolean;
   removePauses?: boolean;
+  loudness?: boolean;
 }
 
 function readPrefs(): ClipPrefs {
@@ -207,6 +208,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const [saveCoverSidecar, setSaveCoverSidecar] = useState(() => prefs.saveCoverSidecar ?? true);
   const [extraLandscapeCover, setExtraLandscapeCover] = useState(() => prefs.extraLandscapeCover ?? true);
   const [removePauses, setRemovePauses] = useState(() => prefs.removePauses ?? false);
+  const [loudness, setLoudness] = useState(() => prefs.loudness ?? true);
 
   const [coverHook, setCoverHook] = useState(() => clip.coverHook || clip.title);
   const [coverSub, setCoverSub] = useState(() => clip.coverSub || (clip.reason && clip.reason !== t("手动选取片段") ? clip.reason : ""));
@@ -275,8 +277,9 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
       saveCoverSidecar,
       extraLandscapeCover,
       removePauses,
+      loudness,
     });
-  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, coverTracking, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover, removePauses]);
+  }, [aspect, fit, cardCrop, speed, subScale, coverAccent, coverFont, coverScale, coverTracking, brandText, watermark, cardBg, subStyle, subLang, showTitle, showSource, coverTpl, coverMode, embedThumbnail, saveCoverSidecar, extraLandscapeCover, removePauses, loudness]);
 
   useEffect(() => {
     if (!busyJob) return;
@@ -778,6 +781,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         saveCoverSidecar,
         landscapeCoverPng,
         keepRanges: exportPauses?.cuts.length ? exportPauses.keep : undefined,
+        loudness,
       });
       const elapsedSec = Math.max(0.1, (performance.now() - startedAt) / 1000);
       setExported({ ...result, elapsedSec });
@@ -1181,6 +1185,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                           : t("这段没有明显停顿")}
                     </span>
                   )}
+                </label>
+                <label className="vclip-sub-toggle" title={t("按 -14 LUFS 统一响度，抖音、视频号、B站、YouTube 都按这个标准播放")}>
+                  <input type="checkbox" checked={loudness} onChange={(e) => setLoudness(e.target.checked)} />
+                  {t("音量统一")}
+                  {loudness && <span className="muted small">{t("不同节目导出后一样响")}</span>}
                 </label>
                 <label className="vclip-sub-toggle">
                   <input type="checkbox" checked={addSubs} onChange={(e) => setAddSubsPick(e.target.checked)} />
