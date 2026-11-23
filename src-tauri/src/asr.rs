@@ -556,6 +556,69 @@ async fn youtube_audio_with(ytdlp: &Path, video_id: &str, dir: &Path, cancel: Ar
     Err(anyhow!("没有找到下载的音频"))
 }
 
+/// Downloads a video to keep (720p H.264 with the original AAC sound, one mp4) so a saved video episode plays
+/// from disk. Without FFmpeg to join the two streams, format 18 (360p, already one file) is the fallback.
+/// `progress` gets 0–1 from yt-dlp's own percentages (picture first, then sound).
+pub async fn youtube_video(ytdlp: &Path, ffmpeg: Option<&Path>, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>, progress: impl Fn(f64) + Send + Sync + Clone + 'static) -> Result<PathBuf> {
+    with_bot_fallback(|extra| {
+        let (c, p) = (cancel.clone(), progress.clone());
+        async move { youtube_video_with(ytdlp, ffmpeg, video_id, dir, c, &extra, p).await }
+    }).await
+}
+
+async fn youtube_video_with(ytdlp: &Path, ffmpeg: Option<&Path>, video_id: &str, dir: &Path, cancel: Arc<AtomicBool>, extra: &[String], progress: impl Fn(f64)) -> Result<PathBuf> {
+    tokio::fs::create_dir_all(dir).await?;
+    let template = dir.join(format!("{video_id}.%(ext)s"));
+    warm_ytdlp(ytdlp).await;
+    let mut cmd = ytdlp_command(ytdlp);
+    match ffmpeg {
+        // yt-dlp's format sort puts the original-language audio first, so an AI dub isn't what gets saved.
+        Some(ff) => { cmd.args(["-f", "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/18", "--merge-output-format", "mp4", "--ffmpeg-location"]).arg(ff); }
+        None => { cmd.args(["-f", "18/best[ext=mp4]"]); }
+    }
+    cmd.args(["--no-playlist", "--no-part", "--newline"]).args(extra).arg("-o").arg(&template);
+    cmd.arg(format!("https://www.youtube.com/watch?v={video_id}")).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().context("无法启动 yt-dlp")?;
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<f64>();
+    let reader = tokio::spawn(async move {
+        let Some(s) = stdout else { return };
+        let re = regex::Regex::new(r"\[download\]\s+([\d.]+)%").unwrap();
+        let mut lines = BufReader::new(s).lines();
+        while let Ok(Some(l)) = lines.next_line().await {
+            if let Some(v) = re.captures(&l).and_then(|c| c[1].parse::<f64>().ok()) { let _ = tx.send(v / 100.0); }
+        }
+    });
+    let tail = tokio::spawn(async move {
+        let mut text = String::new();
+        if let Some(s) = stderr { let mut lines = BufReader::new(s).lines(); while let Ok(Some(l)) = lines.next_line().await { text = l; } }
+        text
+    });
+    // Picture then sound, each 0–100%: the picture is most of the bytes.
+    let (mut part, mut last) = (0usize, 0.0f64);
+    loop {
+        while let Ok(v) = rx.try_recv() {
+            if v + 0.2 < last { part += 1; }
+            last = v;
+            progress(if part == 0 { v * 0.9 } else { 0.9 + v * 0.1 }.min(0.99));
+        }
+        if cancel.load(Ordering::Relaxed) { let _ = child.kill().await; return Err(anyhow!("已取消")); }
+        if let Some(status) = child.try_wait()? {
+            let _ = reader.await;
+            let last = tail.await.unwrap_or_default();
+            if !status.success() { return Err(anyhow!("下载 YouTube 视频失败：{}", last.chars().take(200).collect::<String>())); }
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(e) = entries.next_entry().await? {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with(video_id) && name.ends_with(".mp4") { return Ok(e.path()); }
+    }
+    Err(anyhow!("没有找到下载的视频"))
+}
+
 /// A playable address for videos whose owners block the embedded player: YouTube's HLS master playlist
 /// (adaptive quality, plays natively in WebKit) or, failing that, a single file with both audio and video.
 /// A stream the app's own <video> can play. `hls`: the WebView plays HLS natively (WebKit on macOS). Elsewhere

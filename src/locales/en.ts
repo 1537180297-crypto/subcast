@@ -499,7 +499,6 @@ const dict: Record<string, string> = {
   "已下载 {pct}%，点一下取消": "{pct}% downloaded. Click to cancel",
   "删除这一集已下载的音频？": "Delete the downloaded audio for this episode?",
   "下载，离线也能听": "Download to listen offline",
-  "下载音频，离线也能听": "Download the audio to listen offline",
   "下载中": "Downloading",
   "下载中 {pct}%": "Downloading {pct}%",
   "全部删除": "Delete all",
@@ -1727,6 +1726,11 @@ const dict: Record<string, string> = {
   "按 -14 LUFS 统一响度，抖音、视频号、B站、YouTube 都按这个标准播放": "Evens the sound to −14 LUFS, the level Douyin, Channels, Bilibili and YouTube play at",
   "音量统一": "Even loudness",
   "不同节目导出后一样响": "Clips from different shows play equally loud",
+  "改为下载视频": "Download the video instead",
+  "删除这一集已下载的文件？": "Delete this episode's download?",
+  "下载视频，打开就播，离线也能看": "Download the video: plays instantly, even offline",
+  "下载 YouTube 视频失败：{}": "Couldn't download the YouTube video: {}",
+  "没有找到下载的视频": "Couldn't find the downloaded video",
 };
 
 export default dict;

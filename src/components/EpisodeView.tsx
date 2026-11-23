@@ -284,7 +284,9 @@ export function EpisodeView({ id }: { id: string }) {
       if (!live) return;
       rememberEpisodes([e]);
       // Offline with the audio saved: a YouTube episode starts in audio mode instead of a player that cannot load.
-      const offline = !!e.videoId && !navigator.onLine && isSaved(e.id);
+      // A saved video (mp4) still plays as video offline; only a saved audio track needs audio mode.
+      const savedPath = useOffline.getState().saved[e.id]?.path ?? "";
+      const offline = !!e.videoId && !navigator.onLine && isSaved(e.id) && !/\.(mp4|m4v|mov|webm)$/i.test(savedPath);
       setStartAudio(offline);
       setEp(e);
       if (e.deep) setTab((t) => (t === "transcript" ? "deep" : t));
@@ -383,14 +385,17 @@ function DownloadButton({ ep }: { ep: Episode }) {
           <div className="menu right" role="menu" onMouseLeave={close}>
             <p className="menu-note">{t("已下载 · {size}", { size: bytes(saved.bytes) })}</p>
             <button role="menuitem" onClick={() => { close(); void api.revealDownload(ep.id).catch((e) => notify(errorText(e))); }}><FolderOpen size={14} /> {t("在文件夹中显示")}</button>
+            {ep.videoId && !/\.(mp4|m4v|mov|webm)$/i.test(saved.path) && (
+              <button role="menuitem" onClick={() => { close(); void removeDownload(ep.id).then(() => downloadEpisode(ep)); }}><ArrowDownToLine size={14} /> {t("改为下载视频")}</button>
+            )}
             <button role="menuitem" onClick={() => { close(); go({ kind: "downloads" }); }}><ArrowDownToLine size={14} /> {t("管理全部下载")}</button>
-            <button role="menuitem" className="danger" onClick={() => { close(); void ask({ title: t("删除这一集已下载的音频？"), message: t("之后在线播放，字幕和进度都会保留。"), ok: t("删除"), danger: true }).then((yes) => { if (yes) void removeDownload(ep.id); }); }}><Trash2 size={14} /> {t("删除下载")}</button>
+            <button role="menuitem" className="danger" onClick={() => { close(); void ask({ title: ep.videoId ? t("删除这一集已下载的文件？") : t("删除这一集已下载的音频？"), message: t("之后在线播放，字幕和进度都会保留。"), ok: t("删除"), danger: true }).then((yes) => { if (yes) void removeDownload(ep.id); }); }}><Trash2 size={14} /> {t("删除下载")}</button>
           </div>
         )}
       </div>
     );
   }
-  return <button className="round-btn" title={ep.audioUrl ? t("下载，离线也能听") : t("下载音频，离线也能听")} onClick={() => void downloadEpisode(ep)}><ArrowDownToLine size={15} /></button>;
+  return <button className="round-btn" title={ep.audioUrl ? t("下载，离线也能听") : t("下载视频，打开就播，离线也能看")} onClick={() => void downloadEpisode(ep)}><ArrowDownToLine size={15} /></button>;
 }
 
 function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; setTab: (t: Tab) => void; startAudio: boolean }) {

@@ -100,8 +100,8 @@ pub fn clear(data: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Saves the episode's audio. Podcasts download their audio file (progress 0–1); YouTube videos save their audio
-/// track through yt-dlp, which reports no progress (`None`).
+/// Saves the episode. Podcasts download their audio file; YouTube videos save the video (720p with the original
+/// sound) through yt-dlp. Progress 0–1, `None` while it's starting.
 pub async fn download(data: &Path, ep: &Episode, cancel: Arc<AtomicBool>, mut progress: impl FnMut(Option<f64>)) -> Result<Saved> {
     let d = dir(data);
     tokio::fs::create_dir_all(&d).await?;
@@ -110,12 +110,25 @@ pub async fn download(data: &Path, ep: &Episode, cancel: Arc<AtomicBool>, mut pr
         asr::download(url, &dest, &cancel, |got, total| progress(total.map(|t| got as f64 / t.max(1) as f64))).await?;
         dest
     } else if let Some(vid) = &ep.video_id {
+        // A video episode keeps its picture too, so it plays from disk instead of loading YouTube each time.
         progress(None);
         let tmp = d.join(format!(".tmp-{}", ep.id));
-        let got = asr::with_ytdlp(data, |bin| { let (v, t, c) = (vid.clone(), tmp.clone(), cancel.clone()); async move { asr::youtube_audio(&bin, &v, &t, c).await } }).await;
+        let ffmpeg = crate::videoclip::ensure_ffmpeg(data, &cancel, |_, _| {}).await.ok();
+        let (ptx, mut prx) = tokio::sync::mpsc::unbounded_channel::<f64>();
+        let job = asr::with_ytdlp(data, |bin| {
+            let (v, t, c, f, tx) = (vid.clone(), tmp.clone(), cancel.clone(), ffmpeg.clone(), ptx.clone());
+            async move { asr::youtube_video(&bin, f.as_deref(), &v, &t, c, move |p| { let _ = tx.send(p); }).await }
+        });
+        tokio::pin!(job);
+        let got = loop {
+            tokio::select! {
+                r = &mut job => break r,
+                Some(p) = prx.recv() => progress(Some(p)),
+            }
+        };
         let result = match got {
             Ok(file) => {
-                let ext = file.extension().and_then(|x| x.to_str()).unwrap_or("m4a").to_string();
+                let ext = file.extension().and_then(|x| x.to_str()).unwrap_or("mp4").to_string();
                 let dest = d.join(format!("{}.{ext}", ep.id));
                 tokio::fs::rename(&file, &dest).await.map(|_| dest).map_err(anyhow::Error::from)
             }

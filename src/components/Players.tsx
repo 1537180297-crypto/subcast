@@ -277,17 +277,22 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   };
   useEffect(() => { setNative(null); setError(null); setDenied(null); retried.current = false; }, [ep.id]);
   // Known to refuse embedding: skip the embedded player and fetch the direct stream right away.
+  // A saved video plays from disk: no YouTube player to load, and it works offline.
+  const [localBroken, setLocalBroken] = useState(false);
+  useEffect(() => setLocalBroken(false), [ep.id]);
+  const saved = useOffline((s) => s.saved[ep.id]?.path);
+  const localVideo = !localBroken && saved && /\.(mp4|m4v|mov|webm)$/i.test(saved) ? saved : undefined;
   const [direct, setDirect] = useState(() => wasBlocked(ep.videoId) || wantsOriginalAudio(ep.videoId));
-  useEffect(() => { if (direct) void fallback(wasBlocked(ep.videoId) ? t("作者限制了嵌入播放") : t("使用原声")); }, []);
+  useEffect(() => { if (direct && !localVideo) void fallback(wasBlocked(ep.videoId) ? t("作者限制了嵌入播放") : t("使用原声")); }, []);
   useEffect(() => {
     const on = (e: Event) => {
-      if ((e as CustomEvent<string>).detail !== ep.videoId || native) return;
+      if ((e as CustomEvent<string>).detail !== ep.videoId || native || localVideo) return;
       setDirect(true);
       void fallback(t("切换到原声"));
     };
     window.addEventListener("subcast-original-audio", on);
     return () => window.removeEventListener("subcast-original-audio", on);
-  }, [ep.videoId, native]);
+  }, [ep.videoId, native, localVideo]);
   // Have yt-dlp ready before it is needed: a first fallback would otherwise start with a 35 MB download.
   useEffect(() => { void api.prepareYoutube().catch(() => {}); }, []);
   const watchOnYouTube = () => {
@@ -312,7 +317,8 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   }, [theater]);
   return (
     <div className={`video ${theater ? "theater" : ""} ${theater && idle ? "idle" : ""}`} ref={box}>
-      {native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={failed} />
+      {localVideo ? <NativeVideo ep={ep} src={convertFileSrc(localVideo)} kind="mp4" onFullscreen={fullscreen} onFail={() => setLocalBroken(true)} />
+        : native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={failed} />
         : direct ? <PlayHint ep={ep} show onClick={() => { useStore.getState().load(ep); playSoon(ep.id); }} />
         : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
       {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
