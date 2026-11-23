@@ -2532,3 +2532,8 @@ details.vclip-sec[open] > summary.vclip-sec-head > .small { visibility: hidden; 
 .clip-hist-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; font-size: 13px; }
 .clip-hist-row .icon-btn { opacity: 0; }
 .clip-hist-row:hover .icon-btn, .clip-hist-row .icon-btn:focus-visible { opacity: 1; }
+/* Opening check under the range bar: a dot, the reason, and a better start. */
+.vclip-opening { width: 100%; display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px; border-radius: 8px; background: color-mix(in srgb, var(--warn, #9a6700) 10%, transparent); color: var(--text-2); }
+.vclip-opening-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--warn, #9a6700); }
+.vclip-opening .small { flex: 1; min-width: 0; }
+.vclip-opening .link-btn { flex: none; white-space: nowrap; }

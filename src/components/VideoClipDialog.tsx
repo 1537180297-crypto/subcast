@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronLeft, ChevronRight, Copy, FolderOpen, Image as ImageIcon, Loader2, Pause, Play, RotateCcw, Scissors, Volume2, VolumeX } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, FolderOpen, Image as ImageIcon, Loader2, Pause, Play, RotateCcw, Scissors, Volume2, VolumeX, X } from "lucide-react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorText, rawErrorText, type Episode, type RenderVideoClipResult, type Segment, type VideoClipProgress } from "../lib/api";
@@ -24,6 +24,7 @@ import { ClipRangeBar } from "./ClipRangeBar";
 import { TextField } from "./TextField";
 import { ToggleChip } from "./ToggleChip";
 import { noteExport } from "../lib/clipHistory";
+import { betterStart, openingIssue } from "../lib/clipOpening";
 import { cutAt, pauseCuts, toKeptTime } from "../lib/clipPauses";
 import { CLIP_PRESETS, matchPreset, type ClipPreset, type CoverMode } from "../lib/clipPresets";
 import { Seg } from "./ReadingSettings";
@@ -923,8 +924,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     const ro = new ResizeObserver(measure);
     ro.observe(col);
     for (const k of Array.from(col.children)) if (!k.classList.contains("vclip-stage")) ro.observe(k);
-    return () => ro.disconnect();
-  }, [pvView, montage, segments.length > 1, preparedValid, geo.W > geo.H]);
+    // Hints and bars come and go below the preview: measure again when they do.
+    const mo = new MutationObserver(measure);
+    mo.observe(col, { childList: true });
+    return () => { ro.disconnect(); mo.disconnect(); };
+  }, [pvView, montage, segments.length > 1, preparedValid, geo.W > geo.H, startIdx]);
   const pvScale = Math.min(Math.min(440, pvRoomW) / geo.W, Math.min(520, pvRoom) / geo.H);
   const stageStyle: React.CSSProperties = { width: Math.round(geo.W * pvScale), height: Math.round(geo.H * pvScale), flex: "none" };
   const boxStyle: React.CSSProperties = {
@@ -1089,6 +1093,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           {pvView === "video" && !montage && segments.length > 1 && (
             <ClipRangeBar segments={segments} startIdx={startIdx} endIdx={endIdx} onChange={(a, b) => { setStartIdx(a); setEndIdx(b); }} />
           )}
+          {pvView === "video" && !montage && <OpeningHint segments={segments} startIdx={startIdx} endIdx={endIdx} onStart={setStartIdx} />}
 
           <div className="vclip-pv-bar">
             {pvView === "cover" ? (
@@ -1569,5 +1574,30 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         </button>
       </div>
     </Modal>
+  );
+}
+
+/** Under the range bar: the clip opens on a link word or mid-sentence, with a one-click better start. */
+function OpeningHint({ segments, startIdx, endIdx, onStart }: { segments: Segment[]; startIdx: number; endIdx: number; onStart: (i: number) => void }) {
+  const [hidden, setHidden] = useState<number | null>(null);
+  const issue = openingIssue(segments, startIdx);
+  if (!issue || hidden === startIdx) return null;
+  const to = betterStart(segments, startIdx, endIdx);
+  const preview = to != null ? [...segments[to].text.trim()].slice(0, 12).join("") : "";
+  return (
+    <div className="vclip-opening" role="note">
+      <span className="vclip-opening-dot" aria-hidden />
+      <span className="small">
+        {issue.kind === "lead-word"
+          ? t("开头是「{w}…」，没看过前文的人可能接不上", { w: issue.word })
+          : t("开头接在上一句中间，前 3 秒可能听不懂")}
+      </span>
+      {to != null && (
+        <button type="button" className="link-btn small" onClick={() => onStart(to)} title={segments[to].text}>
+          {t("从「{s}…」开始", { s: preview })}
+        </button>
+      )}
+      <button type="button" className="icon-btn sm" onClick={() => setHidden(startIdx)} aria-label={t("忽略")} title={t("忽略")}><X size={12} /></button>
+    </div>
   );
 }

@@ -1740,6 +1740,10 @@ const dict: Record<string, string> = {
   "最近导出": "Recent exports",
   "这一集": "This episode",
   "其他节目": "Other episodes",
+  "开头是「{w}…」，没看过前文的人可能接不上": "Opens on “{w}…”: viewers without the context may get lost",
+  "开头接在上一句中间，前 3 秒可能听不懂": "Opens mid-sentence: the first 3 seconds may not make sense",
+  "从「{s}…」开始": "Start at “{s}…”",
+  "忽略": "Ignore",
 };
 
 export default dict;
