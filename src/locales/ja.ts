@@ -1712,6 +1712,7 @@ const dict: Record<string, string> = {
   "结尾": "終了",
   "提前一句": "1文前へ",
   "推后一句": "1文後へ",
+  "留白": "余白",
 };
 
 export default dict;

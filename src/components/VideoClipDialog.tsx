@@ -1291,7 +1291,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                         )}
                       </div>
                       <label className="vclip-pad">
-                        <span className="small muted">{key === "start" ? t("开头留白") : t("结尾留白")}</span>
+                        <span className="small muted" title={key === "start" ? t("开头留白") : t("结尾留白")}>{t("留白")}</span>
                         <input type="range" min={lo} max={hi} step={0.05} value={pad} onChange={(e) => setPad(Number(e.target.value))} />
                         <span className="num small muted">{pad.toFixed(2)}s</span>
                       </label>

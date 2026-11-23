@@ -1712,6 +1712,7 @@ const dict: Record<string, string> = {
   "结尾": "End",
   "提前一句": "One sentence earlier",
   "推后一句": "One sentence later",
+  "留白": "Padding",
 };
 
 export default dict;
