@@ -959,7 +959,8 @@ pub fn decode_mono(path: &Path, mut f: impl FnMut(u32, &[f32])) -> Result<()> {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) { hint.with_extension(ext); }
     let probed = symphonia::default::get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default()).map_err(|e| anyhow!("无法识别音频格式：{e}"))?;
     let mut format = probed.format;
-    let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL).ok_or_else(|| anyhow!("没有音轨"))?;
+    // A saved video carries a picture track too: the sound is the track with a sample rate.
+    let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some()).ok_or_else(|| anyhow!("没有音轨"))?;
     let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|e| anyhow!("不支持的音频编码：{e}"))?;
     let mut buf: Option<SampleBuffer<f32>> = None;
@@ -1171,3 +1172,23 @@ mod scan_tests {
     }
 }
 
+
+#[cfg(test)]
+mod video_file_tests {
+    use super::*;
+    /// A saved YouTube episode is now an mp4 with H.264 picture and AAC sound: transcription reads the sound.
+    #[test]
+    fn decodes_the_sound_of_a_video_file() {
+        let Some(ff) = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"].iter().map(Path::new).find(|p| p.exists()) else { return };
+        let dir = std::env::temp_dir().join(format!("subcast-asr-mp4-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("v.mp4");
+        let ok = std::process::Command::new(ff).args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=25:duration=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest"]).arg(&f).status().unwrap().success();
+        assert!(ok);
+        let pcm = decode_16k_mono(&f).unwrap();
+        assert!((pcm.len() as f64 / 16000.0 - 3.0).abs() < 0.3, "{} samples", pcm.len());
+        assert!(pcm.iter().any(|x| x.abs() > 0.05));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

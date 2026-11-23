@@ -459,9 +459,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   // staying where the slider put it.
   const cropping = (geo.fit !== "card" && aspect !== "source") || geo.cropBox;
   const track = preparedValid && prepared?.subjectTrack?.length ? prepared.subjectTrack : null;
-  const following = smartFrame && cropping && !!track;
   const cropBoxW = geo.fit === "card" ? geo.video.w : geo.W;
   const cropBoxH = geo.fit === "card" ? geo.video.h : geo.H;
+  // Only where the crop has room to move (a 16:9 picture filling 16:9 has none).
+  const canPan = cropping && panRoom(cropBoxW, cropBoxH, prepared?.width || 1920, prepared?.height || 1080) > 1;
+  const following = smartFrame && canPan && !!track;
   const viewCropX = following && prepared ? centreShare(trackAt(track!, pvTime), cropBoxW, cropBoxH, prepared.width || 1920, prepared.height || 1080) : cropX;
   const preparedValidRef = useRef(preparedValid);
   preparedValidRef.current = preparedValid;
@@ -780,7 +782,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         landscapeCoverPng = canvasToPngBase64(landCanvas);
       }
 
-      const expCropping = (eg.fit !== "card" && aspect !== "source") || eg.cropBox;
+      const expCropping = ((eg.fit !== "card" && aspect !== "source") || eg.cropBox)
+        && panRoom(eg.fit === "card" ? eg.video.w : eg.W, eg.fit === "card" ? eg.video.h : eg.H, prep.width || 1920, prep.height || 1080) > 1;
       const expTrack = smartFrame && expCropping && prep.subjectTrack?.length ? prep.subjectTrack : null;
       const expBoxW = eg.fit === "card" ? eg.video.w : eg.W;
       const expBoxH = eg.fit === "card" ? eg.video.h : eg.H;
@@ -1313,11 +1316,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                   )}
                   {cropping && (
                     <>
-                      <label className="vclip-sub-toggle">
+                      {canPan && <label className="vclip-sub-toggle">
                         <input type="checkbox" checked={smartFrame} onChange={(e) => setSmartFrame(e.target.checked)} />
                         {t("跟着说话的人取景")}
                         {smartFrame && <span className="muted small">{!preparedValid ? t("获取画面后自动找人") : track ? (track.length > 1 ? t("画面会随人物移动 {n} 次", { n: (track.length - 1) / 2 }) : t("人物一直在同一位置")) : t("没找到人物，用下面的位置")}</span>}
-                      </label>
+                      </label>}
                       <div className="reading-row">
                         <span>{t("水平取景")}</span>
                         <div className="vclip-crop-row">
@@ -1693,6 +1696,11 @@ function trackAt(track: [number, number][], t: number): number {
     if (t < t1) { const [t0, x0] = track[i - 1]; return t1 - t0 < 1e-3 ? x1 : x0 + (x1 - x0) * (t - t0) / (t1 - t0); }
   }
   return track[track.length - 1][1];
+}
+
+/** Spare width (px) a crop of `bw`×`bh` has in a `sw`×`sh` picture scaled to cover it. */
+function panRoom(bw: number, bh: number, sw: number, sh: number): number {
+  return sw * Math.max(bw / sw, bh / sh) - bw;
 }
 
 /** A speaker place → the crop's share of the spare width (what `cropX` means), centring them in a `bw`×`bh`

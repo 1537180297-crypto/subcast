@@ -646,9 +646,17 @@ pub fn subject_x(rgb: &[u8], w: usize, h: usize) -> Option<f64> {
     Some((at / w as f64).clamp(0.05, 0.95))
 }
 
+/// How far (share of the width) the speaker must move, seen twice, before the frame follows. Interviews
+/// wobble ±10% between camera cuts; following that reads as drift.
+const TRACK_MOVE: f64 = 0.15;
+/// Stills in a row a new place must hold before the frame goes there.
+const TRACK_HOLD: usize = 3;
+/// Half the time a move takes: short, since most moves are camera cuts that land at once.
+const TRACK_EASE: f64 = 0.15;
+
 /// Raw samples into a calm track: gaps take the last known place, single-frame outliers go (median of three),
-/// and the frame only moves when the speaker has clearly moved (8% of the width, seen twice), easing over
-/// 0.8 s. Returns (time, x) points to interpolate between; one point when nothing moves.
+/// and the frame only moves when the speaker has clearly moved (`TRACK_MOVE`, held `TRACK_HOLD` stills), over 0.3 s.
+/// Returns (time, x) points to interpolate between; one point when nothing moves.
 pub fn smooth_track(samples: &[(f64, Option<f64>)], duration: f64) -> Vec<(f64, f64)> {
     let first = match samples.iter().find_map(|s| s.1) { Some(x) => x, None => return vec![] };
     let mut last = first;
@@ -660,25 +668,28 @@ pub fn smooth_track(samples: &[(f64, Option<f64>)], duration: f64) -> Vec<(f64, 
     }).collect();
     let mut points = vec![(0.0, med[0].1)];
     let mut cur = med[0].1;
-    let mut pending: Option<f64> = None;
+    // A new place counts once it has held for TRACK_HOLD samples: props in skin tones (a row of yellow cans)
+    // or a raised hand can win one or two stills. The move is placed back at its first sample.
+    let mut pending: Option<(usize, f64, usize)> = None; // (first sample, place, samples seen)
     for i in 1..med.len() {
-        let (t, x) = med[i];
-        if (x - cur).abs() < 0.08 { pending = None; continue; }
-        match pending {
-            Some(p) if (x - p).abs() < 0.08 => {
-                // Moved since the sample before this one: ease across that moment.
-                let at = med[i - 1].0;
-                let (a, b) = ((at - 0.4).max(points.last().unwrap().0 + 0.05), (at + 0.4).min(duration));
+        let x = med[i].1;
+        if (x - cur).abs() < TRACK_MOVE { pending = None; continue; }
+        pending = match pending {
+            Some((first, p, n)) if (x - p).abs() < TRACK_MOVE => Some((first, p, n + 1)),
+            _ => Some((i, x, 1)),
+        };
+        if let Some((first, p, n)) = pending {
+            if n >= TRACK_HOLD {
+                let at = med[first].0;
+                let (a, b) = ((at - TRACK_EASE).max(points.last().unwrap().0 + 0.05), (at + TRACK_EASE).min(duration));
                 if b > a {
                     points.push((a, cur));
-                    points.push((b, x));
-                    cur = x;
+                    points.push((b, p));
+                    cur = p;
                 }
                 pending = None;
             }
-            _ => pending = Some(x),
         }
-        let _ = t;
     }
     if points.len() == 1 { return points; }
     points
@@ -746,7 +757,8 @@ async fn finish_prepared(ffmpeg: &Path, dest: &Path, fallback_dur: f64, cached: 
     };
 
     let clip_dur = (duration - lead).max(0.1);
-    let track_path = dest.with_extension("track.json");
+    // "track3": made with TRACK_MOVE / TRACK_HOLD / TRACK_EASE; an older track is redone.
+    let track_path = dest.with_extension("track3.json");
     let (has_burned_subtitles, (frames, best_frame), silences, subject_track) = tokio::join!(
         async {
             if let Some(m) = cached_meta {
@@ -2095,8 +2107,8 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
     #[test]
     fn track_smooths_and_maps_to_the_export_clock() {
         // Left for 6 s, one stray frame, then right: one move, eased around 6 s; the stray is ignored.
-        let s: Vec<(f64, Option<f64>)> = [0.2, 0.2, 0.9, 0.2, 0.8, 0.8, 0.8].iter().enumerate().map(|(k, &x)| (k as f64 * 2.0, Some(x))).collect();
-        let t = smooth_track(&s, 14.0);
+        let s: Vec<(f64, Option<f64>)> = [0.2, 0.2, 0.9, 0.2, 0.8, 0.8, 0.8, 0.8].iter().enumerate().map(|(k, &x)| (k as f64 * 2.0, Some(x))).collect();
+        let t = smooth_track(&s, 16.0);
         assert_eq!(t.len(), 3, "{t:?}");
         assert!((t[0].1 - 0.2).abs() < 1e-9 && (t[2].1 - 0.8).abs() < 1e-9, "{t:?}");
         assert!(t[1].0 > 5.0 && t[2].0 < 7.0, "{t:?}");
@@ -2118,24 +2130,24 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
         let src = data.join("src.mp4");
         // A skin-coloured block on the left for 4 s, then on the right.
         let mk = std::process::Command::new(&ffmpeg)
-            .args(["-y", "-f", "lavfi", "-i", "color=c=0x202020:s=640x360:d=8:r=30",
+            .args(["-y", "-f", "lavfi", "-i", "color=c=0x202020:s=640x360:d=12:r=30",
                 "-vf", "drawbox=x=60:y=100:w=100:h=160:color=0xE0AC69:t=fill:enable='lt(t,4)',drawbox=x=480:y=100:w=100:h=160:color=0xE0AC69:t=fill:enable='gte(t,4)'",
                 "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
             .arg(&src).output().unwrap();
         assert!(mk.status.success(), "{}", String::from_utf8_lossy(&mk.stderr));
-        let track = track_subject(&ffmpeg, &src, 0.0, 8.0).await;
+        let track = track_subject(&ffmpeg, &src, 0.0, 12.0).await;
         assert!(track.len() >= 3 && track[0].1 < 0.3 && track.last().unwrap().1 > 0.7, "{track:?}");
 
         let out = data.join("out.mp4");
         let req = RenderRequest { frame: Some(Frame { w: 360, h: 640, fit: "fill".into(), vx: 0, vy: 0, vw: 360, vh: 640, crop_box: false }),
             output_dir: None, lead: 0.0, speed: 1.0, raw_path: src.to_string_lossy().into_owned(),
             output_path: Some(out.to_string_lossy().into_owned()), default_name: "pan".into(), layout: "frame".into(),
-            card_bg: "night".into(), crop_x: 0.5, duration: 8.0, static_overlay_png: None, cues: vec![], cover_png: None,
+            card_bg: "night".into(), crop_x: 0.5, duration: 12.0, static_overlay_png: None, cues: vec![], cover_png: None,
             cover_mode: "none".into(), embed_thumbnail: false, save_cover_sidecar: false, landscape_cover_png: None,
             keep_ranges: vec![], loudness: false, pan: track.clone() };
         let res = render_clip(&data, req, Arc::new(AtomicBool::new(false)), |_, _, _| {}).await.unwrap();
         // The block sits near the middle of the 9:16 frame both before and after it moved.
-        for at in ["1.0", "7.0"] {
+        for at in ["1.0", "10.0"] {
             let f = std::process::Command::new(&ffmpeg).args(["-v", "error", "-ss", at, "-i", &res.video_path, "-frames:v", "1",
                 "-vf", &format!("scale={TRACK_W}:{TRACK_H}"), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().unwrap();
             let x = subject_x(&f.stdout, TRACK_W, TRACK_H).unwrap_or(-1.0);
@@ -2270,5 +2282,21 @@ mod render_live {
         let (dur, w, h, audio) = probe_video_meta(&ff, &out, 0.0).await;
         eprintln!("speed render took {:?}: {w}x{h}, {dur:.2}s, audio={audio}", t.elapsed());
         assert!((dur - 105.16 / 1.5).abs() < 0.4 && audio, "{dur}");
+    }
+}
+
+#[cfg(test)]
+mod track_live {
+    /// SUBCAST_TRACK_FILE: a fetched clip. Prints the speaker track smart framing would follow.
+    #[tokio::test]
+    #[ignore]
+    async fn print_track() {
+        let Ok(f) = std::env::var("SUBCAST_TRACK_FILE") else { return };
+        let data = dirs::data_dir().unwrap().join("ai.qiaomu.subcast");
+        let ff = super::find_ffmpeg(&data).unwrap();
+        let p = std::path::Path::new(&f);
+        let lead = super::read_lead(p);
+        let (d, _, _, _) = super::probe_video_meta(&ff, p, 0.0).await;
+        eprintln!("{:?}", super::track_subject(&ff, p, lead, d - lead).await);
     }
 }
