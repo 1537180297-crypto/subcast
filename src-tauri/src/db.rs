@@ -62,7 +62,8 @@ pub fn upsert_episodes(conn: &mut Connection, eps: &[Episode]) -> Result<()> {
             "INSERT INTO episodes(id,show_id,guid,title,published,duration,audio_url,video_id,link,cover,notes,transcript_url,transcript_type,deep)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
              ON CONFLICT(id) DO UPDATE SET title=excluded.title, published=excluded.published, duration=COALESCE(excluded.duration, episodes.duration),
-             audio_url=COALESCE(excluded.audio_url, episodes.audio_url), link=excluded.link, cover=COALESCE(excluded.cover, episodes.cover),
+             audio_url=COALESCE(excluded.audio_url, episodes.audio_url), video_id=COALESCE(excluded.video_id, episodes.video_id),
+             link=excluded.link, cover=COALESCE(excluded.cover, episodes.cover),
              notes=COALESCE(excluded.notes, episodes.notes), transcript_url=excluded.transcript_url, transcript_type=excluded.transcript_type, deep=excluded.deep",
         )?;
         for e in eps {
@@ -331,6 +332,25 @@ mod tests {
         assert!(get_episode(&conn, "unplayed").unwrap().is_none());
         let cached = get_blob(&conn, &show.id, "show-json").unwrap().unwrap();
         assert_eq!(serde_json::from_str::<Show>(&cached).unwrap().feed_url, show.feed_url);
+    }
+
+    /// Audio first, video hours later (词元之外 uploads to YouTube after the podcast): a refresh that finds the
+    /// video fills it in, and one that doesn't find it (the channel feed failed) keeps it.
+    #[test]
+    fn a_video_found_later_is_kept() {
+        let path = std::env::temp_dir().join(format!("subcast-db-video-{}.sqlite", uuid::Uuid::new_v4()));
+        let mut conn = open(&path).unwrap();
+        let mut ep = Episode { id: "e".into(), show_id: "s".into(), guid: "g".into(), title: "#011".into(), audio_url: Some("a.mp3".into()), ..Default::default() };
+        upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
+        assert_eq!(get_episode(&conn, "e").unwrap().unwrap().video_id, None);
+        ep.video_id = Some("XQGJPVDBZPk".into());
+        upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
+        assert_eq!(get_episode(&conn, "e").unwrap().unwrap().video_id.as_deref(), Some("XQGJPVDBZPk"));
+        ep.video_id = None;
+        upsert_episodes(&mut conn, std::slice::from_ref(&ep)).unwrap();
+        assert_eq!(get_episode(&conn, "e").unwrap().unwrap().video_id.as_deref(), Some("XQGJPVDBZPk"));
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
