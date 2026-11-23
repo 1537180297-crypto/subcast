@@ -113,7 +113,7 @@ export function ClipRangeBar({ segments, startIdx, endIdx, onChange }: {
       </div>
       <div className="vclip-rb-meta small muted num">
         <span>{clock(a)}</span>
-        <span>{t("{n} 句", { n: e - s + 1 })} · {Math.round(b - a)}s</span>
+        <span>{t("{n} 句", { n: e - s + 1 })}</span>
         <span>{clock(b)}</span>
       </div>
     </div>

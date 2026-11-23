@@ -887,7 +887,27 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   const stageBgClass = card ? (cardBg === "paper" ? "bg-paper" : cardBg === "night" ? "bg-night" : "bg-blur") : "bg-dark";
   // The preview places the picture with the same geometry the export uses.
   // A definite size (fitted into 440 × 560): absolutely placed layers give the box no size of their own.
-  const pvScale = Math.min(440 / geo.W, 520 / geo.H);
+  // The preview takes the height the column has left after its tabs, range bar and controls, so they never
+  // spill into the footer on a short window.
+  const pvColRef = useRef<HTMLDivElement>(null);
+  const [pvRoom, setPvRoom] = useState(520);
+  useEffect(() => {
+    const col = pvColRef.current;
+    if (!col) return;
+    const measure = () => {
+      const kids = Array.from(col.children) as HTMLElement[];
+      const gap = parseFloat(getComputedStyle(col).rowGap) || 0;
+      const others = kids.filter((k) => !k.classList.contains("vclip-stage")).reduce((n, k) => n + k.offsetHeight, 0);
+      const room = Math.floor(col.clientHeight - others - gap * Math.max(0, kids.length - 1));
+      setPvRoom(Math.max(180, room));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(col);
+    for (const k of Array.from(col.children)) if (!k.classList.contains("vclip-stage")) ro.observe(k);
+    return () => ro.disconnect();
+  }, [pvView, montage, segments.length > 1, preparedValid]);
+  const pvScale = Math.min(440 / geo.W, Math.min(520, pvRoom) / geo.H);
   const stageStyle: React.CSSProperties = { width: Math.round(geo.W * pvScale), height: Math.round(geo.H * pvScale), flex: "none" };
   const boxStyle: React.CSSProperties = {
     left: `${(geo.video.x / geo.W) * 100}%`, top: `${(geo.video.y / geo.H) * 100}%`,
@@ -913,7 +933,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     <Modal title={t("剪成视频")} onClose={requestClose} wide>
       <div className="vclip-layout">
         {/* Left: live WYSIWYG video / cover preview */}
-        <div className="vclip-preview-col">
+        <div className="vclip-preview-col" ref={pvColRef}>
           <div className="vclip-pv-switch">
             <Seg
               value={pvView}
@@ -1064,7 +1084,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                   ))}
                 </div>
               </>
-            ) : (
+            ) : pvView === "video" && !montage && segments.length > 1 ? null : (
               <span className="small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span>
             )}
             <span className="spacer" />
