@@ -2538,3 +2538,12 @@ details.vclip-sec[open] > summary.vclip-sec-head > .small { visibility: hidden; 
 .vclip-opening .small { flex: 1; min-width: 0; }
 .vclip-opening .link-btn { flex: none; white-space: nowrap; }
 .vclip-batch-note { margin: -4px 0 12px; padding: 8px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-text); }
+/* The highlights toolbar has grown: its buttons keep their words on one line and wrap as a whole. */
+.hl-toolbar { flex-wrap: wrap; row-gap: 2px; column-gap: 12px; }
+.hl-toolbar > .muted, .hl-toolbar .link-btn { white-space: nowrap; }
+.hl-toolbar .hl-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The recent-exports list sits in a .menu but its rows are two lines: undo the menu's fixed button height. */
+.menu.clip-hist .clip-hist-main { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; height: auto; min-height: 44px; padding: 6px 8px; width: auto; }
+.menu.clip-hist .clip-hist-main:hover { background: none; }
+.menu.clip-hist .icon-btn { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; flex: none; }
+.menu.clip-hist .menu-note { margin: 4px 8px 2px; }

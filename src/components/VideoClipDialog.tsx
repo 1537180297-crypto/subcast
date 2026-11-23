@@ -1643,7 +1643,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         {batch ? (
           run ? (
             <button type="button" className="btn primary" onClick={() => { stopBatch.current = true; setStopping(true); }} disabled={stopping}>
-              <Loader2 size={14} className="spin" /> {stopping ? t("本段导出后停止") : t("正在导出第 {i}/{n} 段 · 点此在本段后停止", { i: run.i + 1, n: batch.length })}
+              <Loader2 size={14} className="spin" /> {stopping ? t("本段导出后停止") : t("第 {i}/{n} 段 · 停止", { i: run.i + 1, n: batch.length })}
             </button>
           ) : (
             <button type="button" className="btn primary" disabled={!!busyJob} onClick={() => { stopBatch.current = false; setRun({ i: 0, ok: 0, step: "set" }); }} title={t("用现在的设置依次导出选中的每一段")}>
