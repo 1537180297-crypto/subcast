@@ -2462,3 +2462,23 @@ details.vclip-adv:not([open]) > summary { margin-bottom: 0; }
 .manage-row:hover .manage-edit, .manage-row .manage-edit:focus-visible { opacity: 1; }
 .manage-rename { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .manage-rename input { flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; outline: none; }
+/* Settings › AI 问答与导读: two sample bubbles that follow the size slider. */
+.chat-preview { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; margin-bottom: 6px; border-radius: 12px; background: var(--soft); line-height: 1.65; }
+.chat-preview .msg p { margin: 0; }
+/* TextField: one frame for icon, text and clear button. The wrapper owns border, fill and the focus ring; the
+   bare input inside is fully reset so it never draws a second box (the old "box in a box" on focus). */
+.tf { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; min-width: 0; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel); color: var(--muted); cursor: text; transition: border-color .15s var(--ease), box-shadow .15s var(--ease), color .15s var(--ease); }
+.tf-sm { height: 30px; gap: 6px; padding: 0 8px; border-radius: 8px; }
+.tf:hover:not(.disabled) { border-color: color-mix(in srgb, var(--ink) 22%, var(--line-strong)); }
+.tf:focus-within { border-color: color-mix(in srgb, var(--ink) 48%, var(--line-strong)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 8%, transparent); color: var(--text); }
+.tf.filled { color: var(--text-2); }
+.tf.disabled { opacity: .55; cursor: default; }
+.tf .tf-input, .tf .tf-input:focus, .tf .tf-input:focus-visible { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; color: var(--text); font-size: 13.5px; }
+.tf-sm .tf-input { font-size: 13px; }
+.tf .tf-input::placeholder { color: var(--muted); opacity: 1; }
+.tf-icon { display: inline-grid; place-items: center; flex: none; color: inherit; }
+.tf-suffix { flex: none; font-size: 12px; color: var(--muted); }
+.tf-clear { display: inline-grid; place-items: center; flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: var(--soft); color: var(--text-2); cursor: pointer; transition: background .12s var(--ease), color .12s var(--ease); }
+.tf-clear:hover { background: var(--soft-hover); color: var(--text); }
+.pick-tools .tf { flex: 1 1 180px; }
+.check-note { margin: -4px 0 4px 24px; }

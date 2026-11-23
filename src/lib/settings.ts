@@ -52,7 +52,10 @@ export interface Settings {
   subtitleOrigScale?: number;
   /** How far video subtitles are moved up from their usual place, in % of the picture's height (dragged). */
   subtitleLift?: number;
+  /** Old two-step size; `chatScale` replaces it once the slider moves. */
   chatSize?: "m" | "l";
+  /** AI answers and guides text size, 0.85–1.5 (1 = 14px). */
+  chatScale?: number;
   audioNextLine?: boolean;
   skipBack?: number;
   skipForward?: number;
