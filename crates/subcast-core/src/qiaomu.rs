@@ -93,7 +93,7 @@ pub async fn channel(id: &str) -> Result<Channel> {
         unplayed: 0,
     };
     let mut zh_titles = vec![];
-    let episodes = list.iter().take(crate::feeds::MAX_EPISODES).filter_map(|e| {
+    let mut episodes: Vec<Episode> = list.iter().take(crate::feeds::MAX_EPISODES).filter_map(|e| {
         let slug = e["s"].as_str()?.to_string();
         let t = e["t"].as_str()?.to_string();
         if let Some(zh) = e["zh"].as_str().filter(|z| !z.is_empty() && *z != t) { zh_titles.push((t.clone(), zh.to_string())); }
@@ -118,6 +118,8 @@ pub async fn channel(id: &str) -> Result<Channel> {
             ..Default::default()
         })
     }).collect();
+    // Episodes the site has no video for (the Chinese shows, mostly) get one from the show's YouTube channel.
+    crate::curated_video::fill(id, &show.title, &mut episodes).await;
     Ok(Channel { show, episodes, zh_titles })
 }
 
@@ -287,7 +289,7 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
     let feed = rss_feed_url(id);
     let show_id = short_hash(&feed, 16);
     let mut zh_titles = vec![];
-    let episodes: Vec<Episode> = entries.iter().take(crate::feeds::MAX_EPISODES).filter_map(|e| {
+    let mut episodes: Vec<Episode> = entries.iter().take(crate::feeds::MAX_EPISODES).filter_map(|e| {
         let guid = e["id"].as_str()?.to_string();
         let title = e["title"].as_str()?.to_string();
         if let Some(zh) = e["titleZh"].as_str().filter(|z| !z.is_empty() && *z != title) { zh_titles.push((title.clone(), zh.to_string())); }
@@ -329,6 +331,7 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
         updated_at: now_ms(),
         unplayed: 0,
     };
+    crate::curated_video::fill(id, &show.title, &mut episodes).await;
     Ok(Channel { show, episodes, zh_titles })
 }
 
