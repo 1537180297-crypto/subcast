@@ -57,7 +57,7 @@ function DeepSeekEverywhere() {
   );
 }
 
-function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) => void }) {
+function ProviderEditor({ p, onChange, onKeyChange }: { p: Provider; onChange: (p: Provider) => void; onKeyChange?: () => void }) {
   const settings = useStore((s) => s.settings);
   const [key, setKey] = useState("");
   const [hasKey, setHasKey] = useState(false);
@@ -72,7 +72,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
     try { if (key.trim()) await saveKey(); const ids = await api.listModels(p); setLive(ids); if (!ids.length) setTesting(t("这个服务没有返回模型列表，请手动填写")); }
     catch (e) { setTesting(errorText(e)); } finally { setFetching(false); }
   };
-  const saveKey = async () => { await api.setApiKey(p.id, key); setHasKey(!!key.trim()); setKey(""); };
+  const saveKey = async () => { await api.setApiKey(p.id, key); setHasKey(!!key.trim()); setKey(""); onKeyChange?.(); };
   const test = async () => {
     setTesting("…"); setTestOk(false);
     try {
@@ -90,7 +90,7 @@ function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) 
             <p className="setup-title">API Key</p>
             {p.keyUrl && <button className="link-btn" onClick={() => openUrl(p.keyUrl!)}>{t("去官网申请")} <ExternalLink size={11} /></button>}
           </div>
-          <KeyRow key={p.id} has={hasKey} value={key} onValue={setKey} onSave={saveKey} onDelete={async () => { await api.setApiKey(p.id, ""); setHasKey(false); }} />
+          <KeyRow key={p.id} has={hasKey} value={key} onValue={setKey} onSave={saveKey} onDelete={async () => { await api.setApiKey(p.id, ""); setHasKey(false); onKeyChange?.(); }} />
         </div>
       )}
       <div className="setup-block">

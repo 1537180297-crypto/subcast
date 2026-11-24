@@ -358,10 +358,19 @@ function Notes({ ep, text, defaultOpen = false }: { ep: Episode; text: string; d
 /** Save for offline listening; shows progress while saving and the saved state after. */
 function DownloadButton({ ep }: { ep: Episode }) {
   const [menu, setMenu] = useState(false);
+  const menuBox = useRef<HTMLDivElement>(null);
   const notify = useStore((s) => s.notify);
   const go = useStore((s) => s.go);
   const saved = useOffline((s) => s.saved[ep.id]);
   const progress = useOffline((s) => s.active[ep.id]);
+  useEffect(() => {
+    if (!menu) return;
+    const away = (e: PointerEvent) => { if (!menuBox.current?.contains(e.target as Node)) setMenu(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setMenu(false); } };
+    document.addEventListener("pointerdown", away);
+    window.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("pointerdown", away); window.removeEventListener("keydown", esc, true); };
+  }, [menu]);
   if (!ep.audioUrl && !ep.videoId) return null;
   if (progress !== undefined) {
     const r = 7, c = 2 * Math.PI * r;
@@ -379,10 +388,10 @@ function DownloadButton({ ep }: { ep: Episode }) {
     const fresh = Date.now() - saved.savedAt < 5000;
     const close = () => setMenu(false);
     return (
-      <div className="menu-wrap">
+      <div className="menu-wrap" ref={menuBox}>
         <button className="round-btn dl-done" title={t("已下载 · {size}", { size: bytes(saved.bytes) })} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><DoneCheck fresh={fresh} /></button>
         {menu && (
-          <div className="menu right" role="menu" onMouseLeave={close}>
+          <div className="menu right" role="menu">
             <p className="menu-note">{t("已下载 · {size}", { size: bytes(saved.bytes) })}</p>
             <button role="menuitem" onClick={() => { close(); void api.revealDownload(ep.id).catch((e) => notify(errorText(e))); }}><FolderOpen size={14} /> {t("在文件夹中显示")}</button>
             {ep.videoId && !/\.(mp4|m4v|mov|webm)$/i.test(saved.path) && (

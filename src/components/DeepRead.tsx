@@ -4,7 +4,7 @@ import { SkeletonArticle } from "./Skeleton";
 import { ReadAloud } from "./ReadAloud";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
-import { useStore } from "../store";
+import { seekSoon, useStore } from "../store";
 import { t } from "../lib/i18n";
 
 const KEEP = new Set(["P", "H2", "H3", "H4", "BLOCKQUOTE", "UL", "OL", "LI", "STRONG", "EM", "B", "I", "A", "BR", "HR", "SPAN", "ASIDE", "FIGURE", "FIGCAPTION", "CODE", "PRE"]);
@@ -67,7 +67,13 @@ export function DeepRead({ ep, children, onMissing }: { ep: Episode; children?: 
         onClick={(e) => {
           const el = e.target as HTMLElement;
           const ts = el.closest<HTMLElement>("[data-t]");
-          if (ts) { useStore.getState().player?.seek(seconds(ts.dataset.t!)); return; }
+          if (ts) {
+            const sec = seconds(ts.dataset.t!);
+            const s = useStore.getState();
+            if (s.current?.id === ep.id) s.player?.seek(sec);
+            else { s.load({ ...ep, progress: sec }); seekSoon(sec); }
+            return;
+          }
           const a = el.closest("a");
           if (a?.href) { e.preventDefault(); void openUrl(a.href); }
         }}

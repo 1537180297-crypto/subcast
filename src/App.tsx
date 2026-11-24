@@ -74,9 +74,11 @@ export default function App() {
       if (!action) return;
       // Text boxes keep their own keys: plain ones, and arrows with modifiers (⌘↑ jumps to the top).
       if (typing && (isPlain(combo) || combo.includes("Arrow"))) return;
+      // Don't hijack Space on focused interactive controls (buttons, tabs, radios, links).
+      if (combo === "Space" && (e.target as HTMLElement).closest?.("button, a, [role=button], [role=tab], [role=radio]")) return;
       if (document.querySelector(".shortcut-recorder.recording")) return;
-      // Don't hijack Space/arrows for the background player while a modal dialog is open.
-      if (document.querySelector(".modal-back")) return;
+      // Don't hijack Space/arrows for the background player while a modal dialog is open; ⌘/ still closes its own help dialog.
+      if (document.querySelector(".modal-back") && !(action === "keysHelp" && useKeysHelp.getState().open)) return;
       const { player, time, current } = useStore.getState();
       const segs = current ? useJobs.getState().transcripts[current.id]?.segments : undefined;
       const lineSeek = (dir: -1 | 1) => {

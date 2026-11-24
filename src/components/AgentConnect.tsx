@@ -96,6 +96,7 @@ export function AgentConnectOffer() {
   const [list, setList] = useState<McpTarget[] | null>(null);
   const [state, setState] = useState<"ask" | "busy" | "done">("ask");
   const [result, setResult] = useState("");
+  const [allFailed, setAllFailed] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -116,6 +117,7 @@ export function AgentConnectOffer() {
     setState("busy");
     const { done, failed } = await connectAll(list, () => {}, setBusyId);
     void useStore.getState().saveSettings({ agentsOffered: true });
+    setAllFailed(!!failed && !done.length);
     setResult(failed && !done.length ? failed : failed ? t("已接入 {n} 个，有一个没成功：{error}", { n: done.length, error: failed }) : t("已接入 {n} 个。重新打开它们，就能让它们帮你总结、找高光、剪视频。", { n: done.length }));
     setState("done");
     window.setTimeout(() => setList(null), failed ? 12000 : 7000);
@@ -123,13 +125,13 @@ export function AgentConnectOffer() {
   const choose = () => { close(); useStore.getState().openSettings("agents"); };
 
   return (
-    <div className="update-card agent-offer" role="dialog" aria-label={t("让 AI 助手调用 SubCast")}>
+    <div className="update-card agent-offer" role="status" aria-label={t("让 AI 助手调用 SubCast")}>
       <div className="agent-offer-marks" aria-hidden>
         {list.slice(0, 3).map((x) => <span key={x.id} className={busyId === x.id ? "busy" : ""}><Mark id={x.icon} name={x.name} size={26} /></span>)}
       </div>
       <div className="update-text">
         {state === "done" ? (
-          <p className="update-title"><Check size={13} className="ok-text" /> {result}</p>
+          <p className={`update-title${allFailed ? " error-text" : ""}`}>{!allFailed && <Check size={13} className="ok-text" />} {result}</p>
         ) : (
           <>
             <p className="update-title">{t("让 {names} 也能用 SubCast？", { names: shown })}</p>

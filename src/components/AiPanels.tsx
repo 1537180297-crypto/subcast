@@ -32,14 +32,26 @@ function useConnected() {
 
 function ConnectCard({ what }: { what: string }) {
   const [later, setLater] = useState(false);
-  if (later) return null;
+  const connect = () => {
+    const s = useStore.getState();
+    void s.saveSettings({ chatProvider: s.settings.chatProvider || "deepseek" });
+    s.openSettings("model");
+  };
+  if (later) {
+    return (
+      <div className="setup-note">
+        <span>{t("{what}还差一个模型", { what: t(what) })}</span>
+        <button className="btn primary sm" onClick={connect}>{t("连接模型")}</button>
+      </div>
+    );
+  }
   return (
     <div className="connect-card">
       <PlugArt className="cc-art" />
       <p className="es-title">{t("{what}还差一个模型", { what: t(what) })}</p>
       <p className="muted">{t("推荐 DeepSeek，国内直连，一集约 ¥0.1。Key 只保存在本机。")}</p>
       <div className="row-actions center">
-        <button className="btn primary" onClick={() => { const s = useStore.getState(); void s.saveSettings({ chatProvider: s.settings.chatProvider || "deepseek" }); s.openSettings("model"); }}>{t("连接模型")}</button>
+        <button className="btn primary" onClick={connect}>{t("连接模型")}</button>
         <button className="btn ghost" onClick={() => setLater(true)}>{t("稍后")}</button>
       </div>
     </div>
