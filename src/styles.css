@@ -1679,6 +1679,14 @@ body.tape-seek .seek::-webkit-slider-thumb { border-radius: 3px; width: 12px; he
 /* Waiting for sound after pressing play */
 .controls { position: relative; }
 .play-btn.loading { opacity: .85; }
+/* Loading: a spinner that becomes a pause sign on hover, since a click cancels the wait. */
+.loading-icon { display: grid; place-items: center; }
+.loading-icon > * { grid-area: 1 / 1; }
+.loading-icon .loading-cancel { opacity: 0; }
+.play-btn.loading:hover, .video-poster:hover .big-play.loading { opacity: 1; }
+.play-btn.loading:hover .loading-icon .spin, .video-poster:hover .loading-icon .spin { opacity: 0; }
+.play-btn.loading:hover .loading-cancel, .video-poster:hover .loading-cancel { opacity: 1; }
+.big-play.loading { padding-left: 0; }
 /* First run */
 .welcome-card { position: relative; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px 44px 16px 18px; margin-bottom: 18px; border-radius: 14px; background: var(--accent-soft); }
 .welcome-text { flex: 1; min-width: 240px; }

@@ -851,7 +851,6 @@ const dict: Record<string, string> = {
   "多": "More",
   "近 7 天": "Last 7 days",
   "近 30 天": "Last 30 days",
-  "正在加载…": "Loading…",
   "欢迎使用 SubCast": "Welcome to SubCast",
   "正在为你准备几档精选节目…": "Getting a few great shows ready for you…",
   "已经为你订阅了 {n} 档精选节目，点任意一集就有双语字幕。": "We've subscribed you to {n} hand-picked shows; open any episode for bilingual subtitles.",
@@ -916,7 +915,6 @@ const dict: Record<string, string> = {
   "已收藏，在首页「接下来听」里能找到": "Saved. Find it under Up next on the home page.",
   "查看快捷键": "Show shortcuts",
   "问答和翻译分别用不同模型": "Use different models for Q&A and translation",
-  "视频地址失效，请稍后再试": "The video address stopped working. Try again later.",
   "如果没有字幕时": "When there are no subtitles",
   "本机模型": "On this computer",
   "免费，音频不出本机": "Free; audio stays on this computer",
@@ -1814,6 +1812,15 @@ const dict: Record<string, string> = {
   "当前安装包里没有附带命令行程序（subcast-cli）": "No bundled CLI binary (subcast-cli) in this build",
   "安装命令行工具失败": "Failed to install CLI command",
   "找不到本地安装目录": "Local install directory not found",
+  "重新获取视频": "Fetching the video again",
+  "视频无法播放": "The video can't play",
+  "可能是网络或代理不通，检查代理设置后重试，或在 YouTube 打开": "The network or proxy may be blocking it. Check the proxy setting and retry, or open it on YouTube.",
+  "视频没能播放，正在换一种方式…": "The video didn't play. Trying another way…",
+  "改听音频": "Listen to the audio instead",
+  "代理设置": "Proxy settings",
+  "YouTube 播放器没有响应": "The YouTube player isn't responding",
+  "正在加载…（点击取消）": "Loading… (click to cancel)",
+  "视频加载较慢…": "The video is loading slowly…",
 };
 
 export default dict;

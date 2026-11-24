@@ -16,6 +16,7 @@ import logoUrl from "../assets/logo.png";
 import { showIcon } from "./Lists";
 import { EqBars, SearchArt, useKonami, useTaps } from "./Illustrations";
 import { useDueCount } from "../lib/words";
+import { LoadingIcon, pressPlay } from "./Players";
 
 export function Sidebar() {
   const { shows, view, go, set } = useStore(useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })));
@@ -257,8 +258,8 @@ export function MiniPlayer() {
   };
   return (
     <div className="mini" style={{ "--mini-right": `${right}px` } as React.CSSProperties}>
-      <button className="play-btn sm" onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loading} aria-label={playing ? t("暂停") : t("播放")}>
-        {loading ? <Loader2 size={16} className="spin" /> : playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+      <button className={`play-btn sm ${loading ? "loading" : ""}`} onClick={pressPlay} disabled={!player && !loading} aria-busy={!!loading} title={loading ? t("正在加载…（点击取消）") : undefined} aria-label={loading ? t("正在加载…（点击取消）") : playing ? t("暂停") : t("播放")}>
+        {loading ? <LoadingIcon size={16} /> : playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
       </button>
       {current.cover && <img className="mini-cover" src={current.cover} alt="" />}
       <div className="mini-meta" role="button" tabIndex={0} onClick={() => openEpisode(current)} onKeyDown={(e) => e.key === "Enter" && openEpisode(current)}>

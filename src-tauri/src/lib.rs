@@ -445,8 +445,10 @@ async fn youtube_stream(
         .map_err(e)
 }
 
+// Async on purpose: a window built inside a synchronous command deadlocks on Windows (WebView2 needs the main
+// thread the command is blocking), leaving a black, frozen sign-in window.
 #[tauri::command]
-fn youtube_sign_in(app: AppHandle) -> Res<()> {
+async fn youtube_sign_in(app: AppHandle) -> Res<()> {
     ytlogin::open(&app).map_err(e)
 }
 
