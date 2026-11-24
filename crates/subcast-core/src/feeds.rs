@@ -1,13 +1,20 @@
 //! Turning whatever the user pastes into a subscription, and reading feeds.
-//! Every source ends up as RSS/Atom except 小宇宙, whose show page carries its latest episodes.
+//! Every source ends up as RSS/Atom except 小宇宙, whose show page is merged with Apple Podcasts when available.
 use crate::model::*;
 use crate::net;
 use anyhow::{anyhow, Result};
+use once_cell::sync::Lazy;
 use regex::Regex;
 use roxmltree::{Document, Node, ParsingOptions};
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+use std::time::Duration;
 
 pub const MAX_EPISODES: usize = 300;
+
+/// Cached mapping from 小宇宙 podcast `pid` -> Apple Podcasts collection id (`None` = searched & not found).
+static XYZ_APPLE_ID: Lazy<Mutex<HashMap<String, Option<i64>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub enum Source {
     Feed(String),
@@ -20,6 +27,40 @@ fn re(p: &str) -> Regex { Regex::new(p).unwrap() }
 
 /// A feed hosted by 小宇宙 (feed.xyzfm.space), which turns away readers outside its whitelist.
 fn is_xyzfm_feed(url: &str) -> bool { url.contains("xyzfm.space/") }
+
+/// Detect the HTML 403 block page returned by `feed.xyzfm.space` (case-insensitive + Chinese fallback text).
+fn is_xyzfm_blocked(body: &str) -> bool {
+    let head = body.trim_start().get(..800).unwrap_or(body.trim_start());
+    if head.starts_with("<?xml") || head.contains("<rss") || head.contains("<feed") {
+        return false;
+    }
+    let lower = body.to_ascii_lowercase();
+    lower.contains("403 forbidden") || body.contains("403 · 无法访问") || body.contains("访问受限") // i18n-ignore (xyzfm HTML 403 block page markers)
+}
+
+fn extract_xyz_pid(s: &str) -> Option<String> {
+    for pat in [
+        r"xiaoyuzhoufm\.com/podcast/([0-9a-fA-F]{24})",
+        r"media\.xyzcdn\.net/([0-9a-fA-F]{24})",
+        r"dts-api\.xiaoyuzhoufm\.com/track/([0-9a-fA-F]{24})",
+    ] {
+        if let Some(c) = re(pat).captures(s) {
+            return Some(c[1].to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+fn unwrap_xyz_audio(url: &str) -> String {
+    if url.contains("dts-api.xiaoyuzhoufm.com/") {
+        if let Some((_, rest)) = url.split_once("/media.xyzcdn.net/") {
+            if !rest.is_empty() {
+                return format!("https://media.xyzcdn.net/{rest}");
+            }
+        }
+    }
+    url.to_string()
+}
 
 /// A channel's long-form uploads (the "UULF" playlist), so Shorts do not crowd out real episodes.
 pub fn channel_feed(channel_id: &str) -> String {
@@ -70,19 +111,36 @@ pub async fn resolve(input: &str) -> Result<Source> {
     if url.contains("podcasts.apple.com") {
         let id = re(r"/id(\d+)").captures(&url).map(|c| c[1].to_string()).ok_or_else(|| anyhow!("无法识别 Apple Podcasts 链接"))?;
         let v: serde_json::Value = net::client()
-            .get(format!("https://itunes.apple.com/lookup?id={id}&entity=podcast"))
+            .get(format!("https://itunes.apple.com/lookup?id={id}&entity=podcastEpisode&limit=5"))
+            .timeout(Duration::from_secs(10))
             .send()
             .await?
             .json()
             .await?;
-        let feed = v["results"][0]["feedUrl"].as_str().ok_or_else(|| anyhow!("这档节目没有公开 RSS（可能是 Apple 独家）"))?;
-        // 小宇宙-hosted feeds only answer whitelisted readers (403 for everyone else); the Apple page names the show's 小宇宙 page.
+        let results = v["results"].as_array().cloned().unwrap_or_default();
+        let feed = results.first().and_then(|r| r["feedUrl"].as_str())
+            .ok_or_else(|| anyhow!("这档节目没有公开 RSS（可能是 Apple 独家）"))?;
+        // 小宇宙-hosted feeds only answer whitelisted readers (403 for everyone else); map to 小宇宙 + cache Apple id.
         if is_xyzfm_feed(feed) {
-            if let Ok(html) = net::get_text(&format!("https://podcasts.apple.com/podcast/id{id}")).await {
-                if let Some(c) = re(r"xiaoyuzhoufm\.com/podcast/([0-9a-f]{24})").captures(&html) {
-                    return Ok(Source::Xiaoyuzhou(format!("https://www.xiaoyuzhoufm.com/podcast/{}", &c[1])));
+            let mut pid = results.iter().skip(1).find_map(|r| {
+                r["episodeUrl"].as_str().and_then(extract_xyz_pid)
+                    .or_else(|| r["previewUrl"].as_str().and_then(extract_xyz_pid))
+            });
+            if pid.is_none() {
+                if let Ok(html) = net::get_text(&format!("https://podcasts.apple.com/podcast/id{id}")).await {
+                    pid = extract_xyz_pid(&html);
                 }
             }
+            if let Some(pid) = pid {
+                if let Ok(aid) = id.parse::<i64>() {
+                    if let Ok(mut map) = XYZ_APPLE_ID.lock() {
+                        map.insert(pid.clone(), Some(aid));
+                    }
+                }
+                return Ok(Source::Xiaoyuzhou(format!("https://www.xiaoyuzhoufm.com/podcast/{pid}")));
+            }
+            // Fallback to Apple's own episode lookup when xyzfm is blocked and no 小宇宙 pid was exposed.
+            return Ok(Source::Feed(format!("https://podcasts.apple.com/podcast/id{id}")));
         }
         return Ok(Source::Feed(feed.to_string()));
     }
@@ -98,11 +156,12 @@ pub async fn resolve(input: &str) -> Result<Source> {
     }
     // Anything else: a feed, or a page that links one.
     let body = net::get_text(&url).await?;
-    if is_xyzfm_feed(&url) && body.contains("403 Forbidden") {
+    let head = body.trim_start().get(..800).unwrap_or(body.trim_start());
+    let looks_like_xml = head.starts_with("<?xml") || head.contains("<rss") || head.contains("<feed");
+    if is_xyzfm_feed(&url) && (is_xyzfm_blocked(&body) || !looks_like_xml) {
         return Err(anyhow!("小宇宙的 RSS 不对外开放，请粘贴小宇宙 App 里分享的节目链接"));
     }
-    let head = body.trim_start().get(..800).unwrap_or(body.trim_start());
-    if head.starts_with("<?xml") || head.contains("<rss") || head.contains("<feed") {
+    if looks_like_xml {
         return Ok(Source::Feed(url));
     }
     if let Some(c) = re(r#"<link[^>]+type="application/(?:rss|atom)\+xml"[^>]*href="([^"]+)""#).captures(&body) {
@@ -297,7 +356,269 @@ fn xyz_episode(e: &serde_json::Value, show_id: &str) -> Option<Episode> {
     })
 }
 
-pub async fn xiaoyuzhou_show(url: &str) -> Result<(Show, Vec<Episode>)> {
+fn extract_xyz_eid(s: &str) -> Option<String> {
+    for pat in [
+        r"xiaoyuzhoufm\.com/episode/([0-9a-fA-F]{24})",
+        r"dts-api\.xiaoyuzhoufm\.com/track/[0-9a-fA-F]{24}/([0-9a-fA-F]{24})",
+    ] {
+        if let Some(c) = re(pat).captures(s) {
+            return Some(c[1].to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+fn episode_xyz_eid(ep: &Episode) -> Option<String> {
+    ep.link.as_deref().and_then(extract_xyz_eid)
+        .or_else(|| ep.audio_url.as_deref().and_then(extract_xyz_eid))
+        .or_else(|| {
+            let g = ep.guid.trim();
+            if re(r"^[0-9a-fA-F]{24}$").is_match(g) {
+                Some(g.to_ascii_lowercase())
+            } else {
+                extract_xyz_eid(g)
+            }
+        })
+}
+
+fn normalize_audio_key(url: &str) -> String {
+    let unwrapped = unwrap_xyz_audio(url.trim());
+    unwrapped.split('?').next().unwrap_or(&unwrapped).to_string()
+}
+
+fn parse_apple_episodes(show_id: &str, results: &[serde_json::Value]) -> Vec<Episode> {
+    results.iter().filter(|e| e["wrapperType"].as_str() == Some("podcastEpisode")).filter_map(|e| {
+        let title = e["trackName"].as_str().map(str::trim).filter(|s| !s.is_empty())?.to_string();
+        let raw_audio = e["episodeUrl"].as_str()
+            .or_else(|| e["previewUrl"].as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let audio_url = raw_audio.map(unwrap_xyz_audio);
+        let guid = e["episodeGuid"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+            .or_else(|| raw_audio.map(unwrap_xyz_audio))
+            .or_else(|| e["trackId"].as_i64().map(|n| n.to_string()))
+            .unwrap_or_else(|| short_hash(&title, 12));
+        let id = short_hash(&format!("{show_id}:{guid}"), 16);
+        let published = e["releaseDate"].as_str().and_then(parse_date);
+        let duration = e["trackTimeMillis"].as_f64().filter(|&ms| ms > 0.0).map(|ms| ms / 1000.0);
+        let link = raw_audio.and_then(extract_xyz_eid)
+            .map(|eid| format!("https://www.xiaoyuzhoufm.com/episode/{eid}"))
+            .or_else(|| e["trackViewUrl"].as_str().filter(|s| !s.is_empty()).map(String::from));
+        let cover = e["artworkUrl600"].as_str()
+            .or_else(|| e["artworkUrl160"].as_str())
+            .or_else(|| e["artworkUrl60"].as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        let notes = e["description"].as_str()
+            .or_else(|| e["shortDescription"].as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        Some(Episode {
+            id,
+            show_id: show_id.into(),
+            guid,
+            title,
+            published,
+            duration,
+            audio_url,
+            link,
+            cover,
+            notes,
+            ..Episode::default()
+        })
+    }).collect()
+}
+
+fn apple_matches_xyz_pid(pid: &str, web_eps: &[Episode], results: &[serde_json::Value]) -> bool {
+    let target_pid = pid.to_ascii_lowercase();
+    for r in results {
+        for key in ["episodeUrl", "previewUrl"] {
+            if let Some(u) = r[key].as_str() {
+                if extract_xyz_pid(u).as_deref() == Some(target_pid.as_str()) {
+                    return true;
+                }
+            }
+        }
+    }
+    if web_eps.is_empty() {
+        return false;
+    }
+    let web_guids: HashSet<&str> = web_eps.iter().map(|e| e.guid.trim()).filter(|s| !s.is_empty()).collect();
+    let web_eids: HashSet<String> = web_eps.iter().filter_map(episode_xyz_eid).collect();
+    let web_audios: HashSet<String> = web_eps.iter().filter_map(|e| e.audio_url.as_deref()).map(normalize_audio_key).collect();
+    for r in results {
+        if r["wrapperType"].as_str() != Some("podcastEpisode") {
+            continue;
+        }
+        if let Some(g) = r["episodeGuid"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            if web_guids.contains(g) {
+                return true;
+            }
+            if let Some(eid) = extract_xyz_eid(g) {
+                if web_eids.contains(&eid) {
+                    return true;
+                }
+            }
+        }
+        for key in ["episodeUrl", "previewUrl"] {
+            if let Some(u) = r[key].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                if web_audios.contains(&normalize_audio_key(u)) {
+                    return true;
+                }
+                if let Some(eid) = extract_xyz_eid(u) {
+                    if web_eids.contains(&eid) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn same_episode(a: &Episode, b: &Episode) -> bool {
+    if !a.guid.is_empty() && a.guid == b.guid {
+        return true;
+    }
+    if let (Some(ua), Some(ub)) = (a.audio_url.as_deref(), b.audio_url.as_deref()) {
+        if !ua.is_empty() && !ub.is_empty() && normalize_audio_key(ua) == normalize_audio_key(ub) {
+            return true;
+        }
+    }
+    if let (Some(ea), Some(eb)) = (episode_xyz_eid(a), episode_xyz_eid(b)) {
+        if ea == eb {
+            return true;
+        }
+    }
+    let ta = a.title.trim();
+    let tb = b.title.trim();
+    if !ta.is_empty() && ta == tb {
+        if let (Some(pa), Some(pb)) = (a.published, b.published) {
+            if (pa - pb).abs() <= 172_800_000 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn merge_episodes(web: Vec<Episode>, apple: Vec<Episode>) -> Vec<Episode> {
+    let mut out = web;
+    for a in apple {
+        if let Some(existing) = out.iter_mut().find(|w| same_episode(w, &a)) {
+            if existing.published.is_none() {
+                existing.published = a.published;
+            }
+            if existing.duration.unwrap_or(0.0) <= 0.0 {
+                existing.duration = a.duration;
+            }
+            if existing.audio_url.as_deref().unwrap_or("").is_empty() {
+                existing.audio_url = a.audio_url;
+            }
+            if existing.cover.as_deref().unwrap_or("").is_empty() {
+                existing.cover = a.cover;
+            }
+            if existing.link.as_deref().unwrap_or("").is_empty() {
+                existing.link = a.link;
+            }
+            match (&existing.notes, &a.notes) {
+                (None, Some(an)) => existing.notes = Some(an.clone()),
+                (Some(wn), Some(an)) if an.chars().count() > wn.chars().count() => existing.notes = Some(an.clone()),
+                _ => {}
+            }
+        } else {
+            out.push(a);
+        }
+    }
+    out.sort_by(|a, b| b.published.unwrap_or(0).cmp(&a.published.unwrap_or(0)));
+    out.truncate(MAX_EPISODES);
+    out
+}
+
+async fn fetch_apple_lookup(apple_id: i64) -> Result<Vec<serde_json::Value>> {
+    let v: serde_json::Value = net::client()
+        .get(format!("https://itunes.apple.com/lookup?id={apple_id}&entity=podcastEpisode&limit=200"))
+        .timeout(Duration::from_secs(6))
+        .send()
+        .await?
+        .json()
+        .await?;
+    Ok(v["results"].as_array().cloned().unwrap_or_default())
+}
+
+async fn find_apple_for_xyz(pid: &str, title: &str, web_eps: &[Episode]) -> Result<Option<(i64, Vec<serde_json::Value>)>> {
+    let q = title.trim();
+    if q.is_empty() {
+        return Ok(None);
+    }
+    let v: serde_json::Value = net::client()
+        .get(format!(
+            "https://itunes.apple.com/search?term={}&entity=podcast&country=CN&limit=5",
+            urlencoding::encode(q)
+        ))
+        .timeout(Duration::from_secs(6))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let results = v["results"].as_array().cloned().unwrap_or_default();
+    let ql = q.to_lowercase();
+    let mut candidates: Vec<(i32, i64)> = results.iter().filter_map(|r| {
+        let cid = r["collectionId"].as_i64()?;
+        let cname = r["collectionName"].as_str().unwrap_or_default().to_lowercase();
+        let feed = r["feedUrl"].as_str().unwrap_or_default();
+        let mut score = 0;
+        if is_xyzfm_feed(feed) { score += 4; }
+        if cname == ql { score += 3; } else if cname.contains(&ql) || ql.contains(&cname) { score += 1; }
+        Some((score, cid))
+    }).collect();
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.dedup_by_key(|c| c.1);
+    for (_, cid) in candidates.into_iter().take(2) {
+        if let Ok(rows) = fetch_apple_lookup(cid).await {
+            if apple_matches_xyz_pid(pid, web_eps, &rows) {
+                return Ok(Some((cid, rows)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn apple_show_from_results(
+    show_id: &str,
+    kind: &str,
+    feed_url: String,
+    link: Option<String>,
+    results: &[serde_json::Value],
+) -> Result<(Show, Vec<Episode>)> {
+    let meta = results.first().ok_or_else(|| anyhow!("Apple Podcasts 没有返回节目信息"))?;
+    let title = meta["collectionName"].as_str()
+        .or_else(|| meta["trackName"].as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("Apple Podcasts 节目信息不完整"))?
+        .to_string();
+    let show = Show {
+        id: show_id.into(),
+        kind: kind.into(),
+        title,
+        author: meta["artistName"].as_str().filter(|s| !s.is_empty()).map(String::from),
+        cover: meta["artworkUrl600"].as_str()
+            .or_else(|| meta["artworkUrl100"].as_str())
+            .or_else(|| meta["artworkUrl60"].as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+        feed_url,
+        link,
+        description: None,
+        updated_at: now_ms(),
+        unplayed: 0,
+    };
+    let episodes = merge_episodes(Vec::new(), parse_apple_episodes(show_id, results));
+    Ok((show, episodes))
+}
+
+async fn xiaoyuzhou_web_show(url: &str) -> Result<(Show, Vec<Episode>)> {
     let v = next_data(&net::get_text(url).await?)?;
     let p = &v["props"]["pageProps"]["podcast"];
     let pid = p["pid"].as_str().ok_or_else(|| anyhow!("没有找到小宇宙节目"))?;
@@ -319,6 +640,83 @@ pub async fn xiaoyuzhou_show(url: &str) -> Result<(Show, Vec<Episode>)> {
     Ok((show, episodes))
 }
 
+pub async fn xiaoyuzhou_show(url: &str) -> Result<(Show, Vec<Episode>)> {
+    let pid_hint = extract_xyz_pid(url);
+    let cached = pid_hint.as_ref().and_then(|p| XYZ_APPLE_ID.lock().ok().and_then(|m| m.get(p).copied()));
+    match cached {
+        Some(Some(aid)) => {
+            let (web_res, apple_res) = tokio::join!(xiaoyuzhou_web_show(url), fetch_apple_lookup(aid));
+            match (web_res, apple_res) {
+                (Ok((show, web_eps)), Ok(rows)) => {
+                    let episodes = match extract_xyz_pid(&show.feed_url) {
+                        Some(pid) if apple_matches_xyz_pid(&pid, &web_eps, &rows) => {
+                            merge_episodes(web_eps, parse_apple_episodes(&show.id, &rows))
+                        }
+                        _ => merge_episodes(web_eps, Vec::new()),
+                    };
+                    Ok((show, episodes))
+                }
+                (Ok((show, web_eps)), Err(_)) => Ok((show, merge_episodes(web_eps, Vec::new()))),
+                (Err(err), Ok(rows)) => {
+                    if let Some(pid) = pid_hint {
+                        let feed_url = format!("https://www.xiaoyuzhoufm.com/podcast/{pid}");
+                        let show_id = short_hash(&feed_url, 16);
+                        if let Ok((show, eps)) = apple_show_from_results(&show_id, "xiaoyuzhou", feed_url.clone(), Some(feed_url), &rows) {
+                            if !eps.is_empty() {
+                                return Ok((show, eps));
+                            }
+                        }
+                    }
+                    Err(err)
+                }
+                (Err(err), Err(_)) => Err(err),
+            }
+        }
+        Some(None) => xiaoyuzhou_web_show(url).await,
+        None => {
+            let (show, web_eps) = xiaoyuzhou_web_show(url).await?;
+            let Some(pid) = extract_xyz_pid(&show.feed_url) else {
+                return Ok((show, web_eps));
+            };
+            let cached_after = XYZ_APPLE_ID.lock().ok().and_then(|m| m.get(&pid).copied());
+            let apple_rows = match cached_after {
+                Some(Some(aid)) => fetch_apple_lookup(aid).await.ok().filter(|rows| apple_matches_xyz_pid(&pid, &web_eps, rows)),
+                Some(None) => None,
+                None => match find_apple_for_xyz(&pid, &show.title, &web_eps).await {
+                    Ok(Some((aid, rows))) => {
+                        if let Ok(mut map) = XYZ_APPLE_ID.lock() {
+                            map.insert(pid, Some(aid));
+                        }
+                        Some(rows)
+                    }
+                    Ok(None) => {
+                        if let Ok(mut map) = XYZ_APPLE_ID.lock() {
+                            map.insert(pid, None);
+                        }
+                        None
+                    }
+                    Err(_) => None,
+                },
+            };
+            let episodes = match apple_rows {
+                Some(rows) => merge_episodes(web_eps, parse_apple_episodes(&show.id, &rows)),
+                None => merge_episodes(web_eps, Vec::new()),
+            };
+            Ok((show, episodes))
+        }
+    }
+}
+
+async fn apple_podcast_show(url: &str) -> Result<(Show, Vec<Episode>)> {
+    let id_str = re(r"/id(\d+)").captures(url).map(|c| c[1].to_string())
+        .ok_or_else(|| anyhow!("无法识别 Apple Podcasts 链接"))?;
+    let id: i64 = id_str.parse().map_err(|_| anyhow!("无法识别 Apple Podcasts 链接"))?;
+    let rows = fetch_apple_lookup(id).await?;
+    let feed_url = format!("https://podcasts.apple.com/podcast/id{id}");
+    let show_id = short_hash(&feed_url, 16);
+    apple_show_from_results(&show_id, "podcast", feed_url.clone(), Some(feed_url), &rows)
+}
+
 pub async fn xiaoyuzhou_episode(url: &str) -> Result<Episode> {
     let v = next_data(&net::get_text(url).await?)?;
     let e = &v["props"]["pageProps"]["episode"];
@@ -331,7 +729,13 @@ pub async fn fetch_show(feed_url: &str, kind: &str) -> Result<(Show, Vec<Episode
     if kind == "xiaoyuzhou" {
         return xiaoyuzhou_show(feed_url).await;
     }
+    if feed_url.contains("podcasts.apple.com/") && re(r"/id\d+").is_match(feed_url) {
+        return apple_podcast_show(feed_url).await;
+    }
     let xml = net::get_text(feed_url).await?;
+    if is_xyzfm_blocked(&xml) {
+        return Err(anyhow!("小宇宙的 RSS 不对外开放，请粘贴小宇宙 App 里分享的节目链接"));
+    }
     parse_feed(&xml, feed_url)
 }
 
@@ -600,5 +1004,141 @@ mod tests {
         let n = ep.notes.unwrap_or_default();
         println!("shownotes chars: {}", n.chars().count());
         assert!(n.chars().count() > 600);
+    }
+
+    #[test]
+    fn xyzfm_403_detection() {
+        assert!(is_xyzfm_blocked("403 FORBIDDEN"));
+        assert!(is_xyzfm_blocked("403 Forbidden"));
+        assert!(is_xyzfm_blocked("<html><title>403 · 无法访问</title><footer>403 FORBIDDEN · 访问受限</footer></html>"));
+        assert!(!is_xyzfm_blocked("<?xml version=\"1.0\"?><rss><channel><description>403 Forbidden</description></channel></rss>"));
+    }
+
+    #[test]
+    fn xyz_audio_unwrap_and_pid() {
+        let wrapped = "https://dts-api.xiaoyuzhoufm.com/track/626b46ea9cbbf0451cf5a962/6af9e512fe62f8f52c4ba6fb/media.xyzcdn.net/626b46ea9cbbf0451cf5a962/lqv9test.m4a";
+        assert_eq!(
+            unwrap_xyz_audio(wrapped),
+            "https://media.xyzcdn.net/626b46ea9cbbf0451cf5a962/lqv9test.m4a"
+        );
+        let direct = "https://media.xyzcdn.net/626b46ea9cbbf0451cf5a962/lqv9test.m4a";
+        assert_eq!(unwrap_xyz_audio(direct), direct);
+        assert_eq!(extract_xyz_pid("https://www.xiaoyuzhoufm.com/podcast/626b46ea9cbbf0451cf5a962").as_deref(), Some("626b46ea9cbbf0451cf5a962"));
+        assert_eq!(extract_xyz_pid(wrapped).as_deref(), Some("626b46ea9cbbf0451cf5a962"));
+        assert_eq!(extract_xyz_pid(direct).as_deref(), Some("626b46ea9cbbf0451cf5a962"));
+        assert_eq!(extract_xyz_eid(wrapped).as_deref(), Some("6af9e512fe62f8f52c4ba6fb"));
+        assert_eq!(extract_xyz_eid("https://www.xiaoyuzhoufm.com/episode/6af9e512fe62f8f52c4ba6fb").as_deref(), Some("6af9e512fe62f8f52c4ba6fb"));
+    }
+
+    #[test]
+    fn apple_episodes_and_pid_matching() {
+        let rows = vec![
+            serde_json::json!({
+                "wrapperType": "track",
+                "collectionName": "张小珺",
+                "artistName": "张小珺",
+                "artworkUrl600": "https://example.com/show.jpg"
+            }),
+            serde_json::json!({
+                "wrapperType": "podcastEpisode",
+                "trackId": 1001,
+                "trackName": "157. 测试一期",
+                "episodeGuid": "ep-guid-157",
+                "releaseDate": "2026-11-18T03:08:54Z",
+                "trackTimeMillis": 3600000,
+                "episodeUrl": "https://dts-api.xiaoyuzhoufm.com/track/626b46ea9cbbf0451cf5a962/6af9e512fe62f8f52c4ba6fb/media.xyzcdn.net/626b46ea9cbbf0451cf5a962/test157.m4a",
+                "artworkUrl600": "https://example.com/ep157.jpg",
+                "description": "完整介绍内容"
+            }),
+        ];
+        let eps = parse_apple_episodes("show123", &rows);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].audio_url.as_deref(), Some("https://media.xyzcdn.net/626b46ea9cbbf0451cf5a962/test157.m4a"));
+        assert_eq!(eps[0].link.as_deref(), Some("https://www.xiaoyuzhoufm.com/episode/6af9e512fe62f8f52c4ba6fb"));
+        assert_eq!(eps[0].duration, Some(3600.0));
+        assert!(eps[0].published.is_some());
+        assert!(apple_matches_xyz_pid("626b46ea9cbbf0451cf5a962", &[], &rows));
+        assert!(!apple_matches_xyz_pid("ffffffffffffffffffffffff", &[], &rows));
+
+        let custom_rows = vec![serde_json::json!({
+            "wrapperType": "podcastEpisode",
+            "trackName": "Custom Host Ep",
+            "episodeGuid": "custom-guid-1",
+            "episodeUrl": "https://cdn.example.com/1.mp3"
+        })];
+        let web_ep = Episode { guid: "custom-guid-1".into(), ..Episode::default() };
+        assert!(apple_matches_xyz_pid("ffffffffffffffffffffffff", &[web_ep], &custom_rows));
+        assert!(!apple_matches_xyz_pid("ffffffffffffffffffffffff", &[Episode { guid: "other".into(), ..Episode::default() }], &custom_rows));
+    }
+
+    #[test]
+    fn merge_episodes_dedupes_sorts_and_backfills() {
+        let web = vec![
+            Episode {
+                id: "web-157".into(),
+                show_id: "s1".into(),
+                guid: "eid-157".into(),
+                title: "157".into(),
+                published: Some(2000),
+                audio_url: Some("https://media.xyzcdn.net/p1/a157.m4a".into()),
+                link: Some("https://www.xiaoyuzhoufm.com/episode/eid157".into()),
+                notes: Some("short".into()),
+                ..Episode::default()
+            },
+        ];
+        let apple = vec![
+            // Same episode via unwrapped audio URL despite different guid -> should enrich without duplicating
+            Episode {
+                id: "apple-dup".into(),
+                show_id: "s1".into(),
+                guid: "rss-uuid-157".into(),
+                title: "157".into(),
+                published: Some(2000),
+                duration: Some(1800.0),
+                audio_url: Some("https://media.xyzcdn.net/p1/a157.m4a".into()),
+                notes: Some("much longer description from apple".into()),
+                ..Episode::default()
+            },
+            // Newer episode only on Apple -> should sort first
+            Episode {
+                id: "apple-158".into(),
+                show_id: "s1".into(),
+                guid: "rss-uuid-158".into(),
+                title: "158".into(),
+                published: Some(3000),
+                ..Episode::default()
+            },
+            // Older historical episode backfilled from Apple -> should sort last
+            Episode {
+                id: "apple-100".into(),
+                show_id: "s1".into(),
+                guid: "rss-uuid-100".into(),
+                title: "100".into(),
+                published: Some(1000),
+                ..Episode::default()
+            },
+        ];
+        let merged = merge_episodes(web, apple);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].id, "apple-158");
+        assert_eq!(merged[1].id, "web-157");
+        assert_eq!(merged[1].duration, Some(1800.0));
+        assert_eq!(merged[1].notes.as_deref(), Some("much longer description from apple"));
+        assert_eq!(merged[2].id, "apple-100");
+    }
+
+    /// Network: verify 小宇宙 + Apple Podcasts multi-source merge and warm-cache concurrent path.
+    #[tokio::test]
+    #[ignore]
+    async fn xiaoyuzhou_multi_source_live() {
+        let url = "https://www.xiaoyuzhoufm.com/podcast/626b46ea9cbbf0451cf5a962";
+        let (show, eps) = xiaoyuzhou_show(url).await.unwrap();
+        println!("show={} eps={} top3={:?}", show.title, eps.len(), eps.iter().take(3).map(|e| (&e.title, e.published)).collect::<Vec<_>>());
+        assert!(eps.len() > 20, "expected Apple backfill > 20 episodes, got {}", eps.len());
+        assert!(eps.iter().any(|e| e.title.contains("157")), "expected ep 157 in merged episodes");
+        let cached = XYZ_APPLE_ID.lock().unwrap().get("626b46ea9cbbf0451cf5a962").copied().flatten();
+        assert!(cached.is_some(), "expected Apple id to be cached");
+        let (_, eps2) = xiaoyuzhou_show(url).await.unwrap();
+        assert_eq!(eps2.len(), eps.len());
     }
 }
