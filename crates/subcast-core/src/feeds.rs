@@ -421,13 +421,17 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<SearchResu
 }
 
 /// The top few channels from YouTube's own search page (channel filter), read from its embedded ytInitialData.
-async fn search_youtube_channels(term: &str) -> Result<Vec<SearchResult>> {
+pub(crate) async fn search_youtube_channels(term: &str) -> Result<Vec<SearchResult>> {
     const MAX: usize = 3;
-    let html = net::get_text(&format!("https://www.youtube.com/results?search_query={}&sp=EgIQAg%253D%253D", urlencoding::encode(term))).await?;
-    let json = re(r"var ytInitialData = (\{.*?\});</script>").captures(&html).ok_or_else(|| anyhow!("YouTube 搜索页没有结果数据"))?; // i18n-ignore (never shown: a failed YouTube search just drops its results)
-    let data: serde_json::Value = serde_json::from_str(&json[1])?;
+    // YouTube now and then serves a results page with no results in it (about one in ten): ask again.
     let mut found = Vec::new();
-    collect_channels(&data, &mut found, MAX);
+    for attempt in 0..3 {
+        let html = net::get_text(&format!("https://www.youtube.com/results?search_query={}&sp=EgIQAg%253D%253D", urlencoding::encode(term))).await?;
+        if let Some(json) = re(r"var ytInitialData = (\{.*?\});</script>").captures(&html) {
+            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&json[1]) { collect_channels(&data, &mut found, MAX); }
+        }
+        if !found.is_empty() || attempt == 2 { break; }
+    }
     // Covers are yt3.ggpht.com URLs. The webview loads them itself and draws a broken-image question mark when
     // that request fails; this client is the one that already reached YouTube (including via the app proxy).
     // Fetch the avatar here and hand the webview a data URL. A failed fetch keeps the original URL.

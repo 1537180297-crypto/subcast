@@ -5,6 +5,7 @@ pub mod anki;
 pub mod asr;
 pub mod asr_context;
 pub mod clip;
+pub mod curated_video;
 pub mod cloud;
 pub mod ctx;
 pub mod db;

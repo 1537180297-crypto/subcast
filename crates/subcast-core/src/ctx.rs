@@ -115,6 +115,7 @@ pub struct CoreCtx {
 
 pub fn apply_remote_config(v: &Value) {
     youtube::set_clients(&v["youtubeClients"]);
+    crate::curated_video::set_overrides(&v["curatedYoutube"]);
 }
 
 pub fn apply_runtime_settings(v: &Value) {
