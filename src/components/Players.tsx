@@ -200,6 +200,22 @@ export function AudioEngine() {
   );
 }
 
+type StreamMode = "native-hls" | "proxy-hls" | "mp4";
+const nativeHls = () => document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
+/** How long to wait for a video address (yt-dlp, its bot-check retries, the proxy) before trying something else.
+ *  The backend has its own, longer limit; this keeps the player from spinning for minutes. */
+const STREAM_WAIT = 40_000;
+/** How long a direct stream may take to show its first frame's details (its length) before it counts as stuck. */
+const STALL_WAIT = 20_000;
+/** An embedded player asked to play that hasn't started after this long counts as not working here. */
+const EMBED_START_WAIT = 20_000;
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(t("获取视频地址超时，请检查网络或代理"))), ms);
+    p.then((v) => { window.clearTimeout(timer); resolve(v); }, (e) => { window.clearTimeout(timer); reject(e); });
+  });
+}
+
 /** Our subtitles replace YouTube's: turning the caption module off alone is not enough when the viewer has captions on. */
 function hideYouTubeCaptions(player: any) {
   try { player.setOption?.("captions", "track", {}); } catch { /* module not loaded yet */ }
@@ -217,7 +233,37 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   /** What the switch to the direct stream is waiting for; null when not switching. */
   const [fallingBack, setFallingBack] = useState<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
-  const fallback = async (why: string) => {
+  /** The WebView itself can't reach YouTube (the embed's script never loaded): the stream then has to come
+   *  through the app's loopback proxy, which uses SubCast's own network settings. */
+  const viaApp = useRef(false);
+  /** Streams still to try when the one on screen fails: through the proxy, then the MP4. */
+  const plan = useRef<StreamMode[]>([]);
+  /** The stream on screen, and whether it ever loaded (then a failure is more likely an expired address). */
+  const playingMode = useRef<StreamMode | null>(null);
+  const loadedOnce = useRef(false);
+  /** A fresh address was already fetched for an expired one: once is enough, or a flapping network loops forever. */
+  const refreshed = useRef(false);
+  /** Going straight to the direct stream: the owner forbids embedding, the original audio was asked for, or
+   *  nothing could play and the poster waits for a retry. */
+  const [direct, setDirect] = useState(() => wasBlocked(ep.videoId) || wantsOriginalAudio(ep.videoId));
+  /** The fallback running now; a second request (the embed can report the same failure twice) waits for it. */
+  const resolving = useRef(false);
+  const mine = () => useStore.getState().current?.id === ep.id;
+  /** Nothing plays the video: hand over to the audio when there is one, else say what to do. */
+  const giveUp = (why: string, detail: string) => {
+    // The audio takes over with the "play was pressed" state left as it is: it reads it, and starts by itself.
+    if (onUnplayable) { onUnplayable(); return; }
+    // No audio to fall back on: the poster comes back (its play button tries again) under a clear error.
+    if (mine()) { waiting(false); useStore.getState().set({ playing: false }); }
+    setNative(null); setDirect(true);
+    setError(t("{reason}。{detail}", { reason: why, detail }));
+  };
+  const fallback = async (why: string, noRoute = false) => {
+    if (resolving.current) return;
+    resolving.current = true;
+    viaApp.current ||= noRoute;
+    refreshed.current = false;
+    setError(null);
     setFallingBack(t("{reason}，正在改用直连播放…", { reason: why }));
     const off = listen<{ videoId: string; stage: string; progress: number }>("yt-stream", ({ payload: p }) => {
       if (p.videoId !== ep.videoId) return;
@@ -225,43 +271,49 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
         ? t("首次使用，正在下载 YouTube 播放组件 {pct}%", { pct: Math.round(p.progress * 100) })
         : t("{reason}，正在获取视频地址…", { reason: why }));
     });
-    // HLS where the WebView plays it (macOS); elsewhere HLS through the app's loopback proxy (hls.js), for HD.
-    const nativeHls = document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
+    // HLS where the WebView plays it (macOS); elsewhere, or when the WebView has no route to YouTube, HLS through
+    // the app's loopback proxy (hls.js where needed), for HD.
+    const mode: StreamMode = viaApp.current || !nativeHls() ? "proxy-hls" : "native-hls";
     // Play was pressed (or it was playing): the direct stream picks up where the embed left off.
     const wanted = () => { const s = useStore.getState(); return s.current?.id === ep.id && (!!s.loadingSince || s.playWhenReady === ep.id || s.playing); };
     try {
-      const stream = await api.youtubeStream(ep.videoId!, nativeHls ? "native-hls" : "proxy-hls");
+      const stream = await withTimeout(api.youtubeStream(ep.videoId!, mode), STREAM_WAIT);
+      plan.current = mode === "native-hls" ? ["proxy-hls", "mp4"] : mode === "proxy-hls" ? ["mp4"] : [];
+      playingMode.current = mode; loadedOnce.current = false;
       if (wanted()) useStore.getState().set({ playWhenReady: ep.id });
       setNative(stream); setError(null);
     }
     catch (e) {
-      if (useStore.getState().current?.id === ep.id) waiting(false);
       const msg = typeof e === "string" ? e : String((e as any)?.message ?? e);
       // YouTube wants a signed-in browser: ask once, here, instead of failing or silently falling back to audio.
-      if (isBotCheck(msg)) { setBotCheck(why); setBotWhy(browserLocked(msg) ? "locked" : signInExpired(msg) ? "expired" : "ask"); return; }
-      if (needsBrowserAccess(msg)) { setDenied(why); return; }
-      if (onUnplayable) onUnplayable(); else setError(t("{reason}。{detail}", { reason: why, detail: tr(msg) }));
+      if (isBotCheck(msg)) { if (mine()) waiting(false); setBotCheck(why); setBotWhy(browserLocked(msg) ? "locked" : signInExpired(msg) ? "expired" : "ask"); return; }
+      if (needsBrowserAccess(msg)) { if (mine()) waiting(false); setDenied(why); return; }
+      giveUp(why, tr(msg));
     }
-    finally { setFallingBack(null); void off.then((f) => f()); }
+    finally { resolving.current = false; setFallingBack(null); void off.then((f) => f()); }
   };
-  // A saved address can go stale (network changed, YouTube expired it early): ask for a new one once, then try the MP4.
-  const retried = useRef(false);
+  const retry = () => { setError(null); void fallback(t("重新获取视频")); };
+  // The stream on screen failed or never started (expired address, no route from the WebView, HLS unsupported):
+  // everything through the app's proxy, then the MP4; then the audio, or a clear error.
   const fetching = useRef(false);
-  const mine = () => useStore.getState().current?.id === ep.id;
   const failed = () => {
-    // hls.js and the <video> element can both report the same failure.
+    // hls.js, the <video> element and the stall check can all report the same failure.
     if (fetching.current) return;
-    const mode = native?.kind === "hls" && !retried.current ? (document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "" ? "native-hls" : "proxy-hls") : "mp4";
-    if (retried.current && native?.kind === "mp4") { if (mine()) waiting(false); return setError(t("视频地址失效，请稍后再试")); }
-    retried.current = true;
+    // It played and then failed: the address has probably expired, so the same kind gets a fresh one first.
+    if (loadedOnce.current && playingMode.current && !refreshed.current) { plan.current.unshift(playingMode.current); refreshed.current = true; }
+    loadedOnce.current = false;
+    const mode = plan.current.shift();
+    if (!mode) return giveUp(t("视频无法播放"), t("可能是网络或代理不通，检查代理设置后重试，或在 YouTube 打开"));
     fetching.current = true;
     // It was playing or about to: the new address carries on by itself.
     const s = useStore.getState();
-    const resume = mine() && (s.playing || !!s.loadingSince);
-    void api.youtubeStream(ep.videoId!, mode, true)
-      .then((stream) => { if (resume) useStore.getState().set({ playWhenReady: ep.id }); setNative(stream); })
-      .catch((e) => { if (mine()) waiting(false); setError(tr(String(e?.message ?? e))); })
-      .finally(() => { fetching.current = false; });
+    const resume = mine() && (s.playing || !!s.loadingSince || s.playWhenReady === ep.id);
+    if (mine()) waiting(true);
+    setFallingBack(t("视频没能播放，正在换一种方式…"));
+    void withTimeout(api.youtubeStream(ep.videoId!, mode, true), STREAM_WAIT).then(
+      (stream) => { fetching.current = false; setFallingBack(null); playingMode.current = mode; if (resume) useStore.getState().set({ playWhenReady: ep.id }); setNative(stream); },
+      // This kind can't be had either: on to the next one (or the audio, or the error).
+      () => { fetching.current = false; setFallingBack(null); failed(); });
   };
   const [botCheck, setBotCheck] = useState<string | null>(null);
   /** Why the check is being shown: never signed in, the browser's sign-in is unreadable, or SubCast's expired. */
@@ -276,14 +328,13 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     await useStore.getState().saveSettings({ ytCookiesBrowser: browser });
     void fallback(why);
   };
-  useEffect(() => { setNative(null); setError(null); setDenied(null); retried.current = false; }, [ep.id]);
+  useEffect(() => { setNative(null); setError(null); setDenied(null); plan.current = []; }, [ep.id]);
   // Known to refuse embedding: skip the embedded player and fetch the direct stream right away.
   // A saved video plays from disk: no YouTube player to load, and it works offline.
   const [localBroken, setLocalBroken] = useState(false);
   useEffect(() => setLocalBroken(false), [ep.id]);
   const saved = useOffline((s) => s.saved[ep.id]?.path);
   const localVideo = !localBroken && saved && /\.(mp4|m4v|mov|webm)$/i.test(saved) ? saved : undefined;
-  const [direct, setDirect] = useState(() => wasBlocked(ep.videoId) || wantsOriginalAudio(ep.videoId));
   useEffect(() => { if (direct && !localVideo) void fallback(wasBlocked(ep.videoId) ? t("作者限制了嵌入播放") : t("使用原声")); }, []);
   useEffect(() => {
     const on = (e: Event) => {
@@ -301,6 +352,8 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
   };
   const openBtn = <button className="link-btn video-open" onClick={watchOnYouTube}><ExternalLink size={13} /> {t("在 YouTube 打开")}</button>;
+  // Waiting on the direct stream need not be the only way out when the episode has its audio.
+  const audioBtn = onUnplayable ? <button className="link-btn video-open" onClick={onUnplayable}>{t("改听音频")}</button> : null;
   const fullscreen = () => toggleTheater();
   const theater = useStore((s) => s.theater);
   // Leaving the episode leaves full screen too.
@@ -319,10 +372,10 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   return (
     <div className={`video ${theater ? "theater" : ""} ${theater && idle ? "idle" : ""}`} ref={box}>
       {localVideo ? <NativeVideo ep={ep} src={convertFileSrc(localVideo)} kind="mp4" onFullscreen={fullscreen} onFail={() => setLocalBroken(true)} />
-        : native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={failed} />
-        : direct ? <PlayHint ep={ep} show onClick={() => { useStore.getState().load(ep); playSoon(ep.id); }} />
-        : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={fallback} onError={setError} />}
-      {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {openBtn}</div>}
+        : native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={failed} onLoaded={() => { loadedOnce.current = true; }} />
+        : direct ? <PlayHint ep={ep} show onClick={() => { useStore.getState().load(ep); playSoon(ep.id); if (error) retry(); }} />
+        : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={(why, noRoute) => void fallback(why, noRoute)} onError={setError} />}
+      {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {audioBtn} {openBtn}</div>}
       {botCheck && (
         <div className="video-error bot-check">
           <p>{t("YouTube 要求验证「不是机器人」才能播放这个视频。")}</p>
@@ -349,7 +402,16 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
           <BrowserAccess browser={browser} onRetry={() => { const why = denied; setDenied(null); void fallback(why); }} />
         </div>
       )}
-      {error && <div className="video-error">{error} {openBtn}</div>}
+      {error && (
+        <div className="video-error">
+          <p>{error}</p>
+          <div className="row-actions">
+            <button className="btn primary sm" onClick={retry}>{t("重试")}</button>
+            <button className="link-btn video-open" onClick={() => useStore.getState().openSettings("general")}>{t("代理设置")}</button>
+            {openBtn}
+          </div>
+        </div>
+      )}
       {overlay}
       {!theater && <button className="video-fs" title={t("全屏（F）")} aria-label={t("全屏")} onClick={(e) => { e.stopPropagation(); fullscreen(); }}><Maximize2 size={16} /></button>}
       {theater && (
@@ -382,7 +444,7 @@ function PlayHint({ ep, show, onClick }: { ep: Episode; show: boolean; onClick: 
   );
 }
 
-function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onFullscreen: () => void; onBlocked: (why: string) => void; onError: (m: string) => void }) {
+function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onFullscreen: () => void; onBlocked: (why: string, noRoute?: boolean) => void; onError: (m: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const rate = useStore((s) => s.settings.playbackRate);
   const playerRef = useRef<any>(null);
@@ -390,7 +452,25 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
 
   useEffect(() => {
     let player: any, timer: number | undefined, disposed = false, handle: any, offVolume: (() => void) | undefined;
+    /** Set while a play request waits for the player to start; it gives up and falls back if it never does. */
+    let startCheck: number | undefined;
+    /** The video has started at least once: before that its clock says 0, which is not where the listener is. */
+    let started = false;
     const mine = () => useStore.getState().current?.id === ep.id;
+    const requestPlay = () => {
+      waiting(true);
+      player.playVideo();
+      window.clearTimeout(startCheck);
+      // Some setups load the embed but never play it (no route to YouTube's video servers, a blocked iframe):
+      // a play button that only spins is worse than the direct stream.
+      startCheck = window.setTimeout(() => {
+        const st = player.getPlayerState?.();
+        if (disposed || st === 1 || st === 2 || !mine() || !useStore.getState().loadingSince) return;
+        // It loaded but can't play: YouTube's video servers are out of the WebView's reach, so the direct stream
+        // should come through the app too.
+        onBlocked(t("YouTube 播放器没有响应"), true);
+      }, EMBED_START_WAIT);
+    };
     loadYouTube().then((YT) => {
       if (disposed || !host.current) return;
       const mount = document.createElement("div");
@@ -408,9 +488,19 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             player.setPlaybackRate?.(useStore.getState().settings.playbackRate);
             handle = {
               episodeId: ep.id,
-              seek: (t: number) => { player.seekTo(t, true); player.playVideo(); },
-              toggle: () => (player.getPlayerState() === 1 ? player.pauseVideo() : (waiting(true), player.playVideo())),
-              play: () => { waiting(true); player.playVideo(); },
+              seek: (t: number) => { player.seekTo(t, true); if (player.getPlayerState?.() !== 1) requestPlay(); },
+              // Buffering or still starting counts as playing: pressing the button then must pause, not ask
+              // to play again (which made pause look dead while the video loaded or an ad ran).
+              toggle: () => {
+                const st = player.getPlayerState?.();
+                if (st === 1 || st === 3 || useStore.getState().loadingSince) {
+                  window.clearTimeout(startCheck);
+                  player.pauseVideo();
+                  waiting(false);
+                  useStore.getState().set({ playing: false });
+                } else requestPlay();
+              },
+              play: () => requestPlay(),
               setRate: (r: number) => player.setPlaybackRate(r),
               // YouTube's embedded player goes no faster than 2×.
               maxRate: 2,
@@ -421,11 +511,13 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
             offVolume = useVolume.subscribe(applyVolume);
             timer = window.setInterval(() => {
               const t = player.getCurrentTime?.();
-              if (typeof t === "number") track(ep, t, player.getDuration?.());
+              if (typeof t === "number" && started) track(ep, t, player.getDuration?.());
             }, 250);
           },
           onStateChange: (e: any) => {
             setState(e.data);
+            if (e.data === 1 || e.data === 2 || e.data === 3) started = true;
+            if (e.data === 1 || e.data === 2) window.clearTimeout(startCheck);
             // Another episode is current (this page was opened while it plays): leave its state alone.
             if (!mine()) return;
             // 3 = buffering; -1/5 after a play request = still starting. 1 = playing.
@@ -448,12 +540,13 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
         },
       });
     // The embedded player can't load (often no route to youtube.com): the direct stream may still work.
-    }).catch((e) => { if (!disposed) onBlocked(tr(String(e.message ?? e))); });
+    }).catch((e) => { if (!disposed) onBlocked(tr(String(e.message ?? e)), true); });
     return () => {
       disposed = true;
+      window.clearTimeout(startCheck);
       offVolume?.();
       window.clearInterval(timer);
-      try { void api.setProgress(ep.id, player?.getCurrentTime?.() ?? 0); player?.destroy?.(); } catch { /* already gone */ }
+      try { if (started) void api.setProgress(ep.id, player?.getCurrentTime?.() ?? 0); player?.destroy?.(); } catch { /* already gone */ }
       if (handle) withdrawPlayer(handle);
     };
   }, [ep.id]);
@@ -471,7 +564,7 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
 }
 
 /** `onFail`: the stream can't be played (stale address, or HLS unsupported here); the caller gets another. */
-function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src: string; kind: "hls" | "mp4"; onFullscreen: () => void; onFail?: () => void }) {
+function NativeVideo({ ep, src, kind, onFullscreen, onFail, onLoaded }: { ep: Episode; src: string; kind: "hls" | "mp4"; onFullscreen: () => void; onFail?: () => void; onLoaded?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const rate = useStore((s) => s.settings.playbackRate);
   const [started, setStarted] = useState(false);
@@ -498,8 +591,11 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
     };
     offerPlayer(handle);
     const offVolume = followVolume(el);
+    // A stream the WebView can't reach doesn't always fail: it can just never load (length stays "--:--").
+    const stall = window.setTimeout(() => { if (!dead && el.readyState === 0) onFail?.(); }, STALL_WAIT);
     return () => {
       dead = true;
+      window.clearTimeout(stall);
       offVolume();
       hls?.destroy?.();
       if (el.currentTime > 0) void api.setProgress(ep.id, el.currentTime);
@@ -519,6 +615,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
           const at = s.current?.id === ep.id ? s.time : ep.progress;
           if (at > 5 && at < el.duration - 10) el.currentTime = at;
           track(ep, el.currentTime, el.duration);
+          onLoaded?.();
         }}
         onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
         onPlay={(e) => { setStarted(true); useStore.getState().set({ playing: true }); if (e.currentTarget.readyState < 3) waiting(true); }}
