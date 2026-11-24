@@ -17,6 +17,9 @@ export interface CliStatus {
   inPath: boolean;
 }
 
+/** An AI agent on this computer and whether it can call SubCast (its MCP server). */
+export interface McpTarget { id: string; name: string; icon: string; connected: boolean; outdated: boolean; config: string }
+
 export interface ShowHit { episode: Episode; field: "title" | "notes" | "transcript"; snippet: string; time?: number | null }
 
 export interface Show {
@@ -218,6 +221,9 @@ export const api = {
   dbDataVersion: () => invoke<number>("db_data_version"),
   cliStatus: () => invoke<CliStatus>("cli_status"),
   cliInstall: () => invoke<CliStatus>("cli_install"),
+  mcpTargets: () => invoke<McpTarget[]>("mcp_targets"),
+  mcpConnect: (id: string) => invoke<McpTarget>("mcp_connect", { id }),
+  mcpDisconnect: (id: string) => invoke<McpTarget>("mcp_disconnect", { id }),
 };
 
 let llmCounter = 0;

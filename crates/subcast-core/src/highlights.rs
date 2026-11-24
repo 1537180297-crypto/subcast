@@ -181,10 +181,17 @@ pub struct WindowRange {
 }
 
 pub fn build_highlight_windows(segments: &[Segment], zh: Option<&[Option<String>]>, is_local: bool) -> Vec<WindowRange> {
+    if is_local { windows_of(segments, zh, 20.0 * 60.0, 90.0, 12_000) } else { windows_of(segments, zh, 30.0 * 60.0, 120.0, 32_000) }
+}
+
+/// Local agents (Claude Code, Codex, Antigravity…) read long contexts but start slowly per request: fewer, larger
+/// windows (a 3-hour episode went from 23 requests to about 4).
+pub fn build_agent_windows(segments: &[Segment], zh: Option<&[Option<String>]>) -> Vec<WindowRange> {
+    windows_of(segments, zh, 60.0 * 60.0, 120.0, 48_000)
+}
+
+fn windows_of(segments: &[Segment], zh: Option<&[Option<String>]>, window_sec: f64, overlap_sec: f64, max_chars: usize) -> Vec<WindowRange> {
     if segments.is_empty() { return vec![]; }
-    let window_sec = if is_local { 20.0 * 60.0 } else { 30.0 * 60.0 };
-    let overlap_sec = if is_local { 90.0 } else { 120.0 };
-    let max_chars = if is_local { 12_000usize } else { 32_000usize };
     let fmt = |i: usize, inc_zh: bool| {
         let s = &segments[i];
         let tr = if inc_zh { zh.and_then(|z| z.get(i)).and_then(|x| x.as_deref()).map(str::trim).filter(|t| !t.is_empty()) } else { None };
@@ -343,7 +350,7 @@ pub async fn extract_highlights(
     let total_sec = t.segments.last().map(|s| s.end).or(ep.duration).unwrap_or(0.0);
     let profile = duration_profile(total_sec);
     let is_local = resolved.group == "local" || resolved.provider.protocol == "cli";
-    let windows = build_highlight_windows(&t.segments, zh.as_deref(), is_local);
+    let windows = if resolved.provider.protocol == "cli" { build_agent_windows(&t.segments, zh.as_deref()) } else { build_highlight_windows(&t.segments, zh.as_deref(), is_local) };
     let system = build_highlight_system(&ep, profile, intent, lang);
 
     let mut candidates = Vec::new();

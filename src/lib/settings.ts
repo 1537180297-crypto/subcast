@@ -60,8 +60,10 @@ export interface Settings {
   skipBack?: number;
   skipForward?: number;
   autoNext?: boolean;
-  /** Show highlights and clip-making (unset: shown once a clip has been exported). */
+  /** Show highlights and clip-making (unset: shown). */
   clipTools?: boolean;
+  /** The one-time offer to connect AI agents to SubCast was answered (or done from settings). */
+  agentsOffered?: boolean;
   /** Skip what only the playing audio has when the subtitles were made from another cut (ads, mostly). */
   skipAds?: boolean;
   shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;

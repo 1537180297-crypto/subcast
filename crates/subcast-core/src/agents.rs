@@ -110,6 +110,15 @@ async fn output(path: &Path, args: &[&str], secs: u64) -> Option<String> {
     Some(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
 }
 
+/// Runs an agent's own command line (`claude mcp add …`) with the PATH and proxy it needs: success and its output.
+pub async fn run_cli(path: &Path, args: &[&str], secs: u64) -> Result<(bool, String)> {
+    let mut c = command(path);
+    c.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(h) = dirs::home_dir() { c.current_dir(h); }
+    let out = tokio::time::timeout(Duration::from_secs(secs), c.output()).await.map_err(|_| anyhow!("{} 没有响应", path.display()))??;
+    Ok((out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))
+}
+
 /// An empty folder agents run in, so there is nothing for them to read or change.
 fn work_dir() -> Result<PathBuf> {
     let d = std::env::temp_dir().join("subcast-agent");

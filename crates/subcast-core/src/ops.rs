@@ -1842,10 +1842,13 @@ pub async fn clip_video_full(
         subs_below,
     );
 
-    let show_name = show
-        .as_ref()
-        .map(|s| s.title.clone())
-        .unwrap_or_default();
+    // Standalone episodes sit in the internal "single" show, whose stored name (单独打开) is not a show name;
+    // a previewed show has no row but its name comes with the episode.
+    let show_name = match show.as_ref() {
+        Some(s) if s.kind == "single" => String::new(),
+        Some(s) => s.title.clone(),
+        None => ep.show_title.clone().unwrap_or_default(),
+    };
     let clip_title = opts
         .hook_title
         .as_deref()
@@ -1854,8 +1857,8 @@ pub async fn clip_video_full(
         .to_string();
 
     let (transcript_segs, zh) = {
-        let conn = ctx.db.lock().unwrap();
-        let tr = db::get_transcript(&conn, &ep.id)?
+        // The lock is let go first: load_episode_zh takes it again (holding it here hung every CLI clip).
+        let tr = db::get_transcript(&ctx.db.lock().unwrap(), &ep.id)?
             .map(|t| t.segments)
             .unwrap_or_default();
         (tr, crate::ai::load_episode_zh(ctx, &ep.id))
