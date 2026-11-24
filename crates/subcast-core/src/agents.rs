@@ -92,6 +92,9 @@ fn command(path: &Path) -> Command {
     let is_script = cfg!(windows) && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
     let mut c = if is_script { let mut c = Command::new("cmd"); c.arg("/C").arg(path); c } else { Command::new(path) };
     c.env("PATH", child_path()).kill_on_drop(true);
+    // agy updates itself when it starts: the first start after a release downloads ~230 MB before answering, which
+    // made SubCast's first question hang. The terminal agy keeps updating; the copy SubCast starts doesn't.
+    if path.file_stem().is_some_and(|n| n.eq_ignore_ascii_case("agy")) { c.env("AGY_CLI_DISABLE_AUTO_UPDATE", "1"); }
     #[cfg(windows)]
     { c.creation_flags(0x08000000); }
     // CLIs only honour HTTPS_PROXY; apps opened from the Dock don't inherit it from the shell.
@@ -240,7 +243,7 @@ pub struct Request<'a> {
 pub async fn complete(kind: Kind, path: &Path, mut req: Request<'_>, cancel: Arc<AtomicBool>, on_delta: impl Fn(&str) + Send) -> Result<String> {
     let reminded;
     if req.json { reminded = format!("{}\n\n(Answer with the JSON only, no Markdown fences, no other text.)", req.user); req.user = &reminded; }
-    let conn = POOL.take(kind, path, req.system, req.model).await?;
+    let conn = POOL.take(kind, path, req.system, req.model, &cancel).await?;
     let result = conn.ask(&req, cancel, &on_delta).await;
     POOL.give_back(conn, result.is_ok()).await;
     match result {
@@ -276,6 +279,8 @@ pub fn display(kind: Kind) -> &'static str {
 // ---- the pool of warm processes ----------------------------------------------------------------------------
 
 const IDLE: Duration = Duration::from_secs(240);
+/// How long a request waits for a free process before saying the agent is busy.
+const BUSY_WAIT: Duration = Duration::from_secs(90);
 /// Claude Code keeps the conversation in one process; after this many requests it is restarted so old turns
 /// don't pile up in every new request.
 const CLAUDE_TURNS: u32 = 6;
@@ -298,10 +303,14 @@ static POOL: once_cell::sync::Lazy<Pool> = once_cell::sync::Lazy::new(|| {
 });
 
 impl Pool {
-    async fn take(&self, kind: Kind, path: &Path, system: &str, model: Option<&str>) -> Result<Pooled> {
+    async fn take(&self, kind: Kind, path: &Path, system: &str, model: Option<&str>, cancel: &AtomicBool) -> Result<Pooled> {
         // Claude Code's system prompt is fixed per process; the others take it per request.
         let key = if kind == Kind::Claude { format!("{}|{}", model.unwrap_or(""), crate::model::short_hash(system, 16)) } else { String::new() };
+        let waiting = Instant::now();
         loop {
+            // Every process of this kind is busy (a long translation, say): wait a while, never forever.
+            if cancel.load(Ordering::Relaxed) { return Err(anyhow!("已取消")); }
+            if waiting.elapsed() > BUSY_WAIT { return Err(anyhow!("{} 正忙（可能在翻译整集），请稍后再试", display(kind))); }
             {
                 let mut idle = self.idle.lock().await;
                 if let Some(i) = idle.iter().position(|p| p.kind == kind && p.key == key) {
@@ -363,7 +372,7 @@ impl Conn {
 /// Warms an agent up (opening the Q&A panel), so the first question doesn't wait for it to start.
 pub async fn warm(kind: Kind, path: &Path) {
     if kind == Kind::Claude { return; } // its process is bound to a system prompt; nothing to share yet
-    if let Ok(p) = POOL.take(kind, path, "", None).await { POOL.give_back(p, true).await; }
+    if let Ok(p) = POOL.take(kind, path, "", None, &AtomicBool::new(false)).await { POOL.give_back(p, true).await; }
 }
 
 // ---- line-oriented JSON over a child's stdio -------------------------------------------------------------------
@@ -574,7 +583,9 @@ impl Codex {
 
 // ---- Agent Client Protocol (Gemini CLI, Qwen Code, Kimi Code, OpenCode) -------------------------------------
 
-struct Acp { rpc: Rpc }
+/// `spare`: a session already asked for while the process was idle, so the next question skips the ~2–3 s
+/// session/new (each request still gets its own session, so answers never see each other's text).
+struct Acp { rpc: Rpc, spare: std::sync::Mutex<Option<oneshot::Receiver<Value>>> }
 
 fn acp_args(kind: Kind) -> &'static [&'static str] {
     match kind {
@@ -596,7 +607,31 @@ impl Acp {
         // No file system and no terminal for the agent.
         rpc.request("initialize", json!({ "protocolVersion": 1, "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
             "clientInfo": { "name": "subcast", "version": env!("CARGO_PKG_VERSION") } }), 60).await?;
-        Ok(Acp { rpc })
+        let acp = Acp { rpc, spare: std::sync::Mutex::new(None) };
+        acp.prepare_session().await;
+        Ok(acp)
+    }
+
+    /// Asks for the next session without waiting for it.
+    async fn prepare_session(&self) {
+        let Ok(dir) = work_dir() else { return };
+        let id = self.rpc.next.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.rpc.waiting.lock().await.insert(id, tx);
+        if self.rpc.send(&json!({ "jsonrpc": "2.0", "id": id, "method": "session/new", "params": { "cwd": dir.to_string_lossy(), "mcpServers": [] } })).await.is_ok() {
+            *self.spare.lock().unwrap() = Some(rx);
+        }
+    }
+
+    /// The prepared session if it came through, else a new one.
+    async fn session(&self) -> Result<String> {
+        let spare = self.spare.lock().unwrap().take();
+        if let Some(rx) = spare {
+            if let Ok(Ok(v)) = tokio::time::timeout(Duration::from_secs(30), rx).await {
+                if let Some(id) = v["result"]["sessionId"].as_str() { return Ok(id.to_string()); }
+            }
+        }
+        self.new_session().await
     }
 
     async fn new_session(&self) -> Result<String> {
@@ -606,7 +641,7 @@ impl Acp {
 
     async fn ask(&self, req: &Request<'_>, cancel: Arc<AtomicBool>, on_delta: &(impl Fn(&str) + Send)) -> Result<String> {
         // A session per request (cheap in a running agent), so one answer never sees another's text.
-        let session = self.new_session().await?;
+        let session = self.session().await?;
         if let Some(m) = req.model.filter(|m| !m.is_empty()) {
             // Newer agents take the model as a config option; older ones have set_model.
             if self.rpc.request("session/set_config_option", json!({ "sessionId": session, "configId": "model", "value": m }), 15).await.is_err() {
@@ -626,6 +661,7 @@ impl Acp {
                 if let Some(e) = done.get("error") { return Err(anyhow!("{}", e["message"].as_str().unwrap_or("本机 AI 出错"))); }
                 // Late chunks can still be queued: take what is there.
                 while let Ok(v) = self.rpc.event(0).await { self.on_update(&v, &session, &mut text, on_delta).await; }
+                self.prepare_session().await;
                 return Ok(text);
             }
             if cancel.load(Ordering::Relaxed) {
@@ -672,6 +708,7 @@ mod live {
             println!("found {:?} {} login={} at {}", f.kind, f.version, f.login, f.path);
             if !want.split(',').any(|w| w == f.kind.id()) { continue; }
             for round in ["cold", "warm"] {
+                if round == "warm" { tokio::time::sleep(Duration::from_secs(5)).await; } // as between two questions
                 let t0 = Instant::now();
                 let r = complete(f.kind, Path::new(&f.path), Request { system: "Answer with JSON only.", user: r#"Reply exactly {"ok":true}"#, model: None, json: true }, Arc::new(AtomicBool::new(false)), |_| {}).await;
                 println!("  {round}: {:.1}s -> {:?}", t0.elapsed().as_secs_f64(), r.map(|s| s.chars().take(80).collect::<String>()));

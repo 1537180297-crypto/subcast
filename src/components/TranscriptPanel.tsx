@@ -17,6 +17,7 @@ import { api, errorText, rawErrorText, type Episode, type ModelInfo, type Segmen
 import { clock, sizeMb } from "../lib/format";
 import { generateTranscript, llmReady, loadTranslation, needsTranslation, stopTranslation, switchYoutubeTrack, translateEpisode, useJobs } from "../lib/jobs";
 import { providerFor, useStore } from "../store";
+import { useClipTools } from "../lib/clipTools";
 import { ASR_SERVICES, CLOUD_ASR_MAIN, subtitleModeFor, subtitleModePatch, type Settings } from "../lib/settings";
 import { lang, t, tk, tr, useLang } from "../lib/i18n";
 import { looksEnglish } from "../lib/dict";
@@ -209,7 +210,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [hit, setHit] = useState(0);
-  const [showHighlights, setShowHighlights] = useState(false);
+  const clipTools = useClipTools();
+  const [showHighlightsRaw, setShowHighlights] = useState(false);
+  const showHighlights = showHighlightsRaw && clipTools;
   const hlBundle = useHighlights((s) => s.bundles[ep.id]);
   const hlLoading = useHighlights((s) => !!s.loading[ep.id]);
   const [startError, setStartError] = useState<string | null>(null);
@@ -310,13 +313,13 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     const starts = new Map<number, HighlightClip>();
     const inside = new Set<number>();
     const ends = new Set<number>();
-    for (const c of hlBundle?.clips ?? []) {
+    for (const c of (clipTools && hlBundle?.clips) || []) {
       starts.set(c.startIdx, c);
       ends.add(c.endIdx);
       for (let i = c.startIdx; i <= c.endIdx; i++) inside.add(i);
     }
     return { starts, inside, ends };
-  }, [hlBundle]);
+  }, [hlBundle, clipTools]);
 
   const matches = useMemo(() => {
     if (!query) return null;
@@ -585,7 +588,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       </div>
     )}
     {transcript.source.startsWith("youtube") && <TrackPicker ep={ep} language={transcript.language} auto={transcript.source === "youtube-auto"} />}
-    {total > 0 && (
+    {total > 0 && clipTools && (
       <button
         type="button"
         className={`hl-toggle ${showHighlights ? "on" : ""} ${hlBundle?.clips.length ? "has" : ""}`}

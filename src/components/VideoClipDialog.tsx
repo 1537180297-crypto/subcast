@@ -164,7 +164,8 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
     return false;
   }, [segments, clip.startIdx, clip.endIdx]);
   const prefs = useMemo(readPrefs, []);
-  const showDisplay = useMemo(() => (ep.showTitle ? showName(ep.showTitle) : ""), [ep.showTitle]);
+  // Episodes opened on their own belong to the internal "single" show, whose stored name is not a show name.
+  const showDisplay = useMemo(() => (ep.showTitle && ep.showId !== "single" ? showName(ep.showTitle) : ""), [ep.showTitle, ep.showId]);
 
   const [sideTab, setSideTab] = useState<SideTab>("clip");
   const [pvView, setPvView] = useState<"video" | "cover">("video");
