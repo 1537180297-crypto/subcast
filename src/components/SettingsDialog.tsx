@@ -14,6 +14,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type CliStatus, type CloudAsr, type ModelInfo, type Provider } from "../lib/api";
 import { useStore } from "../store";
 import { useClipTools } from "../lib/clipTools";
+import { AgentConnectSettings } from "./AgentConnect";
 import { bytes, clearAudioCache, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
 import { YouTubeAccount } from "./YouTubeAccount";
@@ -132,10 +133,13 @@ export function SettingsView() {
   const { settings, saveSettings, set, notify, settingsSection, settingsNonce } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection, settingsNonce: s.settingsNonce })));
   type Section = "subtitles" | "ai" | "tts" | "general" | "learn" | "about";
   // Old section names (links from elsewhere in the app) land in their new home.
-  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "tts", shortcuts: "general", storage: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai", learn: "learn" };
+  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "tts", shortcuts: "general", storage: "general", agents: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai", learn: "learn" };
   const [section, setSection] = useState<Section>(LEGACY[settingsSection ?? "subtitles"] ?? "subtitles");
   // Asked for a section while the page is already open (a "去设置" link): go there.
-  useEffect(() => { if (settingsSection) setSection(LEGACY[settingsSection] ?? "subtitles"); }, [settingsNonce]);
+  useEffect(() => {
+    if (settingsSection) setSection(LEGACY[settingsSection] ?? "subtitles");
+    if (settingsSection === "agents") window.setTimeout(() => document.getElementById("agent-connect")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+  }, [settingsNonce]);
   useEffect(() => () => stopSpeaking(), []);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
@@ -261,6 +265,10 @@ export function SettingsView() {
                     {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => <option key={b} value={b}>{t("借用 {name} 的 YouTube 登录", { name: b[0].toUpperCase() + b.slice(1) })}</option>)}
                   </select>
                 </label>
+              </section>
+              <section className="setup-block" id="agent-connect">
+                <p className="setup-title">{t("让 AI 助手调用 SubCast")}</p>
+                <AgentConnectSettings />
               </section>
               <section className="setup-block">
                 <p className="setup-title">{t("共享")}</p>

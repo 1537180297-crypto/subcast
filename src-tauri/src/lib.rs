@@ -886,8 +886,52 @@ fn cli_status() -> CliStatus {
     inspect_cli_status()
 }
 
+fn bundled_cli() -> Res<std::path::PathBuf> {
+    bundled_cli_path().ok_or_else(|| "当前安装包里没有附带命令行程序（subcast-cli）".to_string())
+}
+
+#[tauri::command]
+async fn mcp_targets() -> Res<Vec<subcast_core::mcp_targets::McpTarget>> {
+    let cli = bundled_cli()?;
+    Ok(subcast_core::mcp_targets::list(&cli))
+}
+
+#[tauri::command]
+async fn mcp_connect(id: String) -> Res<subcast_core::mcp_targets::McpTarget> {
+    let cli = bundled_cli()?;
+    subcast_core::mcp_targets::connect(&id, &cli).await.map_err(e)
+}
+
+#[tauri::command]
+async fn mcp_disconnect(id: String) -> Res<subcast_core::mcp_targets::McpTarget> {
+    let cli = bundled_cli()?;
+    subcast_core::mcp_targets::disconnect(&id, &cli).await.map_err(e)
+}
+
 #[tauri::command]
 fn cli_install() -> Res<CliStatus> {
+    install_cli_link()
+}
+
+/// Puts the `subcast` command on the PATH by itself, so it works right after installing the app: once on the first
+/// launch (a removed link stays removed after that), and on every launch a link that points at an older copy of the
+/// app is pointed at this one. Never replaces a file that isn't our link.
+#[cfg(not(debug_assertions))]
+fn auto_install_cli(data: &std::path::Path) {
+    let status = inspect_cli_status();
+    if !status.bundled { return; }
+    let marker = data.join("cli-auto-installed");
+    let first = !marker.exists();
+    let ours_outdated = status.installed && status.needs_update && status.link_path.as_deref().is_some_and(|l| std::fs::symlink_metadata(l).is_ok_and(|m| m.file_type().is_symlink()));
+    if (first && !status.installed) || ours_outdated {
+        let _ = install_cli_link();
+    }
+    if first { let _ = std::fs::write(&marker, b"1"); }
+    // Agents connected to SubCast keep working after the app moves: their entries follow it.
+    if let Some(cli) = bundled_cli_path() { tauri::async_runtime::block_on(subcast_core::mcp_targets::repair(&cli)); }
+}
+
+fn install_cli_link() -> Res<CliStatus> {
     let bundled = bundled_cli_path().ok_or_else(|| "当前安装包里没有附带命令行程序（subcast-cli）".to_string())?;
     #[cfg(unix)]
     {
@@ -975,6 +1019,11 @@ pub fn run() {
             #[cfg(not(debug_assertions))]
             let ui_data = data.clone();
             app.manage(AppState { ctx });
+            #[cfg(not(debug_assertions))]
+            {
+                let data = data.clone();
+                std::thread::spawn(move || auto_install_cli(&data));
+            }
             #[cfg(debug_assertions)]
             let url = tauri::WebviewUrl::App("index.html".into());
             #[cfg(not(debug_assertions))]
@@ -1023,7 +1072,7 @@ pub fn run() {
             shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
             download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete,
             video_clip_env, video_clip_warm, video_clip_prepare, video_clip_render, reveal_file,
-            db_data_version, cli_status, cli_install
+            db_data_version, cli_status, cli_install, mcp_targets, mcp_connect, mcp_disconnect
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

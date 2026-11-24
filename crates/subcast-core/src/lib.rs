@@ -15,6 +15,7 @@ pub mod highlights;
 pub mod hlsproxy;
 pub mod import;
 pub mod llm;
+pub mod mcp_targets;
 pub mod local_tts;
 pub mod model;
 pub mod net;

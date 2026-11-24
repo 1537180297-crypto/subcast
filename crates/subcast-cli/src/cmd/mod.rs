@@ -5,6 +5,7 @@ pub mod clip;
 pub mod ep;
 pub mod learn;
 pub mod mcp;
+pub mod nl;
 pub mod ops;
 pub mod pipe;
 pub mod sub;
@@ -88,6 +89,8 @@ pub enum Commands {
     Storage(ops::StorageArgs),
     /// Check dependencies, keys, models, and database health
     Doctor(ops::DoctorArgs),
+    /// Say what you want in plain words ("Lex Fridman 最新一期总结下"); no subscription needed
+    Do(nl::DoArgs),
     /// Run a composable multi-stage pipeline on a URL, file, or episode
     Pipe(pipe::PipeArgs),
     /// Print shell completion scripts
@@ -103,6 +106,7 @@ pub async fn dispatch(
     out: Out,
     no_input: bool,
 ) -> Result<(), CliError> {
+    NO_INPUT.store(no_input, std::sync::atomic::Ordering::Relaxed);
     match cmd {
         Commands::Add(a) => sub::run_add(ctx, a, out).await,
         Commands::Preview(a) => sub::run_preview(ctx, a, out).await,
@@ -143,6 +147,7 @@ pub async fn dispatch(
         Commands::Storage(a) => ops::run_storage(ctx, a, out),
         Commands::Doctor(a) => ops::run_doctor(ctx, a, out),
         Commands::Pipe(a) => pipe::run_pipe(ctx, a, sink, out).await,
+        Commands::Do(a) => nl::run_do(ctx, a, sink, out, no_input).await,
         Commands::Completions(a) => ops::run_completions(a),
         Commands::Mcp(_) => mcp::run_mcp(ctx).await,
     }
@@ -176,19 +181,65 @@ pub async fn resolve_or_ingest_episode(ctx: &CoreCtx, reference: &str) -> Result
             db::upsert_episodes(&mut ctx.db.lock().unwrap(), std::slice::from_ref(&ep))?;
             return Ok(ep);
         }
-        let added = core_ops::add_subscription(ctx, trimmed).await?;
-        if let Some(ep) = added.episode {
-            return Ok(ep);
-        }
-        if let Some(show) = added.show {
-            let eps = db::list_episodes(&ctx.db.lock().unwrap(), Some(&show.id), 1)?;
-            return eps
-                .into_iter()
-                .next()
-                .ok_or_else(|| CliError::not_found("该频道暂时没有单集"));
+        // Never subscribes: an episode link is kept as a standalone episode; a show or channel link is previewed
+        // (its episodes kept, the show not followed) and its newest episode is used.
+        match core_ops::fetch_input(ctx, trimmed).await? {
+            core_ops::Fetched::Single(ep) => return Ok(ep),
+            core_ops::Fetched::Show(show, eps) => {
+                let prev = core_ops::keep_preview(ctx, show, eps)?;
+                let ep = prev.episodes.into_iter().next().ok_or_else(|| CliError::not_found("该频道暂时没有单集"))?;
+                eprintln!("（这是节目链接：用的是最新一集「{}」，没有订阅。要选别的集，先运行 subcast preview <链接> 看单集 ID）", ep.title);
+                return Ok(ep);
+            }
         }
     }
-    Ok(resolver::resolve_episode(ctx, reference).await?)
+    match resolver::resolve_episode(ctx, reference).await {
+        Ok(ep) => Ok(ep),
+        Err(e) => match e.downcast::<resolver::AmbiguousShow>() {
+            Ok(amb) => {
+                let preview = resolver::preview_url(ctx, &choose_show(&amb)?.feed_url).await?;
+                Ok(resolver::pick_in_preview(preview, &amb.selector)?)
+            }
+            Err(e) => Err(e.into()),
+        },
+    }
+}
+
+/// Set from --no-input: never stop to ask.
+pub static NO_INPUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Several shows answer to a name: in a terminal, list them and ask; otherwise (scripts, agents, --no-input) fail
+/// with the list, so the caller can ask the person and come back with the chosen link.
+pub fn choose_show(amb: &resolver::AmbiguousShow) -> Result<resolver::ShowCandidate, CliError> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal() && !NO_INPUT.load(std::sync::atomic::Ordering::Relaxed);
+    if !interactive || amb.candidates.is_empty() {
+        return Err(CliError::new(2, "ambiguous", amb.to_string().trim_end().to_string()));
+    }
+    let mut err = std::io::stderr();
+    let _ = writeln!(err, "「{}」对应多个节目：", amb.query);
+    for (i, c) in amb.candidates.iter().enumerate() {
+        let _ = writeln!(err, "  {}. {}", i + 1, resolver::describe_candidate(c));
+    }
+    let _ = write!(err, "选哪个？输入序号（回车取消）：");
+    let _ = err.flush();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line).ok();
+    match line.trim().parse::<usize>() {
+        Ok(n) if n >= 1 && n <= amb.candidates.len() => Ok(amb.candidates[n - 1].clone()),
+        _ => Err(CliError::cancelled()),
+    }
+}
+
+/// A show by name for listing: subscribed or not, asking when the name is ambiguous.
+pub async fn find_show(ctx: &CoreCtx, name: &str) -> Result<subcast_core::ops::Preview, CliError> {
+    match resolver::find_show_online(ctx, name).await {
+        Ok(p) => Ok(p),
+        Err(e) => match e.downcast::<resolver::AmbiguousShow>() {
+            Ok(amb) => Ok(resolver::preview_url(ctx, &choose_show(&amb)?.feed_url).await?),
+            Err(e) => Err(e.into()),
+        },
+    }
 }
 
 pub async fn ensure_transcript(

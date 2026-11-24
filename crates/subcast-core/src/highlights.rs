@@ -8,6 +8,7 @@ use crate::settings;
 use crate::subexport::{clock_of, has_cjk, pieces, Cue, SubContent};
 use crate::{db, llm, ops};
 use anyhow::{anyhow, Result};
+use futures_util::StreamExt;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -180,10 +181,17 @@ pub struct WindowRange {
 }
 
 pub fn build_highlight_windows(segments: &[Segment], zh: Option<&[Option<String>]>, is_local: bool) -> Vec<WindowRange> {
+    if is_local { windows_of(segments, zh, 20.0 * 60.0, 90.0, 12_000) } else { windows_of(segments, zh, 30.0 * 60.0, 120.0, 32_000) }
+}
+
+/// Local agents (Claude Code, Codex, Antigravity…) read long contexts but start slowly per request: fewer, larger
+/// windows (a 3-hour episode went from 23 requests to about 4).
+pub fn build_agent_windows(segments: &[Segment], zh: Option<&[Option<String>]>) -> Vec<WindowRange> {
+    windows_of(segments, zh, 60.0 * 60.0, 120.0, 48_000)
+}
+
+fn windows_of(segments: &[Segment], zh: Option<&[Option<String>]>, window_sec: f64, overlap_sec: f64, max_chars: usize) -> Vec<WindowRange> {
     if segments.is_empty() { return vec![]; }
-    let window_sec = if is_local { 20.0 * 60.0 } else { 30.0 * 60.0 };
-    let overlap_sec = if is_local { 90.0 } else { 120.0 };
-    let max_chars = if is_local { 12_000usize } else { 32_000usize };
     let fmt = |i: usize, inc_zh: bool| {
         let s = &segments[i];
         let tr = if inc_zh { zh.and_then(|z| z.get(i)).and_then(|x| x.as_deref()).map(str::trim).filter(|t| !t.is_empty()) } else { None };
@@ -342,52 +350,40 @@ pub async fn extract_highlights(
     let total_sec = t.segments.last().map(|s| s.end).or(ep.duration).unwrap_or(0.0);
     let profile = duration_profile(total_sec);
     let is_local = resolved.group == "local" || resolved.provider.protocol == "cli";
-    let windows = build_highlight_windows(&t.segments, zh.as_deref(), is_local);
+    let windows = if resolved.provider.protocol == "cli" { build_agent_windows(&t.segments, zh.as_deref()) } else { build_highlight_windows(&t.segments, zh.as_deref(), is_local) };
     let system = build_highlight_system(&ep, profile, intent, lang);
 
     let mut candidates = Vec::new();
     let total_w = windows.len();
-    for (idx, w) in windows.into_iter().enumerate() {
-        sink.emit(ProgressEvent::Info {
-            stage: "highlights".into(),
-            message: format!("{}/{}", idx + 1, total_w),
-            progress: Some((idx + 1) as f64 / total_w.max(1) as f64),
-        });
+    // Windows go to the model side by side (local agents run two processes; APIs take more), in order.
+    let parallel = if resolved.provider.protocol == "cli" || resolved.group == "local" { 2 } else { 4 };
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    let ask = |content: String, max_tokens: u32| {
         let req_id = format!("hl-{}", uuid::Uuid::new_v4().simple());
-        let raw = match ops::llm_chat(
-            ctx,
-            &req_id,
-            &resolved.provider,
-            &system,
-            &[llm::Message { role: "user".into(), content: w.rows_text.clone() }],
-            Some(6000),
-            Some(resolved.provider.protocol == "openai"),
-            Some(true),
-            sink,
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => {
-                let req_id2 = format!("hl2-{}", uuid::Uuid::new_v4().simple());
-                match ops::llm_chat(
-                    ctx,
-                    &req_id2,
-                    &resolved.provider,
-                    &system,
-                    &[llm::Message { role: "user".into(), content: w.rows_text }],
-                    Some(16000),
-                    Some(resolved.provider.protocol == "openai"),
-                    Some(true),
-                    sink,
-                )
-                .await
-                {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                }
+        let (provider, system) = (&resolved.provider, &system);
+        async move {
+            ops::llm_chat(ctx, &req_id, provider, system, &[llm::Message { role: "user".into(), content }], Some(max_tokens),
+                Some(provider.protocol == "openai"), Some(true), sink).await
+        }
+    };
+    let answers: Vec<(WindowRange, Option<String>)> = futures_util::stream::iter(windows.into_iter())
+        .map(|w| {
+            let (ask, done) = (&ask, &done);
+            async move {
+                let raw = match ask(w.rows_text.clone(), 6000).await {
+                    Ok(r) => Some(r),
+                    Err(_) => ask(w.rows_text.clone(), 16000).await.ok(),
+                };
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                sink.emit(ProgressEvent::Info { stage: "highlights".into(), message: format!("{n}/{total_w}"), progress: Some(n as f64 / total_w.max(1) as f64) });
+                (w, raw)
             }
-        };
+        })
+        .buffered(parallel)
+        .collect()
+        .await;
+    for (w, raw) in answers {
+        let Some(raw) = raw else { continue };
         let Ok(items) = parse_highlights_json(&raw) else { continue };
         for item in items {
             let Some(s_raw) = item.get("startIdx").or_else(|| item.get("start")).and_then(|v| v.as_u64()).map(|n| n as usize) else { continue };

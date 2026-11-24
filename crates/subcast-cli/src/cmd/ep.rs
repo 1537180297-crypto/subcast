@@ -75,15 +75,22 @@ pub async fn run_ep(ctx: &CoreCtx, args: EpArgs, out: Out) -> Result<(), CliErro
     let action = args.action.unwrap_or(EpAction::List { show: None, limit: 30 });
     match action {
         EpAction::List { show, limit } => {
-            let conn = ctx.db.lock().unwrap();
-            let sid = match show {
-                Some(ref r) => Some(resolver::resolve_show(&conn, r)?.id),
-                None => None,
+            let library = {
+                let conn = ctx.db.lock().unwrap();
+                match show.as_deref() {
+                    Some(r) => resolver::resolve_show(&conn, r).ok().map(|s| db::list_episodes(&conn, Some(&s.id), limit)).transpose()?,
+                    None => Some(db::recent_episodes(&conn, limit)?),
+                }
             };
-            let eps = if let Some(id) = sid.as_deref() {
-                db::list_episodes(&conn, Some(id), limit)?
-            } else {
-                db::recent_episodes(&conn, limit)?
+            let eps = match (library, show.as_deref()) {
+                (Some(eps), _) => eps,
+                // Not subscribed: a feed or channel link, or a show name looked up in the directory.
+                (None, Some(r)) => {
+                    let prev = if resolver::is_url_or_path(r) { subcast_core::ops::preview_show(ctx, r).await? } else { crate::cmd::find_show(ctx, r).await? };
+                    if !out.is_structured() { eprintln!("{}（未订阅）", prev.show.title); }
+                    prev.episodes.into_iter().take(limit.max(0) as usize).collect()
+                }
+                (None, None) => Vec::new(),
             };
             out.ok(&eps, || {
                 for e in &eps {

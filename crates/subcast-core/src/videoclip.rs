@@ -1570,6 +1570,8 @@ fn default_mp4_path(name: &str, dir: Option<&str>) -> Result<PathBuf> {
         Some(d) => d,
         None => dirs::download_dir().or_else(dirs::desktop_dir).ok_or_else(|| anyhow!("找不到下载文件夹"))?,
     };
+    let name = name.trim();
+    let name = name.strip_suffix(".mp4").unwrap_or(name); // callers may pass a full file name
     let safe: String = name.chars().filter(|c| !"/\\:*?\"<>|\0".contains(*c)).take(80).collect();
     let safe = safe.trim();
     let base = if safe.is_empty() { "SubCast 切片" } else { safe }; // i18n-ignore

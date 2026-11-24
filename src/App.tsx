@@ -23,6 +23,7 @@ import { DiscoverView, DownloadsView, LatestView, RecentView, ShowView, ChannelV
 import { startOffline } from "./lib/offline";
 import { loadFavorites } from "./lib/library";
 import { startUpdateChecks } from "./lib/updater";
+import { AgentConnectOffer } from "./components/AgentConnect";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { EpisodeView } from "./components/EpisodeView";
 import { VideoDock } from "./components/VideoDock";
@@ -152,6 +153,7 @@ export default function App() {
       <SelectionTools />
       <VideoClipDialog />
       <UpdateBanner />
+      <AgentConnectOffer />
       <ConfirmHost />
       <Toast />
     </div>

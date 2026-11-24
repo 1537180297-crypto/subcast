@@ -250,18 +250,21 @@ pub fn cached_show(ctx: &CoreCtx, input: &str) -> Result<Option<Preview>> {
 pub async fn preview_show(ctx: &CoreCtx, input: &str) -> Result<Preview> {
     match fetch_input(ctx, input).await? {
         Fetched::Single(_) => Err(anyhow!("这是单集链接，不是频道")),
-        Fetched::Show(show, eps) => {
-            let mut conn = ctx.db.lock().unwrap();
-            db::upsert_episodes(&mut conn, &eps)?;
-            let now = now_ms();
-            if let Ok(json) = serde_json::to_string(&show) {
-                let _ = db::set_blob(&conn, &show.id, "show-json", &json);
-            }
-            let _ = db::set_blob(&conn, &show.id, "fetched-at", &now.to_string());
-            let episodes = db::list_episodes(&conn, Some(&show.id), 300)?;
-            Ok(Preview { show, episodes, fetched_at: now })
-        }
+        Fetched::Show(show, eps) => keep_preview(ctx, show, eps),
     }
+}
+
+/// Keeps a fetched show's episodes (and the show's details, for its name) without following the show.
+pub fn keep_preview(ctx: &CoreCtx, show: Show, eps: Vec<Episode>) -> Result<Preview> {
+    let mut conn = ctx.db.lock().unwrap();
+    db::upsert_episodes(&mut conn, &eps)?;
+    let now = now_ms();
+    if let Ok(json) = serde_json::to_string(&show) {
+        let _ = db::set_blob(&conn, &show.id, "show-json", &json);
+    }
+    let _ = db::set_blob(&conn, &show.id, "fetched-at", &now.to_string());
+    let episodes = db::list_episodes(&conn, Some(&show.id), 300)?;
+    Ok(Preview { show, episodes, fetched_at: now })
 }
 
 pub async fn refresh_show(ctx: &CoreCtx, id: &str) -> Result<Show> {
@@ -1839,10 +1842,13 @@ pub async fn clip_video_full(
         subs_below,
     );
 
-    let show_name = show
-        .as_ref()
-        .map(|s| s.title.clone())
-        .unwrap_or_default();
+    // Standalone episodes sit in the internal "single" show, whose stored name (单独打开) is not a show name;
+    // a previewed show has no row but its name comes with the episode.
+    let show_name = match show.as_ref() {
+        Some(s) if s.kind == "single" => String::new(),
+        Some(s) => s.title.clone(),
+        None => ep.show_title.clone().unwrap_or_default(),
+    };
     let clip_title = opts
         .hook_title
         .as_deref()
@@ -1851,8 +1857,8 @@ pub async fn clip_video_full(
         .to_string();
 
     let (transcript_segs, zh) = {
-        let conn = ctx.db.lock().unwrap();
-        let tr = db::get_transcript(&conn, &ep.id)?
+        // The lock is let go first: load_episode_zh takes it again (holding it here hung every CLI clip).
+        let tr = db::get_transcript(&ctx.db.lock().unwrap(), &ep.id)?
             .map(|t| t.segments)
             .unwrap_or_default();
         (tr, crate::ai::load_episode_zh(ctx, &ep.id))
