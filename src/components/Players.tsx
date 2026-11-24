@@ -262,7 +262,14 @@ export const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
  *  outside the frame, under a shield that keeps hover UI from appearing. Our own controls and subtitles drive it.
  *  Videos whose owners forbid embedding fall back to the HLS stream yt-dlp finds, played in a plain <video>. */
 export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; overlay?: React.ReactNode; onUnplayable?: () => void }) {
-  const [native, setNative] = useState<{ url: string; kind: "hls" | "mp4" } | null>(null);
+  const [native, setNativeState] = useState<{ url: string; kind: "hls" | "mp4" } | null>(null);
+  /** The direct stream to play. Its length, when yt-dlp gave one, fills a bar that has none yet (feeds without
+   *  a length showed "--:--" and couldn't seek until the video loaded). */
+  const setNative = (stream: { url: string; kind: "hls" | "mp4"; duration?: number | null } | null) => {
+    setNativeState(stream && { url: stream.url, kind: stream.kind });
+    const s = useStore.getState();
+    if (stream?.duration && s.current?.id === ep.id && !s.length) s.set({ length: stream.duration });
+  };
   const [error, setError] = useState<string | null>(null);
   /** What the switch to the direct stream is waiting for; null when not switching. */
   const [fallingBack, setFallingBack] = useState<string | null>(null);
@@ -444,7 +451,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
           <p>{error}</p>
           <div className="row-actions">
             <button className="btn primary sm" onClick={retry}>{t("重试")}</button>
-            <button className="link-btn video-open" onClick={() => useStore.getState().openSettings("general")}>{t("代理设置")}</button>
+            <button className="link-btn video-open" onClick={() => useStore.getState().openSettings("network")}>{t("网络诊断")}</button>
             {openBtn}
           </div>
         </div>

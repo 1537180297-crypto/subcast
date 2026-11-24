@@ -1,7 +1,8 @@
 mod appupdate;
-#[cfg_attr(debug_assertions, allow(dead_code))] // serving the interface is release-only
+#[cfg_attr(debug_assertions, allow(dead_code))] // interface updates are release-only
 mod ota;
 mod ytlogin;
+mod clipath;
 
 pub use subcast_core::net;
 use serde::Serialize;
@@ -346,9 +347,65 @@ fn bind_ui_port(preferred: u16) -> Option<(u16, Vec<std::net::TcpListener>)> {
     None
 }
 
-#[cfg(not(debug_assertions))]
+/// The proxy set in SubCast, for the windows' web views too. Without it YouTube's embedded player (and the
+/// sign-in page) only follow the system proxy, so a proxy set in SubCast alone left the player unable to load.
+/// Every window gets the same one (WebView2 refuses a second window with other browser arguments). Taken at
+/// launch: a changed proxy reaches the web views after a restart.
+pub(crate) fn webview_proxy() -> Option<tauri::Url> {
+    WEBVIEW_PROXY.get_or_init(|| parse_webview_proxy(&subcast_core::net::proxy()).ok()).clone()
+}
+
+/// What the web views got at launch (they keep it until the app restarts).
+static WEBVIEW_PROXY: std::sync::OnceLock<Option<tauri::Url>> = std::sync::OnceLock::new();
+
+/// A proxy setting as the web views take it, or why they can't: "none", "unsupported-proxy" (only http:// and
+/// socks5:// with a port work there) or "unsupported-os" (macOS supports it from 14 on; older versions would crash).
+fn parse_webview_proxy(raw: &str) -> Result<tauri::Url, &'static str> {
+    let raw = raw.trim();
+    if raw.is_empty() { return Err("none"); }
+    let url: tauri::Url = (if raw.contains("://") { raw.to_string() } else { format!("http://{raw}") }).parse().map_err(|_| "unsupported-proxy")?;
+    if !matches!(url.scheme(), "http" | "socks5") || url.host().is_none() || url.port().is_none() { return Err("unsupported-proxy"); }
+    #[cfg(target_os = "macos")]
+    if macos_major() < 14 { return Err("unsupported-os"); }
+    Ok(url)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkReport {
+    checks: Vec<subcast_core::netcheck::Check>,
+    /// Which proxy the web views (YouTube's player) use: "subcast" (the one set in SubCast), "system" (none set),
+    /// "restart" (SubCast's changed since launch), "unsupported-os" or "unsupported-proxy".
+    webview_proxy: &'static str,
+}
+
+#[tauri::command]
+async fn network_check(state: State<'_, AppState>) -> Res<NetworkReport> {
+    let checks = subcast_core::netcheck::run(&state.ctx.data).await;
+    let applied = webview_proxy();
+    let webview_proxy = match parse_webview_proxy(&subcast_core::net::proxy()) {
+        Ok(now) if applied.as_ref() == Some(&now) => "subcast",
+        Ok(_) => "restart",
+        Err("none") if applied.is_some() => "restart",
+        Err("none") => "system",
+        Err(why) => why,
+    };
+    Ok(NetworkReport { checks, webview_proxy })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_major() -> u32 {
+    std::process::Command::new("sw_vers").arg("-productVersion").output().ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().split('.').next()?.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Serves the interface on http://localhost (YouTube's embedded player refuses tauri://). A local debug build
+/// (`scripts/dev-app.sh`) does it too, so the embed can be tried before a release; it starts 10 ports up, to leave
+/// the installed app its usual port (and with it its page storage), and never uses interface updates.
 fn serve_ui(app: &AppHandle, active: ota::Active) -> u16 {
-    let Some((port, listeners)) = bind_ui_port(LOCAL_PORT) else {
+    let first = if cfg!(debug_assertions) { LOCAL_PORT + 10 } else { LOCAL_PORT };
+    let Some((port, listeners)) = bind_ui_port(first) else {
         eprintln!("SubCast: no free port for the interface near {LOCAL_PORT}");
         return LOCAL_PORT;
     };
@@ -804,7 +861,10 @@ struct CliStatus {
     link_path: Option<String>,
     target_path: Option<String>,
     needs_update: bool,
+    /// A new terminal finds the command (its PATH, not this app's).
     in_path: bool,
+    /// Where SubCast just put the command's folder on the PATH (a startup file, or "PATH" on Windows).
+    path_added: Option<String>,
 }
 
 fn bundled_cli_path() -> Option<std::path::PathBuf> {
@@ -833,16 +893,6 @@ fn cli_install_candidates() -> Vec<std::path::PathBuf> {
     list
 }
 
-fn dir_in_path(dir: &std::path::Path) -> bool {
-    let Ok(canon_dir) = std::fs::canonicalize(dir) else {
-        return std::env::var_os("PATH")
-            .is_some_and(|p| std::env::split_paths(&p).any(|x| x == dir));
-    };
-    std::env::var_os("PATH").is_some_and(|p| {
-        std::env::split_paths(&p).any(|x| x == dir || std::fs::canonicalize(&x).ok().as_ref() == Some(&canon_dir))
-    })
-}
-
 fn inspect_cli_status() -> CliStatus {
     let bundled = bundled_cli_path();
     let bundled_canon = bundled.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
@@ -865,7 +915,7 @@ fn inspect_cli_status() -> CliStatus {
                     needs_update = true;
                 }
                 if let Some(parent) = cand.parent() {
-                    in_path = dir_in_path(parent);
+                    in_path = clipath::in_path(parent);
                 }
                 break;
             }
@@ -880,12 +930,25 @@ fn inspect_cli_status() -> CliStatus {
         target_path,
         needs_update,
         in_path,
+        path_added: None,
     }
 }
 
+/// After the command is installed: its folder goes on the PATH new terminals use, when it isn't there yet.
+fn with_path(mut status: CliStatus) -> CliStatus {
+    if status.installed && !status.in_path {
+        if let Some(dir) = status.link_path.as_deref().and_then(|l| std::path::Path::new(l).parent()) {
+            status.path_added = clipath::ensure(dir);
+            if status.path_added.is_some() { status.in_path = true; }
+        }
+    }
+    status
+}
+
+// Async: finding the PATH asks the listener's shell, which can take a few seconds.
 #[tauri::command]
-fn cli_status() -> CliStatus {
-    inspect_cli_status()
+async fn cli_status() -> Res<CliStatus> {
+    tokio::task::spawn_blocking(inspect_cli_status).await.map_err(e)
 }
 
 fn bundled_cli() -> Res<std::path::PathBuf> {
@@ -911,8 +974,8 @@ async fn mcp_disconnect(id: String) -> Res<subcast_core::mcp_targets::McpTarget>
 }
 
 #[tauri::command]
-fn cli_install() -> Res<CliStatus> {
-    install_cli_link()
+async fn cli_install() -> Res<CliStatus> {
+    tokio::task::spawn_blocking(|| install_cli_link().map(with_path)).await.map_err(e)?
 }
 
 /// Puts the `subcast` command on the PATH by itself, so it works right after installing the app: once on the first
@@ -929,6 +992,15 @@ fn auto_install_cli(data: &std::path::Path) {
         let _ = install_cli_link();
     }
     if first { let _ = std::fs::write(&marker, b"1"); }
+    // Once per install (a line removed afterwards stays removed): the command's folder on new terminals' PATH.
+    // Covers copies installed before SubCast did this, too.
+    let path_marker = data.join("cli-path-checked");
+    if !path_marker.exists() {
+        let now = inspect_cli_status();
+        let ours = now.target_path.is_some() && !now.needs_update;
+        if ours { let _ = with_path(now); }
+        let _ = std::fs::write(&path_marker, b"1");
+    }
     // Agents connected to SubCast keep working after the app moves: their entries follow it.
     if let Some(cli) = bundled_cli_path() { tauri::async_runtime::block_on(subcast_core::mcp_targets::repair(&cli)); }
 }
@@ -1012,12 +1084,17 @@ pub fn run() {
                 let _ = asr::VCRT_DIR.set(res.join("vcrt"));
             }
             let ctx = Arc::new(CoreCtx::open(Some(data.clone()))?);
-            #[cfg(not(debug_assertions))]
-            let (ui, ui_port): (ota::Active, u16) = {
-                let active = Arc::new(std::sync::RwLock::new(ota::boot(&data)));
+            // `tauri dev` loads the interface from the dev server (already http://localhost); every built app serves
+            // its own. Debug builds skip interface updates: they show the interface they were built with.
+            let (ui, ui_port): (ota::Active, u16) = if tauri::is_dev() {
+                (Arc::new(std::sync::RwLock::new(None)), 0)
+            } else {
+                let active = Arc::new(std::sync::RwLock::new(if cfg!(debug_assertions) { None } else { ota::boot(&data) }));
                 let port = serve_ui(app.handle(), active.clone());
                 (active, port)
             };
+            #[cfg(debug_assertions)]
+            let _ = &ui;
             #[cfg(not(debug_assertions))]
             let ui_data = data.clone();
             app.manage(AppState { ctx });
@@ -1026,14 +1103,16 @@ pub fn run() {
                 let data = data.clone();
                 std::thread::spawn(move || auto_install_cli(&data));
             }
-            #[cfg(debug_assertions)]
-            let url = tauri::WebviewUrl::App("index.html".into());
-            #[cfg(not(debug_assertions))]
-            let url = tauri::WebviewUrl::External(format!("http://localhost:{ui_port}").parse().unwrap());
+            let url = if tauri::is_dev() {
+                tauri::WebviewUrl::App("index.html".into())
+            } else {
+                tauri::WebviewUrl::External(format!("http://localhost:{ui_port}").parse().unwrap())
+            };
             let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
                 .title("SubCast")
                 .inner_size(1360.0, 880.0)
                 .min_inner_size(980.0, 640.0);
+            let builder = match webview_proxy() { Some(p) => builder.proxy_url(p), None => builder };
             #[cfg(target_os = "macos")]
             let builder = builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
@@ -1069,7 +1148,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             add_subscription, refresh_show, refresh_all, list_shows, list_episodes, recent_episodes, get_episode, remove_show,
             set_progress, set_watched, mark_show_watched, search_podcasts, search_show, load_transcript, fetch_official_transcript, transcribe, cancel_job, asr_models,
-            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, youtube_tracks, use_youtube_track, youtube_channel_feed, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
+            download_model, delete_model, get_blob, set_blob, get_settings, set_settings, set_api_key, has_api_key, llm_chat, translate_texts, shared_transcript, shared_exists, shared_guide, share_guide, asr_elsewhere, log_listen, listening_stats, rescan_models, youtube_subscriptions, open_privacy_settings, export_opml, local_agents, probe_agent, agent_models, warm_agent, share_translation, ui_ready, ui_check, refresh_config, youtube_stream, prepare_youtube, youtube_sign_in, youtube_signed_in, youtube_sign_out, network_check, youtube_tracks, use_youtube_track, youtube_channel_feed, qiaomu_detail, preview_show, list_models, tts_speak, cached_show, save_image, learn_clip, save_text, export_anki, set_menu_labels,
             app_update_check, app_update_download, app_update_install,
             shadow_start, shadow_stop, shadow_clear, shadow_ready, shadow_hear, open_mic_settings,
             download_episode, list_downloads, delete_download, clear_downloads, align_audio, save_time_map, list_audio_cache, clear_audio_cache, storage_info, open_data_folder, reveal_download, clear_temp, full_notes, tts_synthesize, tts_system_voices, clear_tts_cache, local_tts_status, local_tts_install, local_tts_delete,

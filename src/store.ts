@@ -31,7 +31,7 @@ export interface PlayerHandle {
   episodeId?: string;
 }
 
-export type SettingsSection = "subtitles" | "ai" | "general" | "learn" | "about" | "model" | "asr" | "reading" | "tts" | "shortcuts" | "storage" | "agents";
+export type SettingsSection = "subtitles" | "ai" | "general" | "learn" | "about" | "model" | "asr" | "reading" | "tts" | "shortcuts" | "storage" | "agents" | "network";
 
 interface State {
   speaking: boolean;

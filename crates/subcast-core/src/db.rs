@@ -183,6 +183,12 @@ pub fn set_audio_url(conn: &Connection, id: &str, url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Gives the video's length to the episodes playing it that have none (feeds that carry no length).
+pub fn fill_video_duration(conn: &Connection, video_id: &str, seconds: f64) -> Result<usize> {
+    if seconds <= 0.0 { return Ok(0); }
+    Ok(conn.execute("UPDATE episodes SET duration=?2 WHERE video_id=?1 AND COALESCE(duration, 0) <= 0", params![video_id, seconds])?)
+}
+
 pub fn set_progress(conn: &Connection, id: &str, seconds: f64) -> Result<()> {
     let s = seconds.max(0.0);
     // Resuming playback past 5 s clears an explicit "unseen" reset so auto-tracking takes over again.

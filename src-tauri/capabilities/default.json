@@ -66,6 +66,7 @@
     "allow-youtube-channel-feed",
     "allow-youtube-signed-in",
     "allow-youtube-sign-out",
+    "allow-network-check",
     "allow-search-show",
     "allow-youtube-tracks",
     "allow-use-youtube-track",

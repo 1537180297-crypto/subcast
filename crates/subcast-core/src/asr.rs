@@ -311,7 +311,7 @@ pub fn find_ytdlp(data: &Path) -> Option<PathBuf> {
 }
 
 /// Our mirror of the latest release (server/deploy/sync-ytdlp.sh), reachable where GitHub is slow or blocked.
-const YTDLP_MIRROR: &str = "https://subcast.qiaomu.ai/tools/yt-dlp";
+pub const YTDLP_MIRROR: &str = "https://subcast.qiaomu.ai/tools/yt-dlp";
 const YTDLP_GITHUB: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
 
 fn ytdlp_asset() -> &'static str {
@@ -383,7 +383,7 @@ pub async fn ytdlp_with(data: &Path, progress: impl FnMut(u64, Option<u64>)) -> 
     Ok(own)
 }
 
-async fn ytdlp_version(bin: &Path) -> Option<String> {
+pub async fn ytdlp_version(bin: &Path) -> Option<String> {
     let mut cmd = tokio::process::Command::new(bin);
     cmd.arg("--version").kill_on_drop(true);
     #[cfg(windows)]
@@ -656,6 +656,10 @@ pub async fn youtube_stream_url(ytdlp: &Path, video_id: &str, hls: bool, fresh: 
     Ok(url)
 }
 
+/// Each video's length (seconds) as yt-dlp last reported it, for episodes whose feed gave none.
+static DURATIONS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, f64>>> = once_cell::sync::Lazy::new(Default::default);
+pub fn video_duration(video_id: &str) -> Option<f64> { DURATIONS.lock().unwrap().get(video_id).copied() }
+
 /// Resolved video addresses, kept in memory and in `streams.json` next to the app's data.
 pub mod streams {
     use std::collections::HashMap;
@@ -732,6 +736,7 @@ async fn stream_once(ytdlp: &Path, video_id: &str, hls: bool, extra: &[String]) 
     let info: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
         anyhow!("无法获取视频地址：{}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("").chars().take(200).collect::<String>())
     })?;
+    if let Some(d) = info["duration"].as_f64().filter(|d| *d > 0.0) { DURATIONS.lock().unwrap().insert(video_id.to_string(), d); }
     let formats = info["formats"].as_array().cloned().unwrap_or_default();
     if hls {
         if let Some(u) = formats.iter().filter(|f| f["protocol"].as_str().is_some_and(|p| p.starts_with("m3u8"))).find_map(|f| f["manifest_url"].as_str()) {
