@@ -20,6 +20,7 @@ pub mod mcp_targets;
 pub mod local_tts;
 pub mod model;
 pub mod net;
+pub mod netcheck;
 pub mod offline;
 pub mod ops;
 pub mod picks;

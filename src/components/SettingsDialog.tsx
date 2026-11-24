@@ -15,6 +15,7 @@ import { api, errorText, llmChat, type CliStatus, type CloudAsr, type ModelInfo,
 import { useStore } from "../store";
 import { useClipTools } from "../lib/clipTools";
 import { AgentConnectSettings } from "./AgentConnect";
+import { NetworkCheck } from "./NetworkCheck";
 import { bytes, clearAudioCache, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
 import { YouTubeAccount } from "./YouTubeAccount";
@@ -133,12 +134,13 @@ export function SettingsView() {
   const { settings, saveSettings, set, notify, settingsSection, settingsNonce } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, set: s.set, notify: s.notify, settingsSection: s.settingsSection, settingsNonce: s.settingsNonce })));
   type Section = "subtitles" | "ai" | "tts" | "general" | "learn" | "about";
   // Old section names (links from elsewhere in the app) land in their new home.
-  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "tts", shortcuts: "general", storage: "general", agents: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai", learn: "learn" };
+  const LEGACY: Record<string, Section> = { overview: "subtitles", reading: "subtitles", asr: "subtitles", model: "ai", tts: "tts", shortcuts: "general", storage: "general", agents: "general", network: "general", general: "general", about: "about", subtitles: "subtitles", ai: "ai", learn: "learn" };
   const [section, setSection] = useState<Section>(LEGACY[settingsSection ?? "subtitles"] ?? "subtitles");
   // Asked for a section while the page is already open (a "去设置" link): go there.
   useEffect(() => {
     if (settingsSection) setSection(LEGACY[settingsSection] ?? "subtitles");
     if (settingsSection === "agents") window.setTimeout(() => document.getElementById("agent-connect")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    if (settingsSection === "network") window.setTimeout(() => document.getElementById("network")?.scrollIntoView({ behavior: "smooth", block: "center" }), 80);
   }, [settingsNonce]);
   useEffect(() => () => stopSpeaking(), []);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -255,9 +257,10 @@ export function SettingsView() {
                 <label><span>{t("代理")}</span>
                   <div className="key-row">
                     <input {...NO_AUTO} value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder={t("留空就用系统代理")} />
-                    <button className="btn sm" onClick={async () => { try { await saveSettings({ proxy }); notify(t("代理已保存")); } catch (e) { notify(errorText(e)); } }}>{t("保存")}</button>
+                    <button className="btn sm" onClick={async () => { try { const changed = proxy.trim() !== (settings.proxy ?? "").trim(); await saveSettings({ proxy }); notify(changed ? t("代理已保存。视频播放器重启 SubCast 后使用新代理") : t("代理已保存")); } catch (e) { notify(errorText(e)); } }}>{t("保存")}</button>
                   </div>
                 </label>
+                <NetworkCheck />
                 <YouTubeAccount />
                 <label><span>{t("YouTube 要求验证时")}</span>
                   <select value={settings.ytCookiesBrowser ?? ""} onChange={(e) => void saveSettings({ ytCookiesBrowser: e.target.value })}>
@@ -480,7 +483,7 @@ function CliSettings() {
     try {
       const next = await api.cliInstall();
       setStatus(next);
-      notify(t("已安装 subcast 命令"));
+      notify(next.pathAdded ? t("已安装 subcast 命令，并加入了 PATH（{file}）。新开一个终端窗口就能用", { file: next.pathAdded }) : t("已安装 subcast 命令"));
     } catch (e) {
       notify(errorText(e));
     } finally {
@@ -502,7 +505,10 @@ function CliSettings() {
       <p className="muted small">{t("在终端或 AI Agent 中通过 subcast 命令管理订阅、转写、翻译、导读、切片与生词本。")}</p>
       <p className="small"><span>{t("状态")}：{badge}</span>{status.linkPath ? ` · ${status.linkPath}` : ""}</p>
       {status.installed && !status.inPath && status.linkPath && (
-        <p className="muted small">{t("请将 {dir} 加入 PATH 环境变量。", { dir: status.linkPath.replace(/[/\\][^/\\]+$/, "") })}</p>
+        <p className="muted small">
+          {t("新开的终端还找不到 subcast 命令（{dir} 不在 PATH 里）。", { dir: status.linkPath.replace(/[/\\][^/\\]+$/, "") })}{" "}
+          <button className="link-btn" disabled={busy} onClick={install}>{t("自动加入 PATH")}</button>
+        </p>
       )}
       {status.bundled && (
         <div className="row-actions">

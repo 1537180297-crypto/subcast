@@ -14,7 +14,8 @@ use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
-pub struct Vid { pub id: String, pub title: String, pub published: Option<i64> }
+/// `duration` in seconds, when the uploads list gives it (the feed doesn't).
+pub struct Vid { pub id: String, pub title: String, pub published: Option<i64>, pub duration: Option<f64> }
 
 /// Known channels, for shows whose name finds the wrong channel or none.
 fn builtin(source: &str) -> Option<&'static str> {
@@ -76,6 +77,11 @@ pub async fn fill(source: &str, show_name: &str, eps: &mut [Episode]) {
         if let Some(v) = best_match(&e.title, e.published, &vids, &used) {
             used.insert(v.clone());
             if e.cover.is_none() { e.cover = Some(format!("https://i.ytimg.com/vi/{v}/hqdefault.jpg")); }
+            // Feeds of these shows often carry no length: the video's stands in, so the player and the episode
+            // list show one before anything loads (and "watched" can be worked out).
+            if e.duration.is_none_or(|d| d <= 0.0) {
+                if let Some(d) = vids.iter().find(|x| x.id == v).and_then(|x| x.duration) { e.duration = Some(d); }
+            }
             e.video_id = Some(v);
         }
     }
@@ -134,7 +140,12 @@ pub async fn channel_videos(channel: &str) -> Vec<Vid> {
     if let Some((v, at)) = CACHE.read().unwrap().get(channel) { if at.elapsed() < Duration::from_secs(30 * 60) { return v.clone(); } }
     let (feed, page) = tokio::join!(feed_videos(channel), uploads_page(channel));
     let mut out = feed;
-    for v in page { if !out.iter().any(|x| x.id == v.id) { out.push(v); } }
+    for v in page {
+        match out.iter_mut().find(|x| x.id == v.id) {
+            Some(x) => { if x.duration.is_none() { x.duration = v.duration; } }
+            None => out.push(v),
+        }
+    }
     if !out.is_empty() { CACHE.write().unwrap().insert(channel.to_string(), (out.clone(), Instant::now())); }
     out
 }
@@ -147,6 +158,7 @@ async fn feed_videos(channel: &str) -> Vec<Vid> {
             id: c[1].to_string(),
             title: crate::transcript::decode_entities(&c[2]),
             published: chrono::DateTime::parse_from_rfc3339(&c[3]).ok().map(|d| d.timestamp_millis()),
+            duration: None,
         })
         .collect()
 }
@@ -168,14 +180,15 @@ fn collect(v: &Value, out: &mut Vec<Vid>) {
             if let Some(r) = m.get("playlistVideoRenderer") {
                 let title = r["title"]["runs"][0]["text"].as_str().or_else(|| r["title"]["simpleText"].as_str());
                 if let (Some(id), Some(t)) = (r["videoId"].as_str(), title) {
-                    out.push(Vid { id: id.into(), title: t.into(), published: None });
+                    let duration = r["lengthSeconds"].as_str().and_then(|s| s.parse().ok()).or_else(|| clock_text(&r["lengthText"]));
+                    out.push(Vid { id: id.into(), title: t.into(), published: None, duration });
                 }
                 return;
             }
             if let Some(r) = m.get("lockupViewModel") {
                 let title = r["metadata"]["lockupMetadataViewModel"]["title"]["content"].as_str();
                 if let (Some(id), Some(t)) = (r["contentId"].as_str().filter(|i| i.len() == 11), title) {
-                    out.push(Vid { id: id.into(), title: t.into(), published: None });
+                    out.push(Vid { id: id.into(), title: t.into(), published: None, duration: clock_text(&r["contentImage"]) });
                 }
                 return;
             }
@@ -183,6 +196,20 @@ fn collect(v: &Value, out: &mut Vec<Vid>) {
         }
         Value::Array(a) => for x in a { collect(x, out); },
         _ => {}
+    }
+}
+
+/// The first "1:02:03" / "12:34" text anywhere under `v` (the length badge on a video's thumbnail), in seconds.
+fn clock_text(v: &Value) -> Option<f64> {
+    match v {
+        Value::String(s) => {
+            let parts: Vec<&str> = s.trim().split(':').collect();
+            if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit())) { return None; }
+            Some(parts.iter().fold(0.0, |acc, p| acc * 60.0 + p.parse::<f64>().unwrap_or(0.0)))
+        }
+        Value::Object(m) => m.values().find_map(clock_text),
+        Value::Array(a) => a.iter().find_map(clock_text),
+        _ => None,
     }
 }
 
@@ -233,7 +260,23 @@ pub fn best_match(title: &str, published: Option<i64>, vids: &[Vid], used: &std:
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn v(id: &str, t: &str, d: Option<i64>) -> Vid { Vid { id: id.into(), title: t.into(), published: d } }
+    fn v(id: &str, t: &str, d: Option<i64>) -> Vid { Vid { id: id.into(), title: t.into(), published: d, duration: None } }
+
+    #[test]
+    fn lengths_from_the_uploads_list() {
+        let page = serde_json::json!({"a": [
+            {"playlistVideoRenderer": {"videoId": "aaaaaaaaaaa", "title": {"runs": [{"text": "One"}]}, "lengthSeconds": "3725"}},
+            {"lockupViewModel": {"contentId": "bbbbbbbbbbb", "metadata": {"lockupMetadataViewModel": {"title": {"content": "Two"}}},
+                "contentImage": {"thumbnailViewModel": {"overlays": [{"badge": {"text": "1:02:05"}}]}}}},
+            {"lockupViewModel": {"contentId": "ccccccccccc", "metadata": {"lockupMetadataViewModel": {"title": {"content": "Three"}}}}}
+        ]});
+        let mut out = Vec::new();
+        collect(&page, &mut out);
+        assert_eq!(out.iter().map(|v| v.duration).collect::<Vec<_>>(), vec![Some(3725.0), Some(3725.0), None]);
+        assert_eq!(clock_text(&serde_json::json!("12:34")), Some(754.0));
+        assert_eq!(clock_text(&serde_json::json!("LIVE")), None);
+        assert_eq!(clock_text(&serde_json::json!("2026:")), None);
+    }
     const DAY: i64 = 86_400_000;
 
     #[test]

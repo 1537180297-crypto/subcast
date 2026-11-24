@@ -61,6 +61,17 @@ pub struct VideoStream {
     pub url: String,
     /// hls | mp4
     pub kind: &'static str,
+    /// The video's length in seconds, when known (yt-dlp reports it).
+    pub duration: Option<f64>,
+}
+
+/// One address lookup per video at a time: a second request (the player and its fallback can both ask) waits for
+/// the first and then finds its address in the cache, instead of starting another yt-dlp.
+fn stream_lock(video_id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> = once_cell::sync::Lazy::new(Default::default);
+    let mut m = LOCKS.lock().unwrap();
+    m.retain(|_, l| std::sync::Arc::strong_count(l) > 1);
+    m.entry(video_id.to_string()).or_default().clone()
 }
 
 #[derive(Serialize)]
@@ -678,21 +689,29 @@ pub async fn youtube_stream(
     })
     .await?;
     emit("resolve", 0.0);
-    let job = asr::with_ytdlp(&ctx.data, |bin| {
-        let v = video_id.to_string();
-        async move { asr::youtube_stream_url(&bin, &v, hls, fresh).await }
-    });
-    let url = tokio::time::timeout(std::time::Duration::from_secs(120), job)
+    let lock = stream_lock(video_id);
+    // Bounded: the player gives up after 40 s and tries something else; past this the lookup (and its yt-dlp,
+    // killed when dropped) stops too instead of holding the network for minutes.
+    let url = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        let _one = lock.lock().await;
+        asr::with_ytdlp(&ctx.data, |bin| {
+            let v = video_id.to_string();
+            async move { asr::youtube_stream_url(&bin, &v, hls, fresh).await }
+        })
         .await
-        .map_err(|_| anyhow!("获取视频地址超时，请检查网络或代理"))??;
+    })
+    .await
+    .map_err(|_| anyhow!("获取视频地址超时，请检查网络或代理"))??;
+    let duration = asr::video_duration(video_id);
+    if let Some(d) = duration { let _ = db::fill_video_duration(&ctx.db.lock().unwrap(), video_id, d); }
     let is_hls = url.contains("m3u8") || url.contains("/manifest/hls");
     if is_hls && mode == "proxy-hls" {
-        return Ok(VideoStream { url: hlsproxy::proxied(&url).await?, kind: "hls" });
+        return Ok(VideoStream { url: hlsproxy::proxied(&url).await?, kind: "hls", duration });
     }
     if is_hls {
-        return Ok(VideoStream { url: hlsproxy::master_only(&url).await?, kind: "hls" });
+        return Ok(VideoStream { url: hlsproxy::master_only(&url).await?, kind: "hls", duration });
     }
-    Ok(VideoStream { url, kind: "mp4" })
+    Ok(VideoStream { url, kind: "mp4", duration })
 }
 
 pub async fn prepare_youtube(ctx: &CoreCtx) -> Result<()> {

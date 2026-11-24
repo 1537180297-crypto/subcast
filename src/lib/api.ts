@@ -14,7 +14,10 @@ export interface CliStatus {
   linkPath: string | null;
   targetPath: string | null;
   needsUpdate: boolean;
+  /** A new terminal finds the command. */
   inPath: boolean;
+  /** Where SubCast just put the command's folder on the PATH (a shell startup file, or "PATH" on Windows). */
+  pathAdded?: string | null;
 }
 
 /** An AI agent on this computer and whether it can call SubCast (its MCP server). */
@@ -34,6 +37,9 @@ export interface Show {
   updatedAt: number;
   unplayed: number;
 }
+
+/** One line of the network diagnosis (src-tauri network_check). */
+export interface NetCheck { id: string; ok: boolean; ms?: number | null; detail: string }
 
 export interface Episode {
   id: string;
@@ -177,7 +183,8 @@ export const api = {
   localTtsStatus: () => invoke<LocalTtsStatus>("local_tts_status"),
   localTtsInstall: (id: string, mirrorFirst: boolean) => invoke<void>("local_tts_install", { id, mirrorFirst }),
   localTtsDelete: (id: string) => invoke<void>("local_tts_delete", { id }),
-  youtubeStream: (videoId: string, mode: "native-hls" | "proxy-hls" | "mp4", fresh = false) => invoke<{ url: string; kind: "hls" | "mp4" }>("youtube_stream", { videoId, mode, fresh }),
+  networkCheck: () => invoke<{ checks: NetCheck[]; webviewProxy: string }>("network_check"),
+  youtubeStream: (videoId: string, mode: "native-hls" | "proxy-hls" | "mp4", fresh = false) => invoke<{ url: string; kind: "hls" | "mp4"; duration?: number | null }>("youtube_stream", { videoId, mode, fresh }),
   uiReady: () => invoke<{ shell: string; build: number | null }>("ui_ready"),
   shareTranslation: (episodeId: string, engine: string, model: string) => invoke<string>("share_translation", { episodeId, engine, model }),
   exportOpml: () => invoke<string>("export_opml"),

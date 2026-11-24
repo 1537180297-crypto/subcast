@@ -85,10 +85,13 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
 pub fn open(app: &AppHandle) -> Result<()> {
     if let Some(w) = app.get_webview_window(LABEL) { let _ = w.set_focus(); return Ok(()); }
     let handle = app.clone();
-    WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(SIGN_IN.parse()?))
+    let mut builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(SIGN_IN.parse()?))
         .title("YouTube")
         .inner_size(480.0, 680.0)
-        .user_agent(AGENT)
+        .user_agent(AGENT);
+    // Same proxy as the main window: WebView2 won't open a second window with other browser arguments.
+    if let Some(p) = crate::webview_proxy() { builder = builder.proxy_url(p); }
+    builder
         .on_page_load(move |w, p| {
             if !matches!(p.event(), tauri::webview::PageLoadEvent::Finished) { return; }
             if !p.url().host_str().is_some_and(|h| h.ends_with("youtube.com")) { return; }
