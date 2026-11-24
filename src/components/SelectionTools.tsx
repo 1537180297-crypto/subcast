@@ -6,6 +6,7 @@ import { useJobs } from "../lib/jobs";
 import { CJK } from "../lib/zh";
 import { showName } from "../lib/picks";
 import { useStore } from "../store";
+import { useClipTools } from "../lib/clipTools";
 import { t } from "../lib/i18n";
 import { openVideoClipDialog } from "./VideoClipDialog";
 
@@ -76,6 +77,7 @@ export function SelectionTools() {
     catch { setTr(t("翻译服务暂时连不上，稍后再试")); }
   };
 
+  const clipTools = useClipTools();
   const clipVideo = async () => {
     if (!sel || sel.startIdx == null) return;
     const ep = await episode();
@@ -97,7 +99,7 @@ export function SelectionTools() {
             <button onClick={copy}><Copy size={13} /> {t("复制")}</button>
             <button onClick={translate}><Languages size={13} /> {t("翻译")}</button>
             <button onClick={() => { setPoster({ text: sel.text, ts: sel.ts }); setSel(null); }}><ImageIcon size={13} /> {t("生成海报")}</button>
-            {hasVideo && sel.startIdx != null && (
+            {clipTools && hasVideo && sel.startIdx != null && (
               <button onClick={() => void clipVideo()}><Scissors size={13} /> {t("剪视频")}</button>
             )}
           </div>

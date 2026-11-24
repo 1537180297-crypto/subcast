@@ -13,6 +13,7 @@ import rewardQr from "../assets/about-reward-qr.png";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, llmChat, type CliStatus, type CloudAsr, type ModelInfo, type Provider } from "../lib/api";
 import { useStore } from "../store";
+import { useClipTools } from "../lib/clipTools";
 import { bytes, clearAudioCache, clearDownloads, useOffline } from "../lib/offline";
 import { HomeShowCard } from "./YtPromo";
 import { YouTubeAccount } from "./YouTubeAccount";
@@ -229,6 +230,7 @@ export function SettingsView() {
                 </label>
                 <label className="check"><input type="checkbox" checked={settings.youtubePromo} onChange={(e) => saveSettings({ youtubePromo: e.target.checked })} /> {t("显示节目的 YouTube 订阅按钮")}</label>
                 {settings.youtubePromo && <label className="check"><input type="checkbox" checked={!settings.homeBannerHidden} onChange={(e) => saveSettings({ homeBannerHidden: !e.target.checked })} /> {t("在发现页顶部推荐「词元之外」")}</label>}
+                <ClipToolsToggle />
                 <label className="check"><input type="checkbox" checked={settings.sideCurated} onChange={(e) => saveSettings({ sideCurated: e.target.checked })} /> {t("在侧栏显示「乔木精读」推荐")}</label>
                 {isChineseUi() && (
                   <>
@@ -329,6 +331,18 @@ function UpdateStatus() {
 
 const REPO = "https://github.com/joeseesun/subcast";
 /** "占用 1.9 GB" for the 通用 page's storage row. */
+/** Highlights and clip-making: on for people who make clips, out of the way for the rest. */
+function ClipToolsToggle() {
+  const on = useClipTools();
+  const saveSettings = useStore((s) => s.saveSettings);
+  return (
+    <>
+      <label className="check"><input type="checkbox" checked={on} onChange={(e) => void saveSettings({ clipTools: e.target.checked })} /> {t("显示高光与剪视频功能")}</label>
+      <p className="muted small check-note">{t("字幕旁的「高光」、进度条上的高光标记、选中文字和 AI 回答里的「剪视频」。")}</p>
+    </>
+  );
+}
+
 /** Where highlight clips are saved: the Downloads folder unless the user picks another. */
 function ClipExportRow() {
   const { dir, saveSettings } = useStore(useShallow((s) => ({ dir: s.settings.clipExportDir ?? "", saveSettings: s.saveSettings })));
@@ -356,6 +370,7 @@ function StorageTotal() {
 }
 
 function Storage({ onAsr }: { onAsr: () => void }) {
+  const clipTools = useClipTools();
   const go = useStore((s) => s.go);
   const saved = useOffline((s) => s.saved);
   const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number; audioCache: number; ttsCache?: number; ttsModels?: number } | null>(null);
@@ -380,7 +395,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
           {n > 0 && <button className="btn ghost sm" onClick={() => go({ kind: "downloads" })}>{t("查看")}</button>}
           {n > 0 && <button className="icon-btn" title={t("全部删除")} onClick={clearAll}><Trash2 size={14} /></button>}
         </div>
-        <ClipExportRow />
+        {clipTools && <ClipExportRow />}
         <div className="storage-row">
           <div className="storage-row-text">
             <p className="storage-row-name">{t("语音识别模型")}</p>

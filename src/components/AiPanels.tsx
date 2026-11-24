@@ -10,6 +10,7 @@ import { ChatPrefsDialog, ModelPicker, PromptMenu, promptIcon, shortModel } from
 import { llmReady, useJobs } from "../lib/jobs";
 import { warmAgent } from "../lib/agents";
 import { providerFor, seekSoon, useStore } from "../store";
+import { useClipTools } from "../lib/clipTools";
 import { Markdown } from "./Markdown";
 import { AnswerActions, HistoryMenu, QuestionActions, type ArchivedChat } from "./ChatActions";
 import { AskArt, NightNote, PageArt, PlugArt } from "./Illustrations";
@@ -109,14 +110,15 @@ export function ChatPanel({ ep }: { ep: Episode }) {
   useEffect(() => { warmAgent(providerFor(useStore.getState().settings, "chat")); }, [chatProvider]);
   const seek = useSeek(ep);
   const translation = useJobs((s) => s.translations[ep.id]);
+  const clipTools = useClipTools();
   const clipRange = useMemo(() => {
-    if (!ep.videoId || !transcript?.segments.length) return undefined;
+    if (!clipTools || !ep.videoId || !transcript?.segments.length) return undefined;
     return (start: number, end?: number) => {
       const { startIdx, endIdx } = rangeFromClock(transcript.segments, start, end);
       const clip = createManualClip(transcript.segments, translation?.items, startIdx, endIdx, ep);
       openVideoClipDialog({ ep, segments: transcript.segments, zh: translation?.items, clip });
     };
-  }, [ep, transcript, translation?.items]);
+  }, [ep, transcript, translation?.items, clipTools]);
   const messages = useChats((s) => s[ep.id]?.messages ?? NO_MESSAGES);
   const streaming = useChats((s) => s[ep.id]?.streaming ?? null);
   const [input, setInput] = useState("");
@@ -294,14 +296,15 @@ export function SummaryPanel({ ep }: { ep: Episode }) {
   const translation = useJobs((s) => s.translations[ep.id]);
   const connected = useConnected();
   const seek = useSeek(ep);
+  const clipTools = useClipTools();
   const clipRange = useMemo(() => {
-    if (!ep.videoId || !transcript?.segments.length) return undefined;
+    if (!clipTools || !ep.videoId || !transcript?.segments.length) return undefined;
     return (start: number, end?: number) => {
       const { startIdx, endIdx } = rangeFromClock(transcript.segments, start, end);
       const clip = createManualClip(transcript.segments, translation?.items, startIdx, endIdx, ep);
       openVideoClipDialog({ ep, segments: transcript.segments, zh: translation?.items, clip });
     };
-  }, [ep, transcript, translation?.items]);
+  }, [ep, transcript, translation?.items, clipTools]);
   const job = useGuides((s) => s[ep.id]);
   const summary = job?.summary ?? null;
   const streaming = job?.streaming ?? null;

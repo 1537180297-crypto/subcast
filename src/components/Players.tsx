@@ -11,6 +11,7 @@ import { BrowserAccess } from "./BrowserAccess";
 import { clock } from "../lib/format";
 import { loadYouTube } from "../lib/youtube";
 import { offerPlayer, useStore, withdrawPlayer } from "../store";
+import { useClipTools } from "../lib/clipTools";
 import { subtitleModeFor, subtitleModePatch } from "../lib/settings";
 import { IS_MAC, t, tr } from "../lib/i18n";
 import { audioSrc, noteCached, useOffline } from "../lib/offline";
@@ -532,6 +533,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail }: { ep: Episode; src
 }
 
 export function Controls({ compact = false, video = false }: { compact?: boolean; video?: boolean }) {
+  const clipTools = useClipTools();
   // Whole seconds: the clock and bar move once a second instead of re-rendering on every time update.
   // The bar and clock follow the player's own clock (`rawTime`), which can differ from subtitle time.
   const { currentId, time, length, playing, player, playbackRate, skipBack, skipForward, loadingSince } = useStore(useShallow((s) => ({
@@ -580,7 +582,7 @@ export function Controls({ compact = false, video = false }: { compact?: boolean
         onMouseMove={(e) => updateHover(e.clientX)}
         onMouseLeave={() => setHover(null)}
       >
-        {!compact && <SeekHighlights episodeId={currentId} length={length} onSeek={(sec) => player?.seek(sec)} />}
+        {!compact && clipTools && <SeekHighlights episodeId={currentId} length={length} onSeek={(sec) => player?.seek(sec)} />}
         {tip && length > 0 && (
           <span className="seek-tip" style={{ left: `clamp(24px, ${tip.pct}%, calc(100% - 24px))` }} aria-hidden>
             {clock(tip.time)}
