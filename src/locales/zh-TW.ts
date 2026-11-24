@@ -1909,6 +1909,11 @@ const dict: Record<string, string> = {
   "已安装 subcast 命令，并加入了 PATH（{file}）。新开一个终端窗口就能用": "已安裝 subcast 指令，並加入了 PATH（{file}）。開一個新的終端機視窗就能用",
   "新开的终端还找不到 subcast 命令（{dir} 不在 PATH 里）。": "新開的終端機還找不到 subcast 指令（{dir} 不在 PATH 裡）。",
   "自动加入 PATH": "自動加入 PATH",
+  "已删除": "已刪除",
+  "撤销": "復原",
+  "正在编辑历史提问，发送后将从此处重新生成": "正在編輯歷史提問，傳送後將從此處重新產生",
+  "朗读导读": "朗讀導讀",
+  "已清理": "已清理",
 };
 
 export default dict;

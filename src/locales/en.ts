@@ -1849,6 +1849,11 @@ const dict: Record<string, string> = {
   "已安装 subcast 命令，并加入了 PATH（{file}）。新开一个终端窗口就能用": "Installed the subcast command and added it to PATH ({file}). Open a new terminal window to use it",
   "新开的终端还找不到 subcast 命令（{dir} 不在 PATH 里）。": "New terminals can't find the subcast command yet ({dir} isn't on PATH).",
   "自动加入 PATH": "Add to PATH",
+  "已删除": "Deleted",
+  "撤销": "Undo",
+  "正在编辑历史提问，发送后将从此处重新生成": "Editing an earlier question; sending regenerates from here",
+  "朗读导读": "Read guide aloud",
+  "已清理": "Cleared",
 };
 
 export default dict;

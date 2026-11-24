@@ -20,6 +20,7 @@ import { useJobs } from "../lib/jobs";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { playNext } from "../lib/library";
 import { markEnded, notePlaybackProgress } from "../lib/watched";
+import { useZh } from "../lib/zh";
 import { SeekHighlights } from "./HighlightViews";
 
 const SAVE_EVERY = 10;
@@ -401,16 +402,20 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
   const theater = useStore((s) => s.theater);
   // Leaving the episode leaves full screen too.
   useEffect(() => () => { if (useStore.getState().theater) toggleTheater(false); }, []);
-  // In full screen the controls show while the mouse moves and fade after 2.5 s of stillness.
+  // In full screen the controls show while the mouse moves or keys are pressed and fade after 2.5 s of stillness.
   const [idle, setIdle] = useState(false);
+  const titleZh = useZh(ep.title);
   useEffect(() => {
     if (!theater) return;
     let timer = window.setTimeout(() => setIdle(true), 2500);
     const wake = () => { setIdle(false); window.clearTimeout(timer); timer = window.setTimeout(() => setIdle(true), 2500); };
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); toggleTheater(false); } };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); toggleTheater(false); return; }
+      wake();
+    };
     window.addEventListener("mousemove", wake);
-    window.addEventListener("keydown", esc);
-    return () => { window.clearTimeout(timer); window.removeEventListener("mousemove", wake); window.removeEventListener("keydown", esc); };
+    window.addEventListener("keydown", onKey);
+    return () => { window.clearTimeout(timer); window.removeEventListener("mousemove", wake); window.removeEventListener("keydown", onKey); };
   }, [theater]);
   return (
     <div className={`video ${theater ? "theater" : ""} ${theater && idle ? "idle" : ""}`} ref={box}>
@@ -460,7 +465,7 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
       {!theater && <button className="video-fs" title={t("全屏（F）")} aria-label={t("全屏")} onClick={(e) => { e.stopPropagation(); fullscreen(); }}><Maximize2 size={16} /></button>}
       {theater && (
         <div className="theater-bar" onClick={(e) => e.stopPropagation()}>
-          <p className="theater-title clamp1">{ep.title}</p>
+          <p className="theater-title clamp1">{titleZh ?? ep.title}</p>
           <Controls compact />
           <button className="icon-btn theater-exit" title={t("退出全屏（Esc）")} aria-label={t("退出全屏")} onClick={() => toggleTheater(false)}><Minimize2 size={16} /></button>
         </div>
@@ -615,6 +620,7 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail, onLoaded }: { ep: Ep
   const ref = useRef<HTMLVideoElement>(null);
   const rate = useStore((s) => s.settings.playbackRate);
   const [started, setStarted] = useState(false);
+  const [paused, setPaused] = useState(false);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -665,13 +671,14 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail, onLoaded }: { ep: Ep
           onLoaded?.();
         }}
         onTimeUpdate={(e) => track(ep, e.currentTarget.currentTime)}
-        onPlay={(e) => { setStarted(true); useStore.getState().set({ playing: true }); if (e.currentTarget.readyState < 3) waiting(true); }}
+        onPlay={(e) => { setStarted(true); setPaused(false); useStore.getState().set({ playing: true }); if (e.currentTarget.readyState < 3) waiting(true); }}
         onWaiting={() => waiting(true)}
-        onPlaying={() => waiting(false)}
-        onPause={(e) => { waiting(false); useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); notePlaybackProgress(ep, e.currentTarget.currentTime, e.currentTarget.duration || ep.duration); }}
-        onEnded={(e) => { markEnded(ep, e.currentTarget.duration); playNext(); }} />
+        onPlaying={() => { setPaused(false); waiting(false); }}
+        onPause={(e) => { setPaused(true); waiting(false); useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); notePlaybackProgress(ep, e.currentTarget.currentTime, e.currentTarget.duration || ep.duration); }}
+        onEnded={(e) => { setPaused(false); markEnded(ep, e.currentTarget.duration); playNext(); }} />
       <div className="video-shield" onClick={() => toggleVideo(ep)} onDoubleClick={onFullscreen} />
       <PlayHint ep={ep} show={!started} onClick={() => toggleVideo(ep)} />
+      {started && paused && <span className="paused-mark" onClick={() => toggleVideo(ep)}><Play size={22} fill="currentColor" /></span>}
     </>
   );
 }
@@ -741,6 +748,8 @@ export function Controls({ compact = false, video = false }: { compact?: boolean
           value={Math.min(shown, length || shown)}
           onChange={(e) => setDrag(Number(e.target.value))}
           onPointerUp={() => { if (drag != null) { seekBar(drag); setDrag(null); } }}
+          onPointerCancel={() => setDrag(null)}
+          onBlur={() => setDrag(null)}
           onKeyUp={() => { if (drag != null) { seekBar(drag); setDrag(null); } }}
           style={{ "--fill": `${length ? (shown / length) * 100 : 0}%` } as React.CSSProperties}
           aria-label={t("播放进度")}
@@ -749,7 +758,7 @@ export function Controls({ compact = false, video = false }: { compact?: boolean
       <span className="time">{length ? clock(length) : "--:--"}</span>
       <VolumeControl />
       <RateMenu rate={playbackRate} max={player?.maxRate} />
-      {!compact && video && <button className="icon-btn" title={t("全屏（F）")} aria-label={t("全屏")} onClick={() => toggleTheater(true)}><Maximize2 size={17} /></button>}
+      {!compact && video && <button className="icon-btn fs-btn" title={t("全屏（F）")} aria-label={t("全屏")} onClick={() => toggleTheater(true)}><Maximize2 size={17} /></button>}
     </div>
   );
 }
@@ -793,7 +802,7 @@ function setRate(r: number) {
   void saveSettings({ playbackRate: r });
 }
 
-/** Speaker button (click mutes) with a slider that opens on hover or keyboard focus; the wheel over it adjusts. */
+/** Speaker button (click mutes) with a floating slider above it on hover or keyboard focus so the seek bar never shifts. */
 function VolumeControl() {
   const { level, muted } = useVolume(useShallow((s) => ({ level: s.level, muted: s.muted })));
   const shown = muted ? 0 : level;
@@ -802,10 +811,13 @@ function VolumeControl() {
   return (
     <div className="volume" onWheel={(e) => { if (e.deltaY) setLevel(shown - Math.sign(e.deltaY) * 0.05); }}>
       <button className="icon-btn" onClick={() => toggleMute()} title={muted ? t("取消静音（M）") : t("静音（M）")} aria-label={muted ? t("取消静音") : t("静音")}><Icon size={17} /></button>
-      <input className="seek volume-slider" type="range" min={0} max={1} step={0.01} value={shown}
-        onChange={(e) => setLevel(Number(e.target.value))}
-        style={{ "--fill": `${pct}%` } as React.CSSProperties}
-        aria-label={t("音量")} aria-valuetext={`${pct}%`} title={`${t("音量")} ${pct}%`} />
+      <div className="volume-pop">
+        <input className="seek volume-slider" type="range" min={0} max={1} step={0.01} value={shown}
+          onChange={(e) => setLevel(Number(e.target.value))}
+          style={{ "--fill": `${pct}%` } as React.CSSProperties}
+          aria-label={t("音量")} aria-valuetext={`${pct}%`} title={`${t("音量")} ${pct}%`} />
+        <span className="num small muted volume-pct">{pct}%</span>
+      </div>
     </div>
   );
 }

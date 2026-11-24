@@ -141,10 +141,20 @@ export function SettingsView() {
     if (settingsSection) setSection(LEGACY[settingsSection] ?? "subtitles");
     if (settingsSection === "agents") window.setTimeout(() => document.getElementById("agent-connect")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
     if (settingsSection === "network") window.setTimeout(() => document.getElementById("network")?.scrollIntoView({ behavior: "smooth", block: "center" }), 80);
+    if (settingsSection === "shortcuts") {
+      setShowKeys(true);
+      window.setTimeout(() => document.getElementById("shortcuts-section")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    }
+    if (settingsSection === "storage") {
+      setShowStorage(true);
+      window.setTimeout(() => document.getElementById("storage-section")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    }
   }, [settingsNonce]);
   useEffect(() => () => stopSpeaking(), []);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [proxy, setProxy] = useState(settings.proxy);
+  const [storageRev, setStorageRev] = useState(0);
+  useEffect(() => { setProxy(settings.proxy); }, [settings.proxy]);
   const [elsewhere, setElsewhere] = useState<{ app: string; format: string }[]>([]);
   const refresh = () => api.asrModels().then((m) => { setModels(m); void api.asrElsewhere().then((x) => setElsewhere(x ?? [])).catch(() => {}); });
   const { downloading, start, cancel } = useModelDownload(refresh);
@@ -158,7 +168,7 @@ export function SettingsView() {
   const NAV: [Section, string, LucideIcon][] = [["subtitles", tk("字幕"), Captions], ["ai", tk("AI"), Sparkles], ["tts", tk("朗读"), Volume2], ["general", tk("通用"), SlidersHorizontal], ["learn", tk("学英语"), GraduationCap], ["about", tk("关于"), Info]];
   const modelRow = (m: ModelInfo) => (
     <div key={m.id} className={`model-item ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`}>
-      <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrEngine: "local", asrModel: m.id })}>
+      <div role="button" tabIndex={0} className="model-pick" onClick={() => saveSettings({ asrEngine: "local", asrModel: m.id })} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), saveSettings({ asrEngine: "local", asrModel: m.id }))}>
         <span className={`radio ${settings.asrEngine === "local" && settings.asrModel === m.id ? "on" : ""}`} />
         <div><p>{tr(m.name)}</p><p className="muted small">{m.id.startsWith("file:") ? sizeMb(m.sizeMb) : [tr(m.note), sizeMb(m.sizeMb)].filter(Boolean).join(" · ")}</p></div>
       </div>
@@ -167,7 +177,10 @@ export function SettingsView() {
       ) : m.installed && m.from ? (
         <div className="dl"><span className="from-tag small">{t("来自 {app}", { app: tr(m.from) })}</span><button className="icon-btn" title={t("不再使用（原文件保留）")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><X size={14} /></button></div>
       ) : m.installed ? (
-        <div className="dl"><span className="ok-text small"><Check size={13} /> {t("已下载")}</span><button className="icon-btn" title={t("删除模型")} onClick={async () => { await api.deleteModel(m.id); void refresh(); }}><Trash2 size={14} /></button></div>
+        <div className="dl"><span className="ok-text small"><Check size={13} /> {t("已下载")}</span><button className="icon-btn" title={t("删除模型")} onClick={async () => {
+          if (!(await ask({ title: t("删除模型") + `「${tr(m.name)}」？`, message: sizeMb(m.sizeMb), ok: t("删除"), danger: true }))) return;
+          await api.deleteModel(m.id); setStorageRev((n) => n + 1); void refresh();
+        }}><Trash2 size={14} /></button></div>
       ) : (
         <button className="btn sm" onClick={() => start(m.id)} disabled={downloading != null}>{t("下载")}</button>
       )}
@@ -279,10 +292,10 @@ export function SettingsView() {
                 <p className="muted small">{t("只分享文字，帮别人省去等待。关掉后照样能用别人分享的。")}</p>
               </section>
               <section className="setup-block">
-                <button className="setting-row" aria-expanded={showKeys} onClick={() => setShowKeys(!showKeys)}><Keyboard size={15} /> <span>{t("快捷键")}</span><span className="muted small">{t("{key} 随时查看", { key: kbd("⌘/") })}</span><ChevronDown size={14} className={showKeys ? "flip" : ""} /></button>
+                <button id="shortcuts-section" className="setting-row" aria-expanded={showKeys} onClick={() => setShowKeys(!showKeys)}><Keyboard size={15} /> <span>{t("快捷键")}</span><span className="muted small">{t("{key} 随时查看", { key: kbd("⌘/") })}</span><ChevronDown size={14} className={showKeys ? "flip" : ""} /></button>
                 {showKeys && <ShortcutSettings />}
-                <button className="setting-row" aria-expanded={showStorage} onClick={() => setShowStorage(!showStorage)}><HardDrive size={15} /> <span>{t("存储")}</span><StorageTotal /><ChevronDown size={14} className={showStorage ? "flip" : ""} /></button>
-                {showStorage && <Storage onAsr={() => setSection("subtitles")} />}
+                <button id="storage-section" className="setting-row" aria-expanded={showStorage} onClick={() => setShowStorage(!showStorage)}><HardDrive size={15} /> <span>{t("存储")}</span><StorageTotal rev={storageRev} /><ChevronDown size={14} className={showStorage ? "flip" : ""} /></button>
+                {showStorage && <Storage onAsr={() => setSection("subtitles")} onTts={() => setSection("tts")} onChanged={() => setStorageRev((n) => n + 1)} />}
                 <button className="setting-row" aria-expanded={showCli} onClick={() => setShowCli(!showCli)}><Terminal size={15} /> <span>{t("命令行工具（CLI）")}</span><span className="muted small">subcast</span><ChevronDown size={14} className={showCli ? "flip" : ""} /></button>
                 {showCli && <CliSettings />}
               </section>
@@ -374,24 +387,26 @@ function ClipExportRow() {
   );
 }
 
-function StorageTotal() {
+function StorageTotal({ rev }: { rev: number }) {
+  const saved = useOffline((s) => s.saved);
   const [total, setTotal] = useState<number | null>(null);
-  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp + (i.audioCache ?? 0) + (i.ttsCache ?? 0) + (i.ttsModels ?? 0))).catch(() => {}); }, []);
+  useEffect(() => { void api.storageInfo().then((i) => setTotal(i.downloads + i.models + i.library + i.temp + (i.audioCache ?? 0) + (i.ttsCache ?? 0) + (i.ttsModels ?? 0))).catch(() => {}); }, [rev, saved]);
   return <span className="muted small">{total == null ? "" : t("占用 {size}", { size: bytes(total) })}</span>;
 }
 
-function Storage({ onAsr }: { onAsr: () => void }) {
+function Storage({ onAsr, onTts, onChanged }: { onAsr: () => void; onTts: () => void; onChanged: () => void }) {
   const clipTools = useClipTools();
   const go = useStore((s) => s.go);
+  const notify = useStore((s) => s.notify);
   const saved = useOffline((s) => s.saved);
   const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number; audioCache: number; ttsCache?: number; ttsModels?: number } | null>(null);
-  const load = () => void api.storageInfo().then(setInfo).catch(() => {});
-  useEffect(load, [saved]);
+  const load = () => { void api.storageInfo().then(setInfo).catch(() => {}); onChanged(); };
+  useEffect(() => { void api.storageInfo().then(setInfo).catch(() => {}); }, [saved]);
   const n = Object.keys(saved).length;
   const size = (b?: number) => (info ? (b ? bytes(b) : "0 MB") : "…");
   const clearAll = async () => {
     if (!(await ask({ title: t("删除全部已下载的音频？"), message: t("字幕、精读和收听进度都会保留。"), ok: t("全部删除"), danger: true }))) return;
-    await clearDownloads(); load();
+    await clearDownloads(); load(); notify(t("已清理"));
   };
   return (
     <>
@@ -431,7 +446,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
               <p className="muted small">{t("识别字幕或对齐字幕时留下的音频，播放时优先用它，字幕和声音更准；最多占 2 GB，久不听的先删")}</p>
             </div>
             <span className="storage-size">{size(info.audioCache)}</span>
-            <button className="btn sm" onClick={() => void clearAudioCache().then(load)}>{t("清理")}</button>
+            <button className="btn sm" onClick={() => void clearAudioCache().then(() => { load(); notify(t("已清理")); })}>{t("清理")}</button>
           </div>
         )}
         {!!info?.ttsModels && (
@@ -442,6 +457,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
             </div>
             <span className="storage-size">{size(info.ttsModels)}</span>
             <button className="btn sm" onClick={() => void api.openDataFolder("tts-models")}><FolderOpen size={13} /> {t("打开文件夹")}</button>
+            <button className="btn ghost sm" onClick={onTts}>{t("管理")}</button>
           </div>
         )}
         {!!info?.ttsCache && (
@@ -452,7 +468,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
             </div>
             <span className="storage-size">{size(info.ttsCache)}</span>
             <button className="btn ghost sm" onClick={() => void api.openDataFolder("tts-cache")}><FolderOpen size={13} /> {t("打开文件夹")}</button>
-            <button className="btn sm" onClick={() => void api.clearTtsCache().then(load)}>{t("清理")}</button>
+            <button className="btn sm" onClick={() => void api.clearTtsCache().then(() => { load(); notify(t("已清理")); })}>{t("清理")}</button>
           </div>
         )}
         {!!info?.temp && (
@@ -462,7 +478,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
               <p className="muted small">{t("中断的识别留下的音频，可以放心清理")}</p>
             </div>
             <span className="storage-size">{size(info.temp)}</span>
-            <button className="btn sm" onClick={() => void api.clearTemp().then(load)}>{t("清理")}</button>
+            <button className="btn sm" onClick={() => void api.clearTemp().then(() => { load(); notify(t("已清理")); })}>{t("清理")}</button>
           </div>
         )}
       </div>

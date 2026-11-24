@@ -410,7 +410,7 @@ function DownloadButton({ ep }: { ep: Episode }) {
 function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; setTab: (t: Tab) => void; startAudio: boolean }) {
   // Feeds sometimes mark a deep-read that isn't there: then the tab goes away.
   const [noDeep, setNoDeep] = useState<string | null>(null);
-  const { current, load } = useStore(useShallow((s) => ({ current: s.current, load: s.load })));
+  const { current, load, otherPlaying } = useStore(useShallow((s) => ({ current: s.current, load: s.load, otherPlaying: !!s.current && s.current.id !== ep.id && s.playing })));
   const go = useStore((s) => s.go);
   // Only a subscribed show has a page to go back to; others (opened from search or Discover) stay plain text.
   const hasShow = useStore((s) => s.shows.some((x) => x.id === ep.showId));
@@ -503,11 +503,21 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
             </div>
           )}
           {showVideo ? (
-            <VideoSlot ep={ep} overlay={videoOverlay} onUnplayable={ep.audioUrl || saved ? onUnplayable : undefined} />
+            otherPlaying ? (
+              <div className="video-slot video-standby" role="button" tabIndex={0} onClick={() => { load(ep); playSoon(ep.id); }} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), load(ep), playSoon(ep.id))} title={t("播放这一集")}>
+                {ep.cover ? <img src={ep.cover} alt="" /> : <img src={`https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg`} alt="" />}
+                <span className="big-play"><Play size={28} fill="currentColor" /></span>
+              </div>
+            ) : (
+              <VideoSlot ep={ep} overlay={videoOverlay} onUnplayable={ep.audioUrl || saved ? onUnplayable : undefined} />
+            )
           ) : (
             <div className="audio-stage">
               <CoverPlay ep={ep} isCurrent={isCurrent} onToggle={coverToggle} />
-              <div className="audio-sub"><AudioSubtitles ep={ep} /></div>
+              <div className="audio-sub">
+                <AudioSubtitles ep={ep} />
+                {transcript && <SubtitleTune ep={ep} />}
+              </div>
             </div>
           )}
           {isCurrent ? <div className="controls-slot" ref={controlsRef}><Controls video={showVideo} /></div> : (
