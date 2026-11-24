@@ -72,6 +72,38 @@ export function switchToOriginalAudio(videoId?: string) {
 
 /** Playback asked for, sound not there yet: the controls show it, and say more if it takes long. */
 export const waiting = (on: boolean) => { const s = useStore.getState(); if (on ? !s.loadingSince : s.loadingSince) s.set({ loadingSince: on ? Date.now() : null }); };
+/** The play/pause button: while playback is still loading it cancels the request (it shows a pause on hover),
+ *  even before a player exists (the direct stream is still being fetched). */
+export function pressPlay() {
+  const s = useStore.getState();
+  if (s.loadingSince && !s.player) { s.set({ loadingSince: null, playWhenReady: null, playing: false }); return; }
+  s.player?.toggle();
+}
+/** The current episode is loading and has been for at least `after` ms (re-renders when that moment comes). */
+/** A click on a video (its poster or picture): this episode's player toggles; before it exists (still loading, or
+ *  another episode holds the controls) the episode is loaded and plays as soon as its player is ready. */
+function toggleVideo(ep: Episode) {
+  const s = useStore.getState();
+  if (s.player && s.player.episodeId === ep.id) { s.player.toggle(); return; }
+  s.load(ep);
+  playSoon(ep.id);
+}
+export function useLoadingFor(id: string | undefined, after = 0): boolean {
+  const since = useStore((s) => (id && s.current?.id === id ? s.loadingSince ?? null : null));
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!since || !after) return;
+    const left = since + after - Date.now();
+    if (left <= 0) return;
+    const timer = window.setTimeout(() => tick((n) => n + 1), left + 50);
+    return () => window.clearTimeout(timer);
+  }, [since, after]);
+  return !!since && Date.now() - since >= after;
+}
+/** Spinner that turns into a pause sign on hover: loading, and a click cancels it. */
+export function LoadingIcon({ size }: { size: number }) {
+  return <span className="loading-icon"><Loader2 size={size} className="spin" /><Pause size={size} fill="currentColor" className="loading-cancel" /></span>;
+}
 let lastSaved = 0;
 // Listening time: wall-clock time while playing, at most 2 s per tick (a seek or a sleeping laptop adds
 // nothing), flushed every 20 s and on pause.
@@ -207,6 +239,8 @@ const nativeHls = () => document.createElement("video").canPlayType("application
 const STREAM_WAIT = 40_000;
 /** How long a direct stream may take to show its first frame's details (its length) before it counts as stuck. */
 const STALL_WAIT = 20_000;
+/** Play loading this long gets a "loading slowly" note with the ways out (audio, YouTube). */
+const SLOW_AFTER = 8_000;
 /** An embedded player asked to play that hasn't started after this long counts as not working here. */
 const EMBED_START_WAIT = 20_000;
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -352,6 +386,8 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
     void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
   };
   const openBtn = <button className="link-btn video-open" onClick={watchOnYouTube}><ExternalLink size={13} /> {t("在 YouTube 打开")}</button>;
+  // Play has been loading a while (and nothing else explains it yet): say so, with the ways out.
+  const slow = useLoadingFor(ep.id, SLOW_AFTER);
   // Waiting on the direct stream need not be the only way out when the episode has its audio.
   const audioBtn = onUnplayable ? <button className="link-btn video-open" onClick={onUnplayable}>{t("改听音频")}</button> : null;
   const fullscreen = () => toggleTheater();
@@ -375,7 +411,8 @@ export function YouTubePlayer({ ep, overlay, onUnplayable }: { ep: Episode; over
         : native ? <NativeVideo ep={ep} src={native.url} kind={native.kind} onFullscreen={fullscreen} onFail={failed} onLoaded={() => { loadedOnce.current = true; }} />
         : direct ? <PlayHint ep={ep} show onClick={() => { useStore.getState().load(ep); playSoon(ep.id); if (error) retry(); }} />
         : <EmbedVideo ep={ep} onFullscreen={fullscreen} onBlocked={(why, noRoute) => void fallback(why, noRoute)} onError={setError} />}
-      {fallingBack && <div className="video-note"><span className="spin-dot" /> {fallingBack} {audioBtn} {openBtn}</div>}
+      {fallingBack ? <div className="video-note"><span className="spin-dot" /> {fallingBack} {audioBtn} {openBtn}</div>
+        : slow && !error && !botCheck && denied == null && <div className="video-note"><span className="spin-dot" /> {t("视频加载较慢…")} {audioBtn} {openBtn}</div>}
       {botCheck && (
         <div className="video-error bot-check">
           <p>{t("YouTube 要求验证「不是机器人」才能播放这个视频。")}</p>
@@ -435,11 +472,14 @@ export function toggleTheater(on?: boolean) {
   void getCurrentWindow().setFullscreen(next).catch(() => {});
 }
 
+/** The poster over a video that hasn't started. While play is loading its button spins (a pause on hover: a click
+ *  cancels), so it doesn't invite pressing play again. */
 function PlayHint({ ep, show, onClick }: { ep: Episode; show: boolean; onClick: () => void }) {
+  const loading = useLoadingFor(ep.id);
   return (
-    <div className={`video-poster ${show ? "on" : ""}`} onClick={onClick}>
+    <div className={`video-poster ${show ? "on" : ""}`} onClick={loading ? pressPlay : onClick} title={loading ? t("正在加载…（点击取消）") : undefined}>
       <img src={`https://i.ytimg.com/vi/${ep.videoId}/maxresdefault.jpg`} onError={(e) => { const i = e.currentTarget; if (!i.dataset.f) { i.dataset.f = "1"; i.src = `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg`; } }} alt="" />
-      <span className="big-play"><Play size={28} fill="currentColor" /></span>
+      <span className={`big-play ${loading ? "loading" : ""}`}>{loading ? <LoadingIcon size={28} /> : <Play size={28} fill="currentColor" />}</span>
     </div>
   );
 }
@@ -552,7 +592,7 @@ function EmbedVideo({ ep, onFullscreen, onBlocked, onError }: { ep: Episode; onF
   }, [ep.id]);
 
   useEffect(() => { playerRef.current?.setPlaybackRate?.(rate); }, [rate]);
-  const toggle = () => useStore.getState().player?.toggle();
+  const toggle = () => toggleVideo(ep);
   return (
     <>
       <div className="video-host crop" ref={host} />
@@ -623,8 +663,8 @@ function NativeVideo({ ep, src, kind, onFullscreen, onFail, onLoaded }: { ep: Ep
         onPlaying={() => waiting(false)}
         onPause={(e) => { waiting(false); useStore.getState().set({ playing: false }); void api.setProgress(ep.id, e.currentTarget.currentTime); notePlaybackProgress(ep, e.currentTarget.currentTime, e.currentTarget.duration || ep.duration); }}
         onEnded={(e) => { markEnded(ep, e.currentTarget.duration); playNext(); }} />
-      <div className="video-shield" onClick={() => useStore.getState().player?.toggle()} onDoubleClick={onFullscreen} />
-      <PlayHint ep={ep} show={!started} onClick={() => useStore.getState().player?.toggle()} />
+      <div className="video-shield" onClick={() => toggleVideo(ep)} onDoubleClick={onFullscreen} />
+      <PlayHint ep={ep} show={!started} onClick={() => toggleVideo(ep)} />
     </>
   );
 }
@@ -665,8 +705,8 @@ export function Controls({ compact = false, video = false }: { compact?: boolean
         <RotateCcw size={18} />
         <span className="skip-num">{skipBack}</span>
       </button>
-      <button className={`play-btn ${loadingSince ? "loading" : ""}`} title={loadingSince ? t("正在加载…") : playing ? t("暂停（空格）") : t("播放（空格）")} onClick={() => player?.toggle()} disabled={!player} aria-busy={!!loadingSince}>
-        {loadingSince ? <Loader2 size={20} className="spin" /> : playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+      <button className={`play-btn ${loadingSince ? "loading" : ""}`} title={loadingSince ? t("正在加载…（点击取消）") : playing ? t("暂停（空格）") : t("播放（空格）")} onClick={pressPlay} disabled={!player && !loadingSince} aria-busy={!!loadingSince}>
+        {loadingSince ? <LoadingIcon size={20} /> : playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
       </button>
       <button className="icon-btn skip-btn" title={t("前进 {n} 秒（→）", { n: skipForward })} aria-label={t("前进 {n} 秒", { n: skipForward })} onClick={() => player?.seek(sub() + skipForward)} disabled={!player}>
         <RotateCw size={18} />

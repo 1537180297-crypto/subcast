@@ -851,7 +851,6 @@ const dict: Record<string, string> = {
   "多": "More",
   "近 7 天": "Last 7 days",
   "近 30 天": "Last 30 days",
-  "正在加载…": "Loading…",
   "欢迎使用 SubCast": "Welcome to SubCast",
   "正在为你准备几档精选节目…": "Getting a few great shows ready for you…",
   "已经为你订阅了 {n} 档精选节目，点任意一集就有双语字幕。": "We've subscribed you to {n} hand-picked shows; open any episode for bilingual subtitles.",
@@ -1820,6 +1819,8 @@ const dict: Record<string, string> = {
   "改听音频": "Listen to the audio instead",
   "代理设置": "Proxy settings",
   "YouTube 播放器没有响应": "The YouTube player isn't responding",
+  "正在加载…（点击取消）": "Loading… (click to cancel)",
+  "视频加载较慢…": "The video is loading slowly…",
 };
 
 export default dict;
