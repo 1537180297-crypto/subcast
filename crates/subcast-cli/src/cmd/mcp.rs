@@ -39,6 +39,33 @@ fn tool_defs() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "preview_show",
+            "description": "List a podcast feed's, Xiaoyuzhou show's or YouTube channel's episodes WITHOUT subscribing. The returned episode ids work as `reference` in every other tool.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["input"],
+                "properties": { "input": { "type": "string", "description": "Feed, Xiaoyuzhou, Apple Podcasts or YouTube channel URL" }, "limit": { "type": "integer", "default": 20 } }
+            }
+        }),
+        json!({
+            "name": "find_show",
+            "description": "Find shows by name (YouTube channels and podcasts), each with source, channel/author, episode count and newest episode (title, date) and its link. When more than one could be what the user means (look-alike names, or the same show as both a podcast and a YouTube channel), ASK THE USER to choose, showing those details, before going on; then pass the chosen feedUrl to preview_show or as a reference.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": { "name": { "type": "string" } }
+            }
+        }),
+        json!({
+            "name": "search_podcasts",
+            "description": "Search the Apple Podcasts directory by name. Returns feed URLs to use with preview_show.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["term"],
+                "properties": { "term": { "type": "string" }, "country": { "type": "string", "default": "cn" } }
+            }
+        }),
+        json!({
             "name": "add_subscription",
             "description": "Subscribe to a feed URL, Xiaoyuzhou URL, Apple Podcasts URL, or YouTube channel/video.",
             "inputSchema": {
@@ -53,7 +80,7 @@ fn tool_defs() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "required": ["reference"],
-                "properties": { "reference": { "type": "string" } }
+                "properties": { "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." } }
             }
         }),
         json!({
@@ -63,7 +90,7 @@ fn tool_defs() -> Vec<Value> {
                 "type": "object",
                 "required": ["reference"],
                 "properties": {
-                    "reference": { "type": "string" },
+                    "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." },
                     "format": { "type": "string", "default": "txt" },
                     "content": { "type": "string", "default": "bilingual" }
                 }
@@ -76,7 +103,7 @@ fn tool_defs() -> Vec<Value> {
                 "type": "object",
                 "required": ["reference"],
                 "properties": {
-                    "reference": { "type": "string" },
+                    "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." },
                     "model": { "type": "string" },
                     "language": { "type": "string" },
                     "noShared": { "type": "boolean", "default": false }
@@ -90,7 +117,7 @@ fn tool_defs() -> Vec<Value> {
                 "type": "object",
                 "required": ["reference"],
                 "properties": {
-                    "reference": { "type": "string" },
+                    "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." },
                     "mode": { "type": "string", "default": "auto" },
                     "target": { "type": "string", "default": "zh-CN" }
                 }
@@ -103,7 +130,7 @@ fn tool_defs() -> Vec<Value> {
                 "type": "object",
                 "required": ["reference"],
                 "properties": {
-                    "reference": { "type": "string" },
+                    "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." },
                     "regenerate": { "type": "boolean", "default": false }
                 }
             }
@@ -115,7 +142,7 @@ fn tool_defs() -> Vec<Value> {
                 "type": "object",
                 "required": ["reference", "question"],
                 "properties": {
-                    "reference": { "type": "string" },
+                    "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." },
                     "question": { "type": "string" },
                     "reset": { "type": "boolean", "default": false }
                 }
@@ -128,7 +155,7 @@ fn tool_defs() -> Vec<Value> {
                 "type": "object",
                 "required": ["reference"],
                 "properties": {
-                    "reference": { "type": "string" },
+                    "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." },
                     "intent": { "type": "string" }
                 }
             }
@@ -140,7 +167,7 @@ fn tool_defs() -> Vec<Value> {
                 "type": "object",
                 "required": ["reference", "start", "end"],
                 "properties": {
-                    "reference": { "type": "string" },
+                    "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." },
                     "start": { "type": "string" },
                     "end": { "type": "string" },
                     "preset": { "type": "string", "default": "vertical" },
@@ -155,7 +182,7 @@ fn tool_defs() -> Vec<Value> {
                 "type": "object",
                 "required": ["outputPath"],
                 "properties": {
-                    "reference": { "type": "string" },
+                    "reference": { "type": "string", "description": "Episode id or title, or a link (YouTube video, episode page, feed or channel; used without subscribing), or a local audio/video file. A show name alone, or `<show>:latest` / `<show>:@2`, means that show's newest or Nth newest episode, subscribed or not. If the reply says several shows match, ask the user which one (list the details given) and call again with the chosen link." },
                     "orig": { "type": "string" },
                     "zh": { "type": "string" },
                     "theme": { "type": "string", "default": "paper" },
@@ -212,6 +239,11 @@ fn tool_defs() -> Vec<Value> {
     ]
 }
 
+/// An episode by id, title or link. Links are used without subscribing (see resolve_or_ingest_episode).
+async fn episode_of(ctx: &CoreCtx, reference: &str) -> anyhow::Result<subcast_core::model::Episode> {
+    crate::cmd::resolve_or_ingest_episode(ctx, reference).await.map_err(|e| anyhow::anyhow!(e.message))
+}
+
 async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Value> {
     let sink = NoopSink;
     match name {
@@ -237,6 +269,22 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
             let hits = ops::search_show(ctx, &sh.id, query).await?;
             Ok(serde_json::to_value(hits)?)
         }
+        "preview_show" => {
+            let input = args["input"].as_str().unwrap_or("");
+            let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+            let prev = ops::preview_show(ctx, input).await?;
+            let eps: Vec<Value> = prev.episodes.iter().take(limit).map(|e| json!({ "id": e.id, "title": e.title, "published": e.published, "duration": e.duration, "link": e.link })).collect();
+            Ok(json!({ "show": { "title": prev.show.title, "author": prev.show.author, "kind": prev.show.kind }, "episodes": eps }))
+        }
+        "find_show" => {
+            let name = args["name"].as_str().unwrap_or("");
+            Ok(json!({ "candidates": resolver::show_candidates(ctx, name, 6).await? }))
+        }
+        "search_podcasts" => {
+            let term = args["term"].as_str().unwrap_or("");
+            let country = args["country"].as_str().unwrap_or("cn");
+            Ok(serde_json::to_value(subcast_core::feeds::search_podcasts(term, country).await?)?)
+        }
         "add_subscription" => {
             let input = args["input"].as_str().unwrap_or("");
             let added = ops::add_subscription(ctx, input).await?;
@@ -244,7 +292,7 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
         }
         "get_episode" => {
             let r = args["reference"].as_str().unwrap_or("");
-            let ep = resolver::resolve_episode(ctx, r).await?;
+            let ep = episode_of(ctx, r).await?;
             let tr = db::get_transcript(&ctx.db.lock().unwrap(), &ep.id)?;
             Ok(json!({ "episode": ep, "segments": tr.map(|t| t.segments.len()).unwrap_or(0) }))
         }
@@ -254,7 +302,7 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
                 .unwrap_or(subexport::SubFormat::Txt);
             let content = subexport::SubContent::parse(args["content"].as_str().unwrap_or("bilingual"))
                 .unwrap_or(subexport::SubContent::Bilingual);
-            let ep = resolver::resolve_episode(ctx, r).await?;
+            let ep = episode_of(ctx, r).await?;
             let tr = db::get_transcript(&ctx.db.lock().unwrap(), &ep.id)?
                 .ok_or_else(|| anyhow::anyhow!("暂无字幕"))?;
             let zh = ai::load_episode_zh(ctx, &ep.id);
@@ -265,7 +313,7 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
         }
         "transcribe_episode" => {
             let r = args["reference"].as_str().unwrap_or("");
-            let ep = resolver::resolve_episode(ctx, r).await?;
+            let ep = episode_of(ctx, r).await?;
             let eff = settings::load_effective(ctx)?;
             let model = args["model"].as_str().or_else(|| eff["asrModel"].as_str()).unwrap_or("qwen3-asr");
             let lang = args["language"].as_str().or_else(|| eff["asrLanguage"].as_str()).unwrap_or("auto");
@@ -275,7 +323,7 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
         }
         "translate_episode" => {
             let r = args["reference"].as_str().unwrap_or("");
-            let ep = resolver::resolve_episode(ctx, r).await?;
+            let ep = episode_of(ctx, r).await?;
             let rep = ai::translate_episode(
                 ctx,
                 &ep.id,
@@ -293,7 +341,7 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
         }
         "generate_guide" => {
             let r = args["reference"].as_str().unwrap_or("");
-            let ep = resolver::resolve_episode(ctx, r).await?;
+            let ep = episode_of(ctx, r).await?;
             let (md, src) = ai::generate_guide(
                 ctx,
                 &ep.id,
@@ -310,7 +358,7 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
         "ask_episode" => {
             let r = args["reference"].as_str().unwrap_or("");
             let q = args["question"].as_str().unwrap_or("");
-            let ep = resolver::resolve_episode(ctx, r).await?;
+            let ep = episode_of(ctx, r).await?;
             let (ans, turns) = ai::ask_episode(
                 ctx,
                 &ep.id,
@@ -328,13 +376,13 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
         }
         "extract_highlights" => {
             let r = args["reference"].as_str().unwrap_or("");
-            let ep = resolver::resolve_episode(ctx, r).await?;
+            let ep = episode_of(ctx, r).await?;
             let b = highlights::extract_highlights(ctx, &ep.id, args["intent"].as_str(), None, None, &sink).await?;
             Ok(serde_json::to_value(b)?)
         }
         "clip_video" => {
             let r = args["reference"].as_str().unwrap_or("");
-            let ep = resolver::resolve_episode(ctx, r).await?;
+            let ep = episode_of(ctx, r).await?;
             let s = resolver::parse_timestamp(args["start"].as_str().unwrap_or("0"))?;
             let e = resolver::parse_timestamp(args["end"].as_str().unwrap_or("30"))?;
             let res = ops::clip_video_full(
@@ -356,7 +404,7 @@ async fn call_tool(ctx: &CoreCtx, name: &str, args: &Value) -> anyhow::Result<Va
             let mut show_title = String::new();
             let mut ep_title = String::new();
             if let Some(r) = args["reference"].as_str().filter(|s| !s.is_empty()) {
-                if let Ok(ep) = resolver::resolve_episode(ctx, r).await {
+                if let Ok(ep) = episode_of(ctx, r).await {
                     ep_title = ep.title;
                     show_title = ep.show_title.unwrap_or_default();
                 }

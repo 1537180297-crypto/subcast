@@ -122,7 +122,9 @@ pub fn delete_show(conn: &Connection, id: &str, keep_episode_id: Option<&str>) -
 }
 
 const EPISODE_COLS: &str = "e.id,e.show_id,e.guid,e.title,e.published,e.duration,e.audio_url,e.video_id,e.link,e.cover,e.notes,e.transcript_url,e.transcript_type,e.progress,
-    EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id), s.title, e.deep, e.watched_override";
+    EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id),
+    COALESCE(s.title, (SELECT json_extract(b.data, '$.title') FROM blobs b WHERE b.episode_id=e.show_id AND b.kind='show-json')),
+    e.deep, e.watched_override";
 
 /// The same columns without show notes, which are large and lists don't show.
 fn list_cols() -> String { EPISODE_COLS.replacen("e.notes", "NULL", 1) }

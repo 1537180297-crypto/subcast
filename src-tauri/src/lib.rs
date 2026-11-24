@@ -888,6 +888,26 @@ fn cli_status() -> CliStatus {
 
 #[tauri::command]
 fn cli_install() -> Res<CliStatus> {
+    install_cli_link()
+}
+
+/// Puts the `subcast` command on the PATH by itself, so it works right after installing the app: once on the first
+/// launch (a removed link stays removed after that), and on every launch a link that points at an older copy of the
+/// app is pointed at this one. Never replaces a file that isn't our link.
+#[cfg(not(debug_assertions))]
+fn auto_install_cli(data: &std::path::Path) {
+    let status = inspect_cli_status();
+    if !status.bundled { return; }
+    let marker = data.join("cli-auto-installed");
+    let first = !marker.exists();
+    let ours_outdated = status.installed && status.needs_update && status.link_path.as_deref().is_some_and(|l| std::fs::symlink_metadata(l).is_ok_and(|m| m.file_type().is_symlink()));
+    if (first && !status.installed) || ours_outdated {
+        let _ = install_cli_link();
+    }
+    if first { let _ = std::fs::write(&marker, b"1"); }
+}
+
+fn install_cli_link() -> Res<CliStatus> {
     let bundled = bundled_cli_path().ok_or_else(|| "当前安装包里没有附带命令行程序（subcast-cli）".to_string())?;
     #[cfg(unix)]
     {
@@ -975,6 +995,11 @@ pub fn run() {
             #[cfg(not(debug_assertions))]
             let ui_data = data.clone();
             app.manage(AppState { ctx });
+            #[cfg(not(debug_assertions))]
+            {
+                let data = data.clone();
+                std::thread::spawn(move || auto_install_cli(&data));
+            }
             #[cfg(debug_assertions)]
             let url = tauri::WebviewUrl::App("index.html".into());
             #[cfg(not(debug_assertions))]

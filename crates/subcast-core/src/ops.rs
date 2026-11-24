@@ -250,18 +250,21 @@ pub fn cached_show(ctx: &CoreCtx, input: &str) -> Result<Option<Preview>> {
 pub async fn preview_show(ctx: &CoreCtx, input: &str) -> Result<Preview> {
     match fetch_input(ctx, input).await? {
         Fetched::Single(_) => Err(anyhow!("这是单集链接，不是频道")),
-        Fetched::Show(show, eps) => {
-            let mut conn = ctx.db.lock().unwrap();
-            db::upsert_episodes(&mut conn, &eps)?;
-            let now = now_ms();
-            if let Ok(json) = serde_json::to_string(&show) {
-                let _ = db::set_blob(&conn, &show.id, "show-json", &json);
-            }
-            let _ = db::set_blob(&conn, &show.id, "fetched-at", &now.to_string());
-            let episodes = db::list_episodes(&conn, Some(&show.id), 300)?;
-            Ok(Preview { show, episodes, fetched_at: now })
-        }
+        Fetched::Show(show, eps) => keep_preview(ctx, show, eps),
     }
+}
+
+/// Keeps a fetched show's episodes (and the show's details, for its name) without following the show.
+pub fn keep_preview(ctx: &CoreCtx, show: Show, eps: Vec<Episode>) -> Result<Preview> {
+    let mut conn = ctx.db.lock().unwrap();
+    db::upsert_episodes(&mut conn, &eps)?;
+    let now = now_ms();
+    if let Ok(json) = serde_json::to_string(&show) {
+        let _ = db::set_blob(&conn, &show.id, "show-json", &json);
+    }
+    let _ = db::set_blob(&conn, &show.id, "fetched-at", &now.to_string());
+    let episodes = db::list_episodes(&conn, Some(&show.id), 300)?;
+    Ok(Preview { show, episodes, fetched_at: now })
 }
 
 pub async fn refresh_show(ctx: &CoreCtx, id: &str) -> Result<Show> {
