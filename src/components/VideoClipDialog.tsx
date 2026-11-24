@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronLeft, ChevronRight, Copy, FolderOpen, Image as ImageIcon, Loader2, Pause, Play, RotateCcw, Scissors, Volume2, VolumeX, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FolderOpen, Image as ImageIcon, Loader2, Pause, Play, RotateCcw, Scissors, Volume2, VolumeX, X } from "lucide-react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorText, rawErrorText, type Episode, type RenderVideoClipResult, type Segment, type VideoClipProgress } from "../lib/api";
@@ -10,7 +10,7 @@ import { ask } from "../lib/confirm";
 import { clock } from "../lib/format";
 import { buildPlatformPost, polishClipCopy, saveClipCopy, type HighlightClip, type PostPlatform } from "../lib/highlights";
 import { kbd, t, tk, tr, tx, useLang } from "../lib/i18n";
-import { useJobs } from "../lib/jobs";
+import { llmReady, useJobs } from "../lib/jobs";
 import { showName } from "../lib/picks";
 import { aiLineBreaks, textsToBreak } from "../lib/clipLines";
 import { buildClipCues, canvasToPngBase64, clipGeometry, fromOldLayout, renderCueBand, renderStaticOverlay, type CardBg, type CardCrop, type ClipAspect, type ClipFit, type ClipLayout, type ClipVisualConfig, type SubStyleId } from "../lib/videoClipCanvas";
@@ -620,7 +620,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
   useEffect(() => {
     if (autoFilled.current || clip.articleCopy) return;
     autoFilled.current = true;
-    void runAiPolish(true);
+    void llmReady("chat").then((ok) => { if (ok) void runAiPolish(true); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
 
@@ -1119,7 +1119,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                         style={ytFrameStyle}
                         onLoad={() => ytRef.current?.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: 1, channel: "widget" }), "*")}
                         allow="autoplay; encrypted-media"
-                        src={`https://www.youtube.com/embed/${ep.videoId}?start=${Math.floor(clipStart)}&end=${Math.ceil(clipEnd)}&autoplay=1&mute=0&controls=0&playsinline=1&rel=0&modestbranding=1&loop=1&playlist=${ep.videoId}&disablekb=1&iv_load_policy=3&cc_load_policy=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`}
+                        src={`https://www.youtube.com/embed/${ep.videoId}?start=${Math.floor(clipStart)}&end=${Math.ceil(clipEnd)}&autoplay=1&mute=1&controls=0&playsinline=1&rel=0&modestbranding=1&loop=1&playlist=${ep.videoId}&disablekb=1&iv_load_policy=3&cc_load_policy=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`}
                       />
                     )}
                   </div>
@@ -1294,7 +1294,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               </section>
               {(card || (!card && aspect !== "source") || geo.cropBox) && (
                 <details className="vclip-sec vclip-adv">
-                  <summary className="vclip-sec-head"><span className="vclip-label">{t("画面细节")}</span><span className="small muted">{t("裁切、底色与取景")}</span></summary>
+                  <summary className="vclip-sec-head"><span className="vclip-label">{t("画面细节")}</span><span className="vclip-adv-end"><span className="small muted">{t("裁切、底色与取景")}</span><ChevronDown size={14} className="vclip-chev" /></span></summary>
                   {card && (
                     <div className="reading-row">
                       <span>{t("画面裁成")}</span>
@@ -1335,7 +1335,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               )}
               {addSubs && (
                 <details className="vclip-sec vclip-adv">
-                  <summary className="vclip-sec-head"><span className="vclip-label">{t("字幕样式")}</span><span className="small muted">{t(SUB_STYLES.find((x) => x.id === subStyle)?.name ?? "")}</span></summary>
+                  <summary className="vclip-sec-head"><span className="vclip-label">{t("字幕样式")}</span><span className="vclip-adv-end"><span className="small muted">{t(SUB_STYLES.find((x) => x.id === subStyle)?.name ?? "")}</span><ChevronDown size={14} className="vclip-chev" /></span></summary>
                   <div className="vclip-styles">
                     {SUB_STYLES.map((st) => (
                       <button key={st.id} type="button" className={`vclip-style-btn ${subStyle === st.id ? "on" : ""}`} onClick={() => setSubStyle(st.id)}>
@@ -1350,7 +1350,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                 </details>
               )}
               <details className="vclip-sec vclip-adv">
-                <summary className="vclip-sec-head"><span className="vclip-label">{t("标题与署名")}</span><span className="small muted clamp1">{showTitle ? title : t("不显示标题")}</span></summary>
+                <summary className="vclip-sec-head"><span className="vclip-label">{t("标题与署名")}</span><span className="vclip-adv-end"><span className="small muted clamp1">{showTitle ? title : t("不显示标题")}</span><ChevronDown size={14} className="vclip-chev" /></span></summary>
                 <div className="vclip-chips">
                   <ToggleChip on={showTitle} onChange={setShowTitle}>{t("顶部金句标题")}</ToggleChip>
                   <ToggleChip on={showSource} onChange={setShowSource}>{t("节目出处")}</ToggleChip>
@@ -1373,7 +1373,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
               <details className="vclip-sec vclip-adv">
                 <summary className="vclip-sec-head">
                   <span className="vclip-label">{t("微调起止与字幕文字")}</span>
-                  <span className="num small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span>
+                  <span className="vclip-adv-end"><span className="num small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span><ChevronDown size={14} className="vclip-chev" /></span>
                 </summary>
                 {/* Start and end side by side: where each sits, a sentence earlier or later, and its lead-in or tail. */}
                 <div className="vclip-bounds">

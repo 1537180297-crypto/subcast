@@ -36,13 +36,14 @@ export function KeyField({ account, placeholder, shared }: { account: string; pl
     );
   }
   return <KeyRow key={account} has={has} value={key} onValue={setKey} placeholder={placeholder}
+    onCancel={own ? () => { setKey(""); setOwn(false); } : undefined}
     onSave={async () => { await api.setApiKey(account, key); setHas(!!key.trim()); setKey(""); }}
     onDelete={async () => { await api.setApiKey(account, ""); setHas(false); }} />;
 }
 
 /** A saved key reads as saved (a tinted row with a check and masked dots), not as an empty field;
  *  「更换」 opens the field again. */
-export function KeyRow({ has, value, onValue, onSave, onDelete, placeholder }: { has: boolean; value: string; onValue: (v: string) => void; onSave: () => Promise<void>; onDelete: () => Promise<void>; placeholder?: string }) {
+export function KeyRow({ has, value, onValue, onSave, onDelete, onCancel, placeholder }: { has: boolean; value: string; onValue: (v: string) => void; onSave: () => Promise<void>; onDelete: () => Promise<void>; onCancel?: () => void; placeholder?: string }) {
   const [editing, setEditing] = useState(false);
   if (has && !editing) {
     return (
@@ -57,7 +58,7 @@ export function KeyRow({ has, value, onValue, onSave, onDelete, placeholder }: {
     <div className="key-row">
       <input {...NO_AUTO} type="password" autoFocus={editing} value={value} onChange={(e) => onValue(e.target.value)} placeholder={placeholder ?? t("粘贴 API Key")} />
       <button className="btn sm" onClick={async () => { await onSave(); setEditing(false); }} disabled={!value.trim()}>{t("保存")}</button>
-      {has && <button className="btn ghost sm" onClick={() => { onValue(""); setEditing(false); }}>{t("取消")}</button>}
+      {(has || onCancel) && <button className="btn ghost sm" onClick={() => { onValue(""); setEditing(false); onCancel?.(); }}>{t("取消")}</button>}
     </div>
   );
 }

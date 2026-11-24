@@ -494,6 +494,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     const targetIdx = rows[pos];
     const el = box.querySelector<HTMLElement>(`[data-i="${targetIdx}"]`);
     programmaticUntil.current = performance.now() + (behavior === "smooth" ? 650 : 140);
+    box.dataset.autoScrollUntil = String(programmaticUntil.current);
     if (el) {
       el.scrollIntoView({ block: "center", behavior });
       return;
@@ -510,6 +511,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       const mounted = list.current?.querySelector<HTMLElement>(`[data-i="${targetIdx}"]`);
       if (mounted) {
         programmaticUntil.current = performance.now() + 140;
+        if (list.current) list.current.dataset.autoScrollUntil = String(programmaticUntil.current);
         mounted.scrollIntoView({ block: "center", behavior: "auto" });
       }
     }));
@@ -617,6 +619,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const visibleStart = virtual ? win.start : 0;
   const visibleEnd = virtual ? win.end : rows.length;
   const visibleRows = virtual ? rows.slice(visibleStart, visibleEnd) : rows;
+  const hasHours = (segments[segments.length - 1]?.start ?? 0) >= 3600;
 
   return (
     <div className="transcript">
@@ -660,7 +663,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
         />
       ) : (
       <div
-        className={`lines${marks && settings.learnCard ? " learning" : ""}`}
+        className={`lines${marks && settings.learnCard ? " learning" : ""}${hasHours ? " has-hours" : ""}`}
         ref={list}
         onWheel={() => (userScrolled.current = Date.now())}
         onTouchStart={() => (userScrolled.current = Date.now())}

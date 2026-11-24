@@ -24,7 +24,7 @@ const STATUS: Record<FoundAgent["login"], { text: string; tone: "ok" | "warn" | 
   unknown: { text: tk("待确认"), tone: "idle" },
 };
 
-export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p: Provider; onChange: (p: Provider) => void }) => React.ReactElement }) {
+export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p: Provider; onChange: (p: Provider) => void; onKeyChange?: () => void }) => React.ReactElement }) {
   const { settings, saveSettings } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })));
   const { found, checking } = useAgents();
   useLang((s) => s.lang);
@@ -32,11 +32,12 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
   const [more, setMore] = useState(false);
   const [moreAgents, setMoreAgents] = useState(false);
   const [keys, setKeys] = useState<Record<string, boolean>>({});
+  const [keyRev, setKeyRev] = useState(0);
   useEffect(() => { if (found == null) void detectAgents(); }, []);
   const apiProviders = useMemo(() => Object.values(settings.providers).filter((p) => p.protocol !== "cli"), [settings.providers]);
   useEffect(() => {
     void Promise.all(apiProviders.filter((p) => p.needsKey).map(async (p) => [p.id, await api.hasApiKey(p.id)] as const)).then((r) => setKeys(Object.fromEntries(r)));
-  }, [apiProviders.length, editing]);
+  }, [apiProviders.length, editing, keyRev]);
 
   const used = (id: string) => (settings.translateProvider === id && settings.translateMode !== "google" ? t("默认") : "");
   const ready = (p: Provider) => !p.needsKey || keys[p.id];
@@ -134,7 +135,7 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
             : p ? (
               <>
                 <div className="ms-head"><Mark id={p.id} name={tr(p.name)} size={36} /><div><p className="ms-title">{tr(p.name)}</p><p className="muted small">{p.needsKey ? t("用你自己的 API Key，按用量付费给服务商。Key 只存在本机钥匙串。") : t("在你电脑上运行的模型服务，不需要 Key。")}</p></div></div>
-                <ProviderEditor key={p.id} p={p} onChange={update} />
+                <ProviderEditor key={p.id} p={p} onChange={update} onKeyChange={() => setKeyRev((n) => n + 1)} />
               </>
             ) : null}
         </section>

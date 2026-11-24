@@ -224,7 +224,7 @@ function ContinueHero({ ep }: { ep: Episode }) {
   // The whole card resumes: open the episode and start playing where it stopped.
   const resume = () => { openEpisode(ep); playSoon(ep.id); };
   return (
-    <div className="hero" role="button" tabIndex={0} title={t("继续播放")} onClick={resume} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), resume())}>
+    <div className="hero" role="button" tabIndex={0} title={t("继续播放")} onClick={resume} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), e.stopPropagation(), resume())}>
       <div className={`hero-cover ${ep.videoId ? "wide" : ""}`}>
         {ep.cover ? <img src={ep.cover} alt="" /> : <div className="cover-fallback" />}
         {pct > 0 && <span className="hero-bar" aria-hidden><span style={{ width: `${pct}%` }} /></span>}
@@ -517,6 +517,15 @@ export function ShowView({ id }: { id: string }) {
   const [expanded, setExpanded] = useState(false);
   const [showOrig, setShowOrig] = useState(false);
   const [menu, setMenu] = useState(false);
+  const menuBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const away = (e: PointerEvent) => { if (!menuBox.current?.contains(e.target as Node)) setMenu(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setMenu(false); } };
+    document.addEventListener("pointerdown", away);
+    window.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("pointerdown", away); window.removeEventListener("keydown", esc, true); };
+  }, [menu]);
   const [renaming, setRenaming] = useState(false);
   const [aliasDraft, setAliasDraft] = useState("");
   const names = useShowName(show?.title ?? "", id);
@@ -550,7 +559,7 @@ export function ShowView({ id }: { id: string }) {
         if (filter === "all") return true;
         if (filter === "unwatched") return !isWatched(e, patches[e.id]);
         if (filter === "watched") return isWatched(e, patches[e.id]);
-        return !!(e.hasTranscript || e.transcriptUrl || e.deep);
+        return !!(e.hasTranscript || e.transcriptUrl || e.deep || e.videoId);
       }) ?? null,
     [eps, filter, patches],
   );
@@ -645,10 +654,10 @@ export function ShowView({ id }: { id: string }) {
             {ytPromo && links.youtube && <YtButton channel={links.youtube} small />}
             <button className="btn sm" onClick={refresh} disabled={busy}>{busy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} {t("检查更新")}</button>
             {playable.length > 1 && <button className="btn sm" title={t("按列表顺序连着播放没听完的 {n} 集", { n: playable.length })} onClick={() => playAll(playable)}><ListVideo size={14} /> {t("播放全部")}</button>}
-            <div className="menu-wrap">
+            <div className="menu-wrap" ref={menuBox}>
               <button className="btn ghost sm" onClick={() => setMenu(!menu)} aria-haspopup="menu" aria-expanded={menu}><MoreHorizontal size={14} /> {t("更多")}</button>
               {menu && (
-                <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
+                <div className="menu" role="menu">
                   <button role="menuitem" onClick={startRename}><Pencil size={14} /> {t("重命名…")}</button>
                   <button role="menuitem" disabled={unwatchedCount === 0} onClick={markAll}><CheckCircle2 size={14} /> {t("全部标为已看")}</button>
                   <button role="menuitem" className="danger" onClick={remove}>{t("取消订阅")}</button>
@@ -705,7 +714,7 @@ function PickCard({ p, selected, subscribed, onClick, onOpen, action }: { p: Pic
   const press = onClick ?? onOpen;
   return (
     <div className={`pick-tile ${selected ? "selected" : ""} ${subscribed ? "done" : ""}`} role={press ? "button" : undefined} tabIndex={press ? 0 : undefined} aria-pressed={onClick ? selected : undefined}
-      onClick={press} onKeyDown={(e) => press && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), press())}>
+      onClick={press} onKeyDown={(e) => press && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), e.stopPropagation(), press())}>
       <div className="tile-cover">
         <img src={p.cover} alt="" loading="lazy" decoding="async" />
         {p.deep ? <span className="tile-badge deep">{t("精读")}</span> : p.video && <span className="tile-badge"><Youtube size={11} /> {t("视频")}</span>}
