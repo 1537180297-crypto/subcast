@@ -498,7 +498,9 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
     programmaticUntil.current = performance.now() + (behavior === "smooth" ? 650 : 140);
     box.dataset.autoScrollUntil = String(programmaticUntil.current);
     if (el) {
-      el.scrollIntoView({ block: "center", behavior });
+      // Scrolls the list only: scrollIntoView would also move the episode column when the list sits under the player.
+      const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+      box.scrollTo({ top: Math.max(0, top - box.clientHeight / 2 + el.offsetHeight / 2), behavior });
       return;
     }
     if (!virtual) return;

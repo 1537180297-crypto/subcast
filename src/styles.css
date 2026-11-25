@@ -627,6 +627,8 @@ body.resizing iframe, body.resizing video { pointer-events: none; }
 /* The player keeps 16:9 and never pushes its controls below the fold; wide columns center it. */
 .ep-left > .video, .ep-left > .video-slot, .ep-left > .audio-stage { width: min(100%, calc((100vh - 330px) * 16 / 9)); align-self: center; }
 .ep-left > .controls-slot, .ep-left > .controls-dock, .ep-left > .yt-strip { width: min(100%, max(560px, calc((100vh - 330px) * 16 / 9))); align-self: center; }
+/* 字幕 under the player (Settings › 字幕 › 字幕列表): its own scrolling box, as wide as the controls. */
+.ep-left > .ep-transcript { width: min(100%, max(560px, calc((100vh - 330px) * 16 / 9))); align-self: center; height: clamp(360px, 62vh, 760px); display: flex; flex-direction: column; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; container-type: inline-size; }
 .ep-left > .ep-title-block, .ep-left > .notes { width: min(100%, max(560px, calc((100vh - 330px) * 16 / 9))); align-self: center; }
 .ep-left:has(.menu) { position: relative; z-index: 35; }
 .topbar { position: relative; z-index: 40; }

@@ -6,6 +6,7 @@ import { t, useLang } from "../lib/i18n";
 import { CHAT_MAX, CHAT_MIN, SCALE_MAX, SCALE_MIN, SUB_FONTS, chatScaleOf, origScale, setOrigScale, setSubScale, subScale } from "../lib/reading";
 import { POSTER_FONTS } from "../lib/poster";
 import type { Settings } from "../lib/settings";
+import { useLayout } from "../lib/layout";
 
 export function Seg<T extends string | number>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
   return (
@@ -39,6 +40,7 @@ export function SubSizeSliders() {
 export function ReadingSettings() {
   const { settings, saveSettings, current } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, current: s.current })));
   useLang((s) => s.lang);
+  const below = useLayout((l) => l.transcriptBelow);
   const save = (p: Partial<Settings>) => void saveSettings(p);
   // A real line when something is playing, else a sample.
   const tr = useJobs((s) => (current ? s.transcripts[current.id] : undefined));
@@ -78,6 +80,9 @@ export function ReadingSettings() {
         <p className="muted small reading-note">{t("字体同时用于中文和原文两行。")}</p>
         <div className="reading-row"><span>{t("视频上的字幕")}</span>
           <Seg value={settings.subtitleLook ?? "outline"} options={[["box", t("半透明底")], ["outline", t("描边，无底")]]} onChange={(v) => save({ subtitleLook: v })} />
+        </div>
+        <div className="reading-row"><span>{t("字幕列表")}</span>
+          <Seg value={below ? "below" : "side"} options={[["side", t("右侧栏")], ["below", t("播放器下方")]]} onChange={(v) => useLayout.getState().put({ transcriptBelow: v === "below" })} />
         </div>
         <label className="check"><input type="checkbox" checked={settings.audioNextLine === true} onChange={(e) => save({ audioNextLine: e.target.checked })} /> {t("音频节目提前显示下一句")}</label>
       </section>
