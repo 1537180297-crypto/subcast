@@ -148,7 +148,19 @@ jobs:
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           DEB=$(ls src-tauri/target/release/bundle/deb/*.deb | head -n 1)
-          dpkg-deb -c "$DEB" | grep -q '/usr/bin/subcast-cli' || { echo "DEB missing /usr/bin/subcast-cli" >&2; exit 1; }
-          OUT=$(printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}\n' | src-tauri/target/release/subcast-cli --data-dir /tmp/subcast-mcp-ci mcp)
-          echo "$OUT" | grep -q '"subcast"' || { echo "Linux MCP handshake failed: $OUT" >&2; exit 1; }
-          echo "ok: Linux deb carries /usr/bin/subcast-cli and MCP handshake passed"
+          dpkg-deb -c "$DEB" | grep -qE '([[:space:]]|\./|/)usr/bin/subcast-cli$' || {
+            echo "DEB missing usr/bin/subcast-cli:" >&2
+            dpkg-deb -c "$DEB" >&2
+            exit 1
+          }
+          DEB_DIR=$(mktemp -d)
+          dpkg-deb -x "$DEB" "$DEB_DIR"
+          CLI="$DEB_DIR/usr/bin/subcast-cli"
+          test -x "$CLI" || { echo "Extracted DEB CLI not executable: $CLI" >&2; exit 1; }
+          OUT=$(printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | "$CLI" --data-dir /tmp/subcast-mcp-ci mcp)
+          echo "$OUT" | grep -q '"subcast"' || { echo "Linux MCP initialize failed: $OUT" >&2; exit 1; }
+          echo "$OUT" | grep -q '"list_shows"' || { echo "Linux MCP tools/list failed: $OUT" >&2; exit 1; }
+          echo "ok: Linux deb carries usr/bin/subcast-cli and extracted CLI MCP handshake passed"
