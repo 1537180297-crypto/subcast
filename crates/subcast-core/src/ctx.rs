@@ -148,13 +148,30 @@ impl CoreCtx {
         if let Some(v) = db::get_setting(&conn, "remote-config")?.and_then(|r| serde_json::from_str::<Value>(&r).ok()) {
             apply_remote_config(&v);
         }
-        // Clear stale 1:1 static-cover YouTube bindings on curated audio-only shows (e.g. 张小珺/42章经/知行/面基).
-        if let Ok(shows) = db::list_shows(&conn) {
-            for s in shows.iter().filter(|s| s.kind == "qiaomu") {
-                if let Some(src) = crate::qiaomu::rss_source_id(&s.feed_url).or_else(|| crate::qiaomu::site_id(&s.feed_url)) {
-                    if crate::curated_video::is_audio_only(&src) {
-                        let _ = db::clear_show_videos(&conn, &s.id);
+        // Clear stale 1:1 static-cover YouTube bindings on curated audio-only shows (both subscribed and previewed).
+        let mut curated_feeds: Vec<(String, String)> = db::list_shows(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s.kind == "qiaomu")
+            .map(|s| (s.id, s.feed_url))
+            .collect();
+        if let Ok(mut stmt) = conn.prepare("SELECT episode_id, data FROM blobs WHERE kind='show-json'") {
+            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                for row in rows.flatten() {
+                    if let Ok(v) = serde_json::from_str::<Value>(&row.1) {
+                        if v["kind"].as_str() == Some("qiaomu") {
+                            if let Some(url) = v["feedUrl"].as_str().or_else(|| v["feed_url"].as_str()) {
+                                curated_feeds.push((row.0, url.to_string()));
+                            }
+                        }
                     }
+                }
+            }
+        }
+        for (show_id, feed_url) in curated_feeds {
+            if let Some(src) = crate::qiaomu::rss_source_id(&feed_url).or_else(|| crate::qiaomu::site_id(&feed_url)) {
+                if crate::curated_video::is_audio_only(&src) {
+                    let _ = db::clear_show_videos(&conn, &show_id);
                 }
             }
         }
