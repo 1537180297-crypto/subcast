@@ -148,6 +148,16 @@ impl CoreCtx {
         if let Some(v) = db::get_setting(&conn, "remote-config")?.and_then(|r| serde_json::from_str::<Value>(&r).ok()) {
             apply_remote_config(&v);
         }
+        // Clear stale 1:1 static-cover YouTube bindings on curated audio-only shows (e.g. 张小珺/42章经/知行/面基).
+        if let Ok(shows) = db::list_shows(&conn) {
+            for s in shows.iter().filter(|s| s.kind == "qiaomu") {
+                if let Some(src) = crate::qiaomu::rss_source_id(&s.feed_url).or_else(|| crate::qiaomu::site_id(&s.feed_url)) {
+                    if crate::curated_video::is_audio_only(&src) {
+                        let _ = db::clear_show_videos(&conn, &s.id);
+                    }
+                }
+            }
+        }
         Ok(Self {
             db: Mutex::new(conn),
             data,

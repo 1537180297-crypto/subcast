@@ -893,6 +893,12 @@ fn cli_install_candidates() -> Vec<std::path::PathBuf> {
     list
 }
 
+fn files_identical(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else { return false };
+    if ma.len() != mb.len() { return false; }
+    std::fs::read(a).ok().zip(std::fs::read(b).ok()).is_some_and(|(x, y)| x == y)
+}
+
 fn inspect_cli_status() -> CliStatus {
     let bundled = bundled_cli_path();
     let bundled_canon = bundled.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
@@ -909,10 +915,15 @@ fn inspect_cli_status() -> CliStatus {
                 link_path = Some(cand.to_string_lossy().into_owned());
                 let resolved = std::fs::canonicalize(&cand).ok();
                 target_path = resolved.as_ref().map(|p| p.to_string_lossy().into_owned());
-                if let (Some(b), Some(r)) = (bundled_canon.as_ref(), resolved.as_ref()) {
-                    needs_update = b != r;
-                } else if bundled_canon.is_some() {
-                    needs_update = true;
+                if let Some(b) = bundled.as_ref() {
+                    if meta.file_type().is_symlink() {
+                        needs_update = bundled_canon.as_ref() != resolved.as_ref();
+                    } else if cfg!(windows) {
+                        // On Windows, `install_cli_link` copies subcast-cli.exe into %LOCALAPPDATA%\SubCast\bin\subcast.exe.
+                        needs_update = !files_identical(b, &cand);
+                    } else {
+                        needs_update = bundled_canon.as_ref() != resolved.as_ref();
+                    }
                 }
                 if let Some(parent) = cand.parent() {
                     in_path = clipath::in_path(parent);
@@ -987,7 +998,9 @@ fn auto_install_cli(data: &std::path::Path) {
     if !status.bundled { return; }
     let marker = data.join("cli-auto-installed");
     let first = !marker.exists();
-    let ours_outdated = status.installed && status.needs_update && status.link_path.as_deref().is_some_and(|l| std::fs::symlink_metadata(l).is_ok_and(|m| m.file_type().is_symlink()));
+    let ours_outdated = status.installed && status.needs_update && (
+        cfg!(windows) || status.link_path.as_deref().is_some_and(|l| std::fs::symlink_metadata(l).is_ok_and(|m| m.file_type().is_symlink()))
+    );
     if (first && !status.installed) || ours_outdated {
         let _ = install_cli_link();
     }

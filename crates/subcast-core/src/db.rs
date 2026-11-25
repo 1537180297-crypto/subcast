@@ -189,6 +189,15 @@ pub fn fill_video_duration(conn: &Connection, video_id: &str, seconds: f64) -> R
     Ok(conn.execute("UPDATE episodes SET duration=?2 WHERE video_id=?1 AND COALESCE(duration, 0) <= 0", params![video_id, seconds])?)
 }
 
+/// Clears YouTube video_id (and YouTube fallback cover) for an audio-only curated show whose episodes
+/// previously inherited a 1:1 static-cover YouTube upload.
+pub fn clear_show_videos(conn: &Connection, show_id: &str) -> Result<usize> {
+    Ok(conn.execute(
+        "UPDATE episodes SET video_id=NULL, cover=CASE WHEN cover LIKE 'https://i.ytimg.com/%' THEN NULL ELSE cover END WHERE show_id=?1 AND video_id IS NOT NULL",
+        params![show_id],
+    )?)
+}
+
 pub fn set_progress(conn: &Connection, id: &str, seconds: f64) -> Result<()> {
     let s = seconds.max(0.0);
     // Resuming playback past 5 s clears an explicit "unseen" reset so auto-tracking takes over again.

@@ -100,13 +100,18 @@ pub fn store(ctx: &CoreCtx, show: &Show, eps: &[Episode]) -> Result<()> {
 /// Fetches any subscription's latest state. Curated 精读 channels also cache their Chinese titles.
 pub async fn fetch_any(ctx: &CoreCtx, feed_url: &str, kind: &str) -> Result<(Show, Vec<Episode>)> {
     if kind == "qiaomu" {
-        let ch = if let Some(id) = qiaomu::rss_source_id(feed_url) {
-            qiaomu::rss_channel(&id).await?
+        let (source_id, ch) = if let Some(id) = qiaomu::rss_source_id(feed_url) {
+            let ch = qiaomu::rss_channel(&id).await?;
+            (id, ch)
         } else {
             let id = qiaomu::site_id(feed_url).ok_or_else(|| anyhow!("不是精读频道"))?;
-            qiaomu::channel(&id).await?
+            let ch = qiaomu::channel(&id).await?;
+            (id, ch)
         };
         let conn = ctx.db.lock().unwrap();
+        if crate::curated_video::is_audio_only(&source_id) {
+            let _ = db::clear_show_videos(&conn, &ch.show.id);
+        }
         if let Ok(tx) = conn.unchecked_transaction() {
             for (orig, zh) in &ch.zh_titles {
                 let _ = db::tr_put(&tx, &short_hash(&format!("zh-CN|{orig}"), 24), zh);
