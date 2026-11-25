@@ -109,7 +109,7 @@ pub async fn fetch_any(ctx: &CoreCtx, feed_url: &str, kind: &str) -> Result<(Sho
             (id, ch)
         };
         let conn = ctx.db.lock().unwrap();
-        if crate::curated_video::is_audio_only(&source_id) {
+        if ch.videos_checked || crate::curated_video::is_audio_only(&source_id) {
             let _ = db::clear_show_videos(&conn, &ch.show.id);
         }
         if let Ok(tx) = conn.unchecked_transaction() {
