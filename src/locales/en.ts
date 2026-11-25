@@ -1867,6 +1867,8 @@ const dict: Record<string, string> = {
   "出处标题": "Episode title",
   "轮到你了，跟着说一遍（{s}s 后继续）": "Your turn — repeat the line (resuming in {s}s)",
   "当前成片倍速，可在右侧「视频」栏调整": "Export playback speed — adjust in the Video tab on the right",
+  "折叠": "Collapse",
+  "显示全部（{n}）": "Show all ({n})",
   "字幕列表": "Subtitle list",
   "右侧栏": "Right sidebar",
   "播放器下方": "Below the player",
