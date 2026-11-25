@@ -65,7 +65,7 @@ fn meta(html: &str, prop: &str) -> Option<String> {
     re.captures(html).map(|c| crate::transcript::decode_entities(&c[1])).filter(|s| !s.is_empty())
 }
 
-pub struct Channel { pub show: Show, pub episodes: Vec<Episode>, pub zh_titles: Vec<(String, String)> }
+pub struct Channel { pub show: Show, pub episodes: Vec<Episode>, pub zh_titles: Vec<(String, String)>, pub videos_checked: bool }
 
 pub async fn channel(id: &str) -> Result<Channel> {
     let base = feed_url(id);
@@ -119,8 +119,8 @@ pub async fn channel(id: &str) -> Result<Channel> {
         })
     }).collect();
     // Episodes the site has no video for (the Chinese shows, mostly) get one from the show's YouTube channel.
-    crate::curated_video::fill(id, &show.title, &mut episodes).await;
-    Ok(Channel { show, episodes, zh_titles })
+    let videos_checked = crate::curated_video::fill(id, &show.title, &mut episodes).await;
+    Ok(Channel { show, episodes, zh_titles, videos_checked })
 }
 
 #[derive(Serialize, Default)]
@@ -331,8 +331,8 @@ pub async fn rss_channel(id: &str) -> Result<Channel> {
         updated_at: now_ms(),
         unplayed: 0,
     };
-    crate::curated_video::fill(id, &show.title, &mut episodes).await;
-    Ok(Channel { show, episodes, zh_titles })
+    let videos_checked = crate::curated_video::fill(id, &show.title, &mut episodes).await;
+    Ok(Channel { show, episodes, zh_titles, videos_checked })
 }
 
 /// The 乔木改写 for an rss.qiaomu.ai entry, as HTML.

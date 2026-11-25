@@ -20,20 +20,20 @@ pub struct Vid { pub id: String, pub title: String, pub published: Option<i64>, 
 /// Known channels, for shows whose name finds the wrong channel or none.
 fn builtin(source: &str) -> Option<&'static str> {
     Some(match source {
-        // Checked by hand (2026-11): each channel's uploads carry real video recordings with matching titles.
+        // Checked by hand (2026-11): channels that carry real 16:9 video recordings, or a mix of real 16:9
+        // videos and 1:1 RSS-synced static covers (filtered per video and paired with real videos in `fill`).
+        "zhangxiaojun" | "zhangxiaojun-zh" => "UC3Sv1JuKpbOx3csUO8FAo5g",
+        "42zhangjing" | "42zhangjing-zh" => "UCirUGhuiz6m85eKO8n3Picw",
+        "zhixing" | "zhixing-zh" => "UC3ezayOvLhJRk5L0QRg_bfQ",
+        "mianji" | "mianji-zh" => "UCroOLbclmz0FOit7d2Xe0PQ",
         "nexttoken" => "UC_9pr_usdNG29RauPFwIFQw",
         "crossing" | "crossing-zh" => "UCqoy3g7ZH24j2mLOq_nbKrQ",
         "nopriors" | "nopriors-zh" => "UCSI7h9hydQ40K5MJHnCrQvw",
         "allin" | "allin-zh" => "UCESLZhusAkFfsNsApnjF_Cg",
         "unsupervised" | "unsupervised-zh" => "UCUl-s_Vp-Kkk_XVyDylNwLA",
         "cogrev" | "cogrev-zh" => "UCjNRVMBVI30Sak_p6HRWhIA",
-        // Audio-only podcasts whose YouTube channels are 1:1 (1080x1080) RSS-synced static covers,
-        // or shows with no YouTube video version / mismatched titles.
-        "zhangxiaojun" | "zhangxiaojun-zh"
-        | "42zhangjing" | "42zhangjing-zh"
-        | "zhixing" | "zhixing-zh"
-        | "mianji" | "mianji-zh"
-        | "aialchemy" | "aialchemy-zh"
+        // Shows with no YouTube video version / mismatched titles.
+        "aialchemy" | "aialchemy-zh"
         | "35huan" | "35huan-zh"
         | "latetalk" | "latetalk-zh" => "none",
         _ => return None,
@@ -51,9 +51,12 @@ pub fn is_audio_only(source: &str) -> bool {
 static OVERRIDES: Lazy<RwLock<HashMap<String, String>>> = Lazy::new(|| RwLock::new(HashMap::new()));
 /// What the search found per source this session: Some(channel) or None (searched, nothing fitting), and when.
 static FOUND: Lazy<RwLock<HashMap<String, (Option<String>, Instant)>>> = Lazy::new(|| RwLock::new(load_saved()));
+/// Cached per-video widescreen flag (`true` = real 16:9 video, `false` = 1:1 static-cover RSS upload).
+static ASPECT: Lazy<RwLock<HashMap<String, bool>>> = Lazy::new(|| RwLock::new(load_aspect()));
 
 /// Channels found by search are kept on disk, so a show's page doesn't search again on every launch.
 fn saved_path() -> Option<std::path::PathBuf> { dirs::cache_dir().map(|d| d.join("ai.qiaomu.subcast").join("curated-youtube.json")) }
+fn aspect_path() -> Option<std::path::PathBuf> { dirs::cache_dir().map(|d| d.join("ai.qiaomu.subcast").join("video-aspect.json")) }
 
 fn load_saved() -> HashMap<String, (Option<String>, Instant)> {
     let Some(text) = saved_path().and_then(|p| std::fs::read_to_string(p).ok()) else { return HashMap::new() };
@@ -69,6 +72,19 @@ fn save_found() {
     }
 }
 
+fn load_aspect() -> HashMap<String, bool> {
+    let Some(text) = aspect_path().and_then(|p| std::fs::read_to_string(p).ok()) else { return HashMap::new() };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn save_aspect() {
+    let map = ASPECT.read().unwrap().clone();
+    if let Some(p) = aspect_path() {
+        if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
+        let _ = std::fs::write(p, serde_json::to_string(&map).unwrap_or_default());
+    }
+}
+
 /// From the remote config: `{"zhangxiaojun": "UC…", "some-show": "none"}`.
 pub fn set_overrides(v: &Value) {
     let Some(m) = v.as_object() else { return };
@@ -76,26 +92,178 @@ pub fn set_overrides(v: &Value) {
     *OVERRIDES.write().unwrap() = map;
 }
 
-/// Gives videos to the episodes that have none. Never fails: without a channel or a match, nothing changes.
-pub async fn fill(source: &str, show_name: &str, eps: &mut [Episode]) {
-    if !eps.iter().any(|e| e.video_id.is_none()) { return; }
+/// Gives real 16:9 videos to the episodes that have none, filtering out 1:1 RSS-synced static-cover uploads
+/// and pairing them with adjacent real 16:9 videos in the same channel when present (e.g. 张小珺's English-titled
+/// 4K studio recordings posted beside the Chinese RSS audio uploads).
+/// Returns `true` when video availability was authoritatively checked (so stale cached `video_id`s can be cleared).
+pub async fn fill(source: &str, show_name: &str, eps: &mut [Episode]) -> bool {
+    if is_audio_only(source) { return true; }
+    if !eps.iter().any(|e| e.video_id.is_none()) { return false; }
     // Bounded: a slow YouTube never holds up the show's page for long.
-    let Ok(Some(channel)) = tokio::time::timeout(Duration::from_secs(20), channel_for(source, show_name, eps)).await else { return };
-    let Ok(vids) = tokio::time::timeout(Duration::from_secs(15), channel_videos(&channel)).await else { return };
-    if vids.is_empty() { return; }
+    let Ok(Some(channel)) = tokio::time::timeout(Duration::from_secs(20), channel_for(source, show_name, eps)).await else { return false };
+    let Ok(vids) = tokio::time::timeout(Duration::from_secs(15), channel_videos(&channel)).await else { return false };
+    if vids.is_empty() { return false; }
+
     let mut used: std::collections::HashSet<String> = eps.iter().filter_map(|e| e.video_id.clone()).collect();
-    for e in eps.iter_mut().filter(|e| e.video_id.is_none()) {
-        if let Some(v) = best_match(&e.title, e.published, &vids, &used) {
-            used.insert(v.clone());
-            if e.cover.is_none() { e.cover = Some(format!("https://i.ytimg.com/vi/{v}/hqdefault.jpg")); }
-            // Feeds of these shows often carry no length: the video's stands in, so the player and the episode
-            // list show one before anything loads (and "watched" can be worked out).
-            if e.duration.is_none_or(|d| d <= 0.0) {
-                if let Some(d) = vids.iter().find(|x| x.id == v).and_then(|x| x.duration) { e.duration = Some(d); }
+    let mut matched: Vec<(usize, usize)> = Vec::new();
+    let mut matched_vid_indices = std::collections::HashSet::new();
+    for (ei, e) in eps.iter().enumerate() {
+        if e.video_id.is_some() { continue; }
+        if let Some(v_id) = best_match(&e.title, e.published, &vids, &used) {
+            if let Some(vi) = vids.iter().position(|x| x.id == v_id) {
+                used.insert(v_id);
+                matched.push((ei, vi));
+                matched_vid_indices.insert(vi);
             }
-            e.video_id = Some(v);
         }
     }
+    if matched.is_empty() { return true; }
+
+    // Check widescreen aspect ratio for every matched video and its immediate neighbors (±2) in parallel.
+    let mut probe_ids: Vec<String> = Vec::new();
+    for &(_, vi) in &matched {
+        let lo = vi.saturating_sub(2);
+        let hi = (vi + 2).min(vids.len().saturating_sub(1));
+        for j in lo..=hi {
+            probe_ids.push(vids[j].id.clone());
+        }
+    }
+    let wide = check_widescreen_batch(&probe_ids).await;
+
+    let mut assigned: std::collections::HashSet<String> = eps.iter().filter_map(|e| e.video_id.clone()).collect();
+    let resolved = resolve_real_videos(eps, &vids, &matched, &matched_vid_indices, &wide, &mut assigned);
+    for (ei, vid_idx) in resolved {
+        let v = &vids[vid_idx];
+        let e = &mut eps[ei];
+        if e.cover.is_none() { e.cover = Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", v.id)); }
+        if e.duration.is_none_or(|d| d <= 0.0) {
+            if let Some(d) = v.duration { e.duration = Some(d); }
+        }
+        e.video_id = Some(v.id.clone());
+    }
+    true
+}
+
+/// Resolves each title-matched video to either itself (if real 16:9) or its adjacent 16:9 twin video in the same
+/// channel (if the direct match was a 1:1 static-cover RSS upload). Drops pure 1:1 uploads with no real twin.
+fn resolve_real_videos(
+    eps: &[Episode],
+    vids: &[Vid],
+    matched: &[(usize, usize)],
+    matched_vid_indices: &std::collections::HashSet<usize>,
+    wide: &HashMap<String, bool>,
+    assigned: &mut std::collections::HashSet<String>,
+) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    // Pass 1: direct widescreen matches claim their videos first so twins can't steal them.
+    let mut pending_static = Vec::new();
+    for &(ei, vi) in matched {
+        let v = &vids[vi];
+        if *wide.get(&v.id).unwrap_or(&true) {
+            assigned.insert(v.id.clone());
+            out.push((ei, vi));
+        } else {
+            pending_static.push((ei, vi));
+        }
+    }
+    // Pass 2: for each 1:1 static-cover match, look for its adjacent 16:9 real video twin.
+    for (ei, vi) in pending_static {
+        if let Some(twin_idx) = find_twin_video(&eps[ei], vids, vi, matched_vid_indices, wide, assigned) {
+            assigned.insert(vids[twin_idx].id.clone());
+            out.push((ei, twin_idx));
+        }
+    }
+    out
+}
+
+/// Distinctive ASCII/Latin words (length >= 4, excluding generic words) for cross-language pairing
+/// (e.g. Chinese episode title mentioning "vLLM / Co-design / SpaceX / Cosmos" and English video title).
+fn ascii_tokens(s: &str) -> std::collections::HashSet<String> {
+    const STOP: &[&str] = &[
+        "with", "from", "this", "that", "about", "into", "more", "what", "when", "your", "their", "have", "will",
+        "just", "interview", "podcast", "episode", "hour", "hours", "part", "full", "official", "video", "audio",
+        "live", "talk", "chat", "show", "channel", "story", "world", "model", "models", "china", "tech", "founder",
+        "startup", "company", "future", "people", "human", "life", "work", "time", "year", "years", "first",
+        "second", "third", "inside", "behind", "journey", "agent", "agents", "open", "source",
+    ];
+    let mut set = std::collections::HashSet::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() {
+            cur.push(ch.to_ascii_lowercase());
+        } else {
+            if cur.len() >= 4 && !cur.chars().all(|c| c.is_ascii_digit()) && !STOP.contains(&cur.as_str()) {
+                set.insert(std::mem::take(&mut cur));
+            } else {
+                cur.clear();
+            }
+        }
+    }
+    if cur.len() >= 4 && !cur.chars().all(|c| c.is_ascii_digit()) && !STOP.contains(&cur.as_str()) {
+        set.insert(cur);
+    }
+    set
+}
+
+fn find_twin_video(
+    ep: &Episode,
+    vids: &[Vid],
+    vi: usize,
+    matched_vid_indices: &std::collections::HashSet<usize>,
+    wide: &HashMap<String, bool>,
+    assigned: &std::collections::HashSet<String>,
+) -> Option<usize> {
+    let v = &vids[vi];
+    let d_ref = v.duration.or(ep.duration).filter(|d| *d >= 300.0);
+    let mut ref_tokens = ascii_tokens(&v.title);
+    ref_tokens.extend(ascii_tokens(&ep.title));
+
+    let mut best: Option<(f64, usize)> = None;
+    let offsets: &[isize] = &[-1, 1, -2, 2];
+    for &off in offsets {
+        let j = vi as isize + off;
+        if j < 0 || (j as usize) >= vids.len() { continue; }
+        let j = j as usize;
+        let cand = &vids[j];
+        if assigned.contains(&cand.id) || matched_vid_indices.contains(&j) { continue; }
+        // Only upgrade to a confirmed widescreen video.
+        if wide.get(&cand.id) != Some(&true) { continue; }
+
+        let d_cand = cand.duration.filter(|d| *d >= 300.0);
+        let dur_pair = match (d_ref, d_cand) {
+            (Some(a), Some(b)) => Some(((a - b).abs(), (a - b).abs() / a.max(b))),
+            _ => None,
+        };
+        let dur_close = dur_pair.is_some_and(|(diff, ratio)| diff <= 180.0 || ratio <= 0.05);
+
+        // Guard against stealing a neighbor video that belongs much closer in duration to its OTHER adjacent 1:1 upload.
+        if let (Some((my_diff, _)), Some(dc)) = (dur_pair, d_cand) {
+            let other_side = if j > vi { j.checked_add(1) } else { j.checked_sub(1) };
+            if let Some(oi) = other_side.filter(|&k| k < vids.len() && k != vi) {
+                if wide.get(&vids[oi].id) == Some(&false) {
+                    if let Some(od) = vids[oi].duration.filter(|d| *d >= 300.0) {
+                        if (od - dc).abs() + 30.0 < my_diff { continue; }
+                    }
+                }
+            }
+        }
+
+        let shared = ref_tokens.intersection(&ascii_tokens(&cand.title)).count();
+        let immediate = off.abs() == 1;
+        let score = if dur_close {
+            let ratio = dur_pair.map(|(_, r)| r).unwrap_or(0.0);
+            2.0 - ratio + if immediate { 0.3 } else { 0.0 } + (shared as f64) * 0.1
+        } else if immediate && (shared >= 2 || (shared >= 1 && dur_pair.is_none_or(|(_, r)| r <= 0.35))) {
+            1.4 + (shared as f64) * 0.2
+        } else {
+            continue;
+        };
+
+        if best.is_none_or(|(s, _)| score > s) {
+            best = Some((score, j));
+        }
+    }
+    best.map(|(_, j)| j)
 }
 
 /// The show's channel id (UC…), from the overrides, this session's search, or a new search.
@@ -135,36 +303,75 @@ async fn discover(show_name: &str, eps: &[Episode]) -> Option<String> {
     let used = std::collections::HashSet::new();
     let chans: Vec<String> = hits.iter().take(3).filter_map(|h| channel_id_of(&h.feed_url)).collect();
     let feeds = futures_util::future::join_all(chans.iter().map(|c| feed_videos(c))).await;
-    let mut best: Option<(usize, String, String)> = None;
+    let mut best: Option<(usize, String, Vec<String>)> = None;
     for (ch, vids) in chans.into_iter().zip(feeds) {
-        let mut first_vid: Option<String> = None;
         let mut score = 0;
         for e in &recent {
-            if let Some(v) = best_match(&e.title, e.published, &vids, &used) {
-                if first_vid.is_none() { first_vid = Some(v); }
+            if best_match(&e.title, e.published, &vids, &used).is_some() {
                 score += 1;
             }
         }
         if score > best.as_ref().map(|b| b.0).unwrap_or(0) {
-            if let Some(sample) = first_vid { best = Some((score, ch, sample)); }
+            let samples: Vec<String> = vids.iter().take(6).map(|v| v.id.clone()).collect();
+            best = Some((score, ch, samples));
         }
     }
     let need = if recent.len() >= 4 { 2 } else { 1 };
-    let Some((_, ch, sample)) = best.filter(|(s, _, _)| *s >= need) else { return None };
-    // Reject 1:1 RSS-synced static-cover YouTube Podcast channels (oEmbed reports 4:3 e.g. 200x150 instead of 16:9 200x113).
-    if !is_widescreen_video(&sample).await { return None; }
+    let Some((_, ch, samples)) = best.filter(|(s, _, _)| *s >= need) else { return None };
+    // Reject pure 1:1 RSS-synced static-cover YouTube Podcast channels, while allowing mixed channels
+    // that carry at least one real 16:9 widescreen video.
+    let wide = check_widescreen_batch(&samples).await;
+    if !samples.is_empty() && samples.iter().all(|id| wide.get(id) == Some(&false)) { return None; }
     Some(ch)
 }
 
 /// Checks via YouTube oEmbed whether a video is widescreen (>= 3:2) rather than a 1:1 static-cover audio upload.
-/// Falls back to true on network error so transient failures don't reject genuine video channels.
-async fn is_widescreen_video(video_id: &str) -> bool {
+/// Returns `None` on transient network errors so failures are not permanently cached.
+async fn probe_widescreen(video_id: &str) -> Option<bool> {
     let url = format!("https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json");
-    let Ok(text) = net::get_text(&url).await else { return true };
-    let Ok(v) = serde_json::from_str::<Value>(&text) else { return true };
-    let (Some(w), Some(h)) = (v["width"].as_u64(), v["height"].as_u64()) else { return true };
-    if w == 0 || h == 0 { return true; }
-    w * 2 >= h * 3
+    let text = tokio::time::timeout(Duration::from_secs(6), net::get_text(&url)).await.ok()?.ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let (w, h) = (v["width"].as_u64()?, v["height"].as_u64()?);
+    if w == 0 || h == 0 { return None; }
+    Some(w * 2 >= h * 3)
+}
+
+/// Checks widescreen aspect ratios for a batch of video IDs concurrently, reusing the on-disk cache.
+async fn check_widescreen_batch(ids: &[String]) -> HashMap<String, bool> {
+    let mut result = HashMap::new();
+    let mut missing = Vec::new();
+    {
+        let cache = ASPECT.read().unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for id in ids {
+            if !seen.insert(id.as_str()) { continue; }
+            if let Some(&v) = cache.get(id) {
+                result.insert(id.clone(), v);
+            } else {
+                missing.push(id.clone());
+            }
+        }
+    }
+    if missing.is_empty() { return result; }
+    let sem = tokio::sync::Semaphore::new(12);
+    let checked = futures_util::future::join_all(missing.into_iter().map(|id| {
+        let sem = &sem;
+        async move {
+            let _permit = sem.acquire().await.ok()?;
+            probe_widescreen(&id).await.map(|w| (id, w))
+        }
+    })).await;
+    let mut updated = false;
+    {
+        let mut cache = ASPECT.write().unwrap();
+        for (id, w) in checked.into_iter().flatten() {
+            cache.insert(id.clone(), w);
+            result.insert(id, w);
+            updated = true;
+        }
+    }
+    if updated { save_aspect(); }
+    result
 }
 
 /// The channel's uploads: the last ~15 from its feed (with dates) and up to ~100 from its uploads list.
@@ -342,11 +549,55 @@ mod tests {
         assert_eq!(channel_id_of("https://www.youtube.com/feeds/videos.xml?playlist_id=UULF3Sv1JuKpbOx3csUO8FAo5g").as_deref(), Some("UC3Sv1JuKpbOx3csUO8FAo5g"));
         assert_eq!(channel_id_of("https://www.youtube.com/feeds/videos.xml?channel_id=UC_9pr_usdNG29RauPFwIFQw").as_deref(), Some("UC_9pr_usdNG29RauPFwIFQw"));
         assert_eq!(channel_id_of("none"), None);
-        assert!(is_audio_only("zhangxiaojun"));
-        assert!(is_audio_only("42zhangjing"));
-        assert!(is_audio_only("zhixing"));
-        assert!(is_audio_only("mianji"));
+        assert!(is_audio_only("aialchemy"));
+        assert!(is_audio_only("latetalk"));
+        assert!(!is_audio_only("zhangxiaojun"));
         assert!(!is_audio_only("crossing"));
+    }
+
+    #[test]
+    fn pairs_static_cover_with_adjacent_real_video() {
+        let ep = |title: &str| Episode { title: title.into(), ..Default::default() };
+        let vid = |id: &str, t: &str, dur: f64| Vid { id: id.into(), title: t.into(), published: None, duration: Some(dur) };
+        let eps = vec![
+            ep("157. 复盘Personal Agent集体诞生背后：和蔡伟聊AI产品史"),
+            ep("156. 对影之刃零梁其伟6小时访谈：3A游戏、15年创业路上斩妖除魔"),
+            ep("149. 和清华刘子鸣聊：AI for AI、机制可解释性"),
+            ep("148. 对游凯超3小时访谈：开源Infra、和模型Co-design、vLLM"),
+            ep("138. 对罗福莉3.5小时访谈：AI范式已然巨变！OpenClaw"),
+        ];
+        let vids = vec![
+            vid("Ydn4NH_KQT8", "157. 复盘Personal Agent集体诞生背后：和蔡伟聊AI产品史", 9821.0),
+            vid("4roDSFRJ1Aw", "\"Xia\" | A 6-Hour Interview with Soulframe Liang", 23248.0),
+            vid("uq7aHKfXlJI", "156. 对影之刃零梁其伟6小时访谈：3A游戏、15年创业路上斩妖除魔", 23248.0),
+            vid("H3Gs4QUHvA4", "149. 和清华刘子鸣聊：AI for AI、机制可解释性", 6036.0),
+            vid("ifniRXf467I", "You Kaichao: vLLM, Open-Source Infra, Model Co-Design", 10744.0),
+            vid("ffdR5fZTC5E", "148. 对游凯超3小时访谈：开源Infra、和模型Co-design、vLLM", 7597.0),
+            vid("vG1RBqn1sG4", "138. 对罗福莉3.5小时访谈：AI范式已然巨变！OpenClaw", 12997.0),
+            vid("V9eI-t3TApE", "Luo Fuli: OpenClaw, Agent Frameworks — The AI Paradigm", 12879.0),
+        ];
+        let wide: HashMap<String, bool> = [
+            ("Ydn4NH_KQT8", false),
+            ("4roDSFRJ1Aw", true),
+            ("uq7aHKfXlJI", false),
+            ("H3Gs4QUHvA4", false),
+            ("ifniRXf467I", true),
+            ("ffdR5fZTC5E", false),
+            ("vG1RBqn1sG4", false),
+            ("V9eI-t3TApE", true),
+        ].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let matched = vec![(0, 0), (1, 2), (2, 3), (3, 5), (4, 6)];
+        let matched_set: std::collections::HashSet<usize> = matched.iter().map(|&(_, vi)| vi).collect();
+        let mut assigned = std::collections::HashSet::new();
+        let resolved = resolve_real_videos(&eps, &vids, &matched, &matched_set, &wide, &mut assigned);
+        let map: HashMap<usize, &str> = resolved.into_iter().map(|(ei, vi)| (ei, vids[vi].id.as_str())).collect();
+        // 157 蔡伟 and 149 刘子鸣 have no real video -> must NOT steal neighbors!
+        assert_eq!(map.get(&0), None);
+        assert_eq!(map.get(&2), None);
+        // 156 梁其伟, 148 游凯超, 138 罗福莉 upgrade to their exact 16:9 real videos!
+        assert_eq!(map.get(&1), Some(&"4roDSFRJ1Aw"));
+        assert_eq!(map.get(&3), Some(&"ifniRXf467I"));
+        assert_eq!(map.get(&4), Some(&"V9eI-t3TApE"));
     }
 }
 
