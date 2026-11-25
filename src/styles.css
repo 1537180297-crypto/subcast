@@ -2609,18 +2609,22 @@ details.vclip-sec[open] > summary.vclip-sec-head .vclip-adv-end > .small { visib
 
 /* Read-along (精读 朗读): the sentence being read is tinted, its spoken words coloured; while reading, any sentence
    can be clicked to read from there. */
-.deep-head { flex-wrap: wrap; row-gap: 8px; }
-.read-along .ra-bar { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px; border-radius: 999px; background: var(--soft); }
+.deep-head.ra-on { gap: 6px; }
+.deep-head.ra-on .deep-badge { padding-left: 7px; padding-right: 7px; }
+.deep-head.ra-on .deep-badge-text { display: none; }
+.read-along .ra-bar { display: inline-flex; align-items: center; gap: 0; white-space: nowrap; }
 .ra-play { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); cursor: pointer; transition: transform .12s var(--ease, ease); }
 .ra-play:hover { transform: scale(1.06); }
+/* The narrowest panel: previous/next give way (clicking a sentence still jumps). */
+@container (max-width: 380px) { .read-along .ra-skip { display: none; } }
 .ra-play:active { transform: scale(.96); }
 .ra-play.busy { background: var(--soft); color: var(--text); }
 .ra-play:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ra-pos { min-width: 52px; padding: 0 6px; font-size: 12px; color: var(--muted); text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ra-pos { min-width: 0; padding: 0 4px; font-size: 12px; color: var(--muted); text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .deep-body .ra-s { border-radius: 3px; transition: background-color .2s var(--ease, ease); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-.deep-body.reading .ra-s { cursor: pointer; }
-.deep-body.reading .ra-s:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
-.deep-body .ra-s.on, .deep-body.reading .ra-s.on:hover { background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.deep-body.ra-on .ra-s { cursor: pointer; }
+.deep-body.ra-on .ra-s:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.deep-body .ra-s.on, .deep-body.ra-on .ra-s.on:hover { background: color-mix(in srgb, var(--accent) 13%, transparent); }
 ::highlight(ra-spoken) { color: var(--accent-text); }
 .ra-return { position: sticky; bottom: 12px; display: flex; align-items: center; gap: 6px; margin: 8px auto 0; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); box-shadow: var(--shadow); font-size: 12.5px; color: var(--text); cursor: pointer; animation: dock-in .2s var(--ease, ease); }
 .ra-return:hover { border-color: var(--accent); color: var(--accent-text); }

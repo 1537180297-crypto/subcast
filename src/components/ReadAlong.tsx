@@ -44,11 +44,11 @@ export function ReadAlongControls({ owner, sentences }: { owner: string; sentenc
         </>
       ) : (
         <div className="ra-bar" role="group" aria-label={t("朗读控制")}>
-          <button className="icon-btn sm" title={t("上一句")} aria-label={t("上一句")} disabled={index <= 0} onClick={() => seekReading(index - 1)}><SkipBack size={13} /></button>
+          <button className="icon-btn sm ra-skip" title={t("上一句")} aria-label={t("上一句")} disabled={index <= 0} onClick={() => seekReading(index - 1)}><SkipBack size={13} /></button>
           <button className={`ra-play ${busy ? "busy" : ""}`} title={state === "ended" ? t("重新朗读") : playing ? t("暂停") : t("继续")} aria-label={state === "ended" ? t("重新朗读") : playing ? t("暂停") : t("继续")} onClick={toggleReading}>
             {busy ? <Loader2 size={14} className="spin" /> : state === "ended" ? <RotateCcw size={13} /> : playing ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
           </button>
-          <button className="icon-btn sm" title={t("下一句")} aria-label={t("下一句")} disabled={index >= total - 1} onClick={() => seekReading(index + 1)}><SkipForward size={13} /></button>
+          <button className="icon-btn sm ra-skip" title={t("下一句")} aria-label={t("下一句")} disabled={index >= total - 1} onClick={() => seekReading(index + 1)}><SkipForward size={13} /></button>
           <span className="ra-pos num" aria-live="polite">{state === "ended" ? t("读完了") : busy && index === 0 ? t("正在准备…") : `${index + 1} / ${total}`}</span>
           <button className="icon-btn sm" title={t("停止朗读")} aria-label={t("停止朗读")} onClick={stopReading}><X size={13} /></button>
         </div>
@@ -73,7 +73,7 @@ export function useReadAlongPage(owner: string, article: React.RefObject<HTMLEle
     const root = article.current;
     if (!root) return;
     root.querySelectorAll(".ra-s.on").forEach((n) => n.classList.remove("on"));
-    root.classList.toggle("reading", active);
+    root.classList.toggle("ra-on", active);
     if (!active || state === "ended") return;
     const spans = root.querySelectorAll<HTMLElement>(`.ra-s[data-s="${index}"]`);
     spans.forEach((n) => n.classList.add("on"));

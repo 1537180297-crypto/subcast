@@ -3,6 +3,7 @@ import { BookOpen, ExternalLink } from "lucide-react";
 import { SkeletonArticle } from "./Skeleton";
 import { ReadAlongControls, useReadAlongPage } from "./ReadAlong";
 import { markSentences } from "../lib/sentences";
+import { useReadAlong } from "../lib/readAlong";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Episode } from "../lib/api";
 import { seekSoon, useStore } from "../store";
@@ -51,12 +52,14 @@ export function DeepRead({ ep, children, onMissing }: { ep: Episode; children?: 
   const owner = `deep:${ep.id}`;
   const article = useRef<HTMLElement>(null);
   const reading = useReadAlongPage(owner, article);
+  // While reading, the badge shrinks to its icon so the player fits on the header's one line.
+  const readingHere = useReadAlong((s) => s.owner === owner);
   if (html === undefined) return <SkeletonArticle />;
   if (!html) return <>{children}</>;
   return (
     <div className="deep-read">
-      <div className="deep-head">
-        <span className="deep-badge" title={t("AI 基于完整访谈改写的中文长文，不是逐字翻译")}><BookOpen size={13} /> {t("乔木精读")}</span>
+      <div className={`deep-head ${readingHere ? "ra-on" : ""}`}>
+        <span className="deep-badge" title={t("AI 基于完整访谈改写的中文长文，不是逐字翻译")}><BookOpen size={13} /><span className="deep-badge-text">{t("乔木精读")}</span></span>
         <span className="spacer" />
         <ReadAlongControls owner={owner} sentences={marked.sentences} />
         {ep.link && <button className="icon-btn" title={t("在网页中打开")} onClick={() => openUrl(ep.link!)}><ExternalLink size={14} /></button>}
