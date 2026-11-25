@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BookMarked, ChevronLeft, ChevronRight, CircleArrowUp, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, RotateCcw, RotateCw, Search, Settings as Cog, X, ChartColumn, ListChecks } from "lucide-react";
+import { BookMarked, ChevronDown, ChevronLeft, ChevronRight, CircleArrowUp, Compass, Download, Inbox, Link2, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, RotateCcw, RotateCw, Search, Settings as Cog, X, ChartColumn, ListChecks } from "lucide-react";
 import { api, errorText, type SearchResult } from "../lib/api";
 import { useStore, type View } from "../store";
 import { installUpdate, useUpdate } from "../lib/updater";
@@ -33,9 +33,16 @@ export function Sidebar() {
     () => (!showCurated ? [] : PICKS.filter((p) => p.deep && !isSubscribed(p, shows) && !shows.some((s) => deepPickFor(s.title)?.id === p.id))),
     [showCurated, shows],
   );
-  const { sideOpen, put: putLayout } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put })));
+  const { sideOpen, put: putLayout, subsOpen, curatedOpen, subsAll } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put, subsOpen: l.subsOpen, curatedOpen: l.curatedOpen, subsAll: l.subsAll })));
   const update = useUpdate(useShallow((s) => ({ phase: s.phase, version: s.version, progress: s.progress, quiet: s.quiet })));
   const rail = !sideOpen;
+  // Folding applies to the full sidebar only: the icon rail has no headers to unfold it from.
+  const showSubs = rail || subsOpen;
+  const showCuratedList = rail || curatedOpen;
+  // A long list shows its first SUBS_SHORT, plus the open show wherever it sits.
+  const long = !rail && shows.length > SUBS_LONG;
+  const listed = long && !subsAll ? shows.filter((s, i) => i < SUBS_SHORT || is({ kind: "show", id: s.id })) : shows;
+  const unplayedAll = shows.reduce((n, s) => n + s.unplayed, 0);
   const hasDownloads = useOffline((s) => Object.keys(s.saved).length + Object.keys(s.active).length > 0);
   const wordsNav = useStore((s) => s.settings.learnOn && s.settings.learnSide);
   const due = useDueCount();
@@ -65,24 +72,25 @@ export function Sidebar() {
       </nav>
       <div className="side-sep" />
       <div className="side-head">
-        <span className="label">{tx("sidebar", "订阅")}</span>
+        <SideFold open={subsOpen} label={tx("sidebar", "订阅")} count={unplayedAll} onToggle={() => putLayout({ subsOpen: !subsOpen })} />
         <span className="side-head-actions">
           {shows.length > 1 && <button className="icon-btn sm side-manage" title={t("管理订阅")} aria-label={t("管理订阅")} onClick={() => set({ manageOpen: true })}><ListChecks size={14} /></button>}
           <button className="icon-btn sm" title={t("添加节目")} aria-label={t("添加节目")} onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={14} /></button>
         </span>
       </div>
       <div className="show-list">
-        {shows.map((s) => (
+        {showSubs && listed.map((s) => (
           <button key={s.id} className={`show-item ${is({ kind: "show", id: s.id }) ? "on" : ""}`} onClick={() => go({ kind: "show", id: s.id })} title={showAliases?.[s.id]?.trim() || (rail ? showName(s.title) : s.title)}>
             <span className="show-cover">{showIcon(s)}{rail && s.unplayed > 0 && <span className="rail-dot" />}</span>
             <SideName id={s.id} title={s.title} />
             {s.unplayed > 0 && <span className="unplayed">{s.unplayed > 99 ? "99+" : s.unplayed}</span>}
           </button>
         ))}
+        {showSubs && long && <button type="button" className="side-more" aria-expanded={subsAll} onClick={() => putLayout({ subsAll: !subsAll })}>{subsAll ? t("收起") : t("显示全部（{n}）", { n: shows.length })}</button>}
         {!shows.length && <p className="muted small side-empty">{t("还没有订阅")}</p>}
         {curated.length > 0 && <>
-          <div className="side-head second"><span className="label">{t("乔木精读")}</span></div>
-          {curated.map((p) => (
+          <div className="side-head second"><SideFold open={curatedOpen} label={t("乔木精读")} count={0} onToggle={() => putLayout({ curatedOpen: !curatedOpen })} /></div>
+          {showCuratedList && curated.map((p) => (
             <button key={p.id} className={`show-item curated ${is({ kind: "channel", input: p.input }) ? "on" : ""}`} onClick={() => go({ kind: "channel", input: p.input })} title={t("{name} · 点击查看，决定是否订阅", { name: pickName(p) })}>
               <span className="show-cover"><img src={p.cover} alt="" loading="lazy" /></span>
               <span className="show-names"><span className="show-title">{pickName(p)}</span>{isChineseUi() && p.zh !== p.title && <span className="show-orig">{p.title}</span>}</span>
@@ -97,6 +105,19 @@ export function Sidebar() {
         <button className="icon-btn side-toggle" onClick={() => putLayout({ sideOpen: rail })} title={rail ? t("展开侧栏（⌘B）") : t("收起为图标（⌘B）")} aria-label={rail ? t("展开侧栏") : t("收起侧栏")}>{rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
       </div>
     </aside>
+  );
+}
+
+const SUBS_LONG = 12, SUBS_SHORT = 8;
+
+/** A sidebar group's header: click to fold the group; folded, it shows the group's unplayed total. */
+function SideFold({ open, label, count, onToggle }: { open: boolean; label: string; count: number; onToggle: () => void }) {
+  return (
+    <button type="button" className="side-fold label" aria-expanded={open} title={open ? t("折叠") : t("展开")} onClick={onToggle}>
+      <ChevronDown size={12} className={`side-fold-ic ${open ? "" : "shut"}`} aria-hidden />
+      <span>{label}</span>
+      {!open && count > 0 && <span className="side-fold-count">{count > 99 ? "99+" : count}</span>}
+    </button>
   );
 }
 

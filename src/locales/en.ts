@@ -1875,6 +1875,11 @@ const dict: Record<string, string> = {
   "读完了": "Finished",
   "正在准备…": "Preparing…",
   "回到朗读位置": "Back to reading",
+  "折叠": "Collapse",
+  "显示全部（{n}）": "Show all ({n})",
+  "字幕列表": "Subtitle list",
+  "右侧栏": "Right sidebar",
+  "播放器下方": "Below the player",
 };
 
 export default dict;
