@@ -15,7 +15,7 @@ class PanelBoundary extends Component<{ children: ReactNode }, { error: string |
     ) : this.props.children;
   }
 }
-import { ArrowDownToLine, BookOpen, Captions, Check, ChevronDown, ScrollText, ExternalLink, MessageCircle, PanelRightClose, PanelRightOpen, Play, FolderOpen, Trash2, Youtube, Bookmark, Pause, UserPlus, UserCheck, Loader2 } from "lucide-react";
+import { ArrowDownToLine, BookOpen, Captions, Check, ChevronDown, ScrollText, ExternalLink, MessageCircle, MoreHorizontal, PanelRightClose, PanelRightOpen, Play, Plus, FolderOpen, Trash2, Youtube, Bookmark, Pause, Loader2 } from "lucide-react";
 import { BookArt, DoneCheck, EmptyState } from "./Illustrations";
 import { Splitter } from "./Splitter";
 import { DeepRead } from "./DeepRead";
@@ -206,8 +206,8 @@ async function subscriptionInput(ep: Episode): Promise<string | null> {
   return null;
 }
 
-/** Subscribes to the show this episode belongs to. Already subscribed: the same button unsubscribes, after a confirm. */
-function SubscribeShowButton({ ep }: { ep: Episode }) {
+/** Subscription state and actions for an episode's show (used by inline subscribe pill and overflow menu). */
+function useShowSubscription(ep: Episode) {
   const [input, setInput] = useState<string | null>(null);
   const show = useStore((s) => s.shows.find((x) => x.id === ep.showId || (input && (
     sameFeed(x.feedUrl, input) ||
@@ -217,14 +217,15 @@ function SubscribeShowButton({ ep }: { ep: Episode }) {
   const reloadShows = useStore((s) => s.reloadShows);
   const notify = useStore((s) => s.notify);
   const [busy, setBusy] = useState(false);
+  const canSub = ep.showId !== "single" || !!ep.videoId;
   const subscribed = !!show;
 
   useEffect(() => {
-    if (show || input) return;
+    if (!canSub || show || input) return;
     let active = true;
     void subscriptionInput(ep).then((feed) => { if (active) setInput(feed); }).catch(() => {});
     return () => { active = false; };
-  }, [ep, show, input]);
+  }, [canSub, ep, show, input]);
 
   const subscribe = async () => {
     setBusy(true);
@@ -252,18 +253,60 @@ function SubscribeShowButton({ ep }: { ep: Episode }) {
     } catch (e) { notify(errorText(e)); }
     finally { setBusy(false); }
   };
+  return { canSub, subscribed, busy, subscribe, unsubscribe };
+}
+
+/** Overflow menu on the episode header so secondary actions never crowd the title. */
+function EpisodeMoreMenu({ ep, isCurrent, watched, sub }: {
+  ep: Episode;
+  isCurrent: boolean;
+  watched: boolean;
+  sub: ReturnType<typeof useShowSubscription>;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("pointerdown", away);
+    window.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("pointerdown", away); window.removeEventListener("keydown", esc, true); };
+  }, [open]);
+  const openExternal = () => {
+    setOpen(false);
+    if (ep.videoId) {
+      const s = Math.floor(isCurrent ? useStore.getState().time : ep.progress ?? 0);
+      void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
+    } else if (ep.link) {
+      void openUrl(ep.link);
+    }
+  };
   return (
-    <button
-      type="button"
-      className={`round-btn sub-btn ${subscribed ? "on" : ""}`}
-      aria-pressed={subscribed}
-      disabled={busy}
-      title={subscribed ? t("再点一次，取消订阅") : t("订阅这个节目")}
-      aria-label={subscribed ? t("再点一次，取消订阅") : t("订阅这个节目")}
-      onClick={() => void (subscribed ? unsubscribe() : subscribe())}
-    >
-      {busy ? <Loader2 size={15} className="spin" /> : subscribed ? <UserCheck size={15} /> : <UserPlus size={15} />}
-    </button>
+    <div className="menu-wrap" ref={box}>
+      <button type="button" className="round-btn" aria-haspopup="menu" aria-expanded={open} title={t("更多")} aria-label={t("更多")} onClick={() => setOpen((v) => !v)}>
+        <MoreHorizontal size={15} />
+      </button>
+      {open && (
+        <div className="menu right" role="menu">
+          <button role="menuitem" onClick={() => { setOpen(false); void markWatched(ep, !watched); }}>
+            <Check size={14} strokeWidth={watched ? 2.6 : 2} /> {watched ? t("标为未看") : t("标为已看")}
+          </button>
+          {sub.canSub && (
+            <button role="menuitem" disabled={sub.busy} className={sub.subscribed ? "danger" : undefined} onClick={() => { setOpen(false); void (sub.subscribed ? sub.unsubscribe() : sub.subscribe()); }}>
+              {sub.busy ? <Loader2 size={14} className="spin" /> : sub.subscribed ? <Check size={14} /> : <Plus size={14} />}
+              {sub.subscribed ? t("取消订阅") : t("订阅这个节目")}
+            </button>
+          )}
+          {(ep.videoId || ep.link) && (
+            <button role="menuitem" onClick={openExternal}>
+              {ep.videoId ? <Youtube size={14} /> : <ExternalLink size={14} />}
+              {ep.videoId ? t("在 YouTube 打开（从当前位置继续）") : t("节目网页")}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -469,6 +512,7 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
     if (why) s.notify(why);
   };
 
+  const sub = useShowSubscription(ep);
   // Stable, so the video (kept at the app's root, see VideoDock) isn't told about a change every render.
   const videoOverlay = useMemo(() => <SubtitleOverlay ep={ep} />, [ep.id]);
   const switchRef = useRef(switchTo);
@@ -483,18 +527,22 @@ function EpisodeBody({ ep, tab, setTab, startAudio }: { ep: Episode; tab: Tab; s
         <section className="ep-left" ref={leftRef}>
           <div className="ep-title-block">
             <div className="ep-title">
-              <p className="meta-line">{[ep.showTitle && ep.showId !== "single" ? (hasShow ? <button key="s" className="show-link" title={t("查看这档节目的全部单集")} onClick={() => go({ kind: "show", id: ep.showId })}>{showDisplay}</button> : <span key="s">{showDisplay}</span>) : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</p>
+              <p className="meta-line">
+                {[ep.showTitle && ep.showId !== "single" ? (hasShow ? <button key="s" className="show-link" title={t("查看这档节目的全部单集")} onClick={() => go({ kind: "show", id: ep.showId })}>{showDisplay}</button> : <span key="s">{showDisplay}</span>) : null, date(ep.published), duration(ep.duration)].filter(Boolean).map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}
+                {sub.canSub && !sub.subscribed && (
+                  <button type="button" className="ep-sub-inline" disabled={sub.busy} onClick={() => void sub.subscribe()} title={t("订阅这个节目")}>
+                    {sub.busy ? <Loader2 size={11} className="spin" /> : <Plus size={11} />} {t("订阅")}
+                  </button>
+                )}
+                {watched && <span className="ep-watched-tag"><Check size={11} strokeWidth={2.5} /> {t("已看")}</span>}
+              </p>
               <h1>{titleZh ?? ep.title}</h1>
               {titleZh && titleZh !== ep.title && <p className="orig-line clamp1">{ep.title}</p>}
             </div>
             {!panelOpen && <button className="round-btn" title={t("显示字幕栏（⌘\\）")} onClick={() => put({ panelOpen: true })}><PanelRightOpen size={15} /></button>}
-            <button className={`round-btn watch-btn ${watched ? "on" : ""}`} aria-pressed={watched} title={watched ? t("标为未看") : t("标为已看")} onClick={() => void markWatched(ep, !watched)}><Check size={15} strokeWidth={watched ? 2.6 : 2} /></button>
             <button className={`round-btn fav-btn ${fav ? "on" : ""}`} aria-pressed={fav} title={fav ? t("取消收藏") : t("收藏这一集")} onClick={() => toggleFavorite(ep)}><Bookmark size={15} fill={fav ? "currentColor" : "none"} /></button>
             <DownloadButton ep={ep} />
-            {(ep.showId !== "single" || ep.videoId) && <SubscribeShowButton key={ep.id} ep={ep} />}
-            {ep.videoId
-              ? <button className="round-btn yt-open" title={t("在 YouTube 打开（从当前位置继续）")} onClick={() => { const s = Math.floor(isCurrent ? useStore.getState().time : ep.progress ?? 0); void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`); }}><Youtube size={16} /></button>
-              : ep.link && <button className="round-btn" title={t("节目网页")} onClick={() => openUrl(ep.link!)}><ExternalLink size={15} /></button>}
+            <EpisodeMoreMenu ep={ep} isCurrent={isCurrent} watched={watched} sub={sub} />
           </div>
           {both && (
             <div className="media-switch seg-control" role="radiogroup" aria-label={t("播放方式")}>

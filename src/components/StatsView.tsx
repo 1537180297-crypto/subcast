@@ -292,12 +292,26 @@ function Topics({ topics }: { topics: Map<string, number> }) {
   const list = [...topics.entries()].sort((a, b) => b[1] - a[1]);
   const total = list.reduce((n, [, v]) => n + v, 0) || 1;
   return (
-    <div className="topic-map">
-      {list.map(([k, v], i) => (
-        <div key={k} className={`topic-tile t${Math.min(i, 5)}`} style={{ flexGrow: v }} title={`${t(k)} · ${span(v)}`}>
-          <span className="topic-name">{t(k)}</span><span className="topic-pct num">{Math.round((v / total) * 100)}%</span>
-        </div>
-      ))}
+    <div className="topic-chart">
+      <div className="topic-bar" role="img" aria-label={t("话题版图")}>
+        {list.map(([k, v], i) => {
+          const pct = (v / total) * 100;
+          return <span key={k} className={`topic-seg t${Math.min(i, 5)}`} style={{ width: `${pct}%` }} title={`${t(k)} · ${Math.round(pct)}% · ${span(v)}`} />;
+        })}
+      </div>
+      <ul className="topic-legend">
+        {list.map(([k, v], i) => {
+          const pct = Math.round((v / total) * 100);
+          return (
+            <li key={k} className="topic-row" title={`${t(k)} · ${span(v)}`}>
+              <span className={`topic-dot t${Math.min(i, 5)}`} aria-hidden />
+              <span className="topic-name">{t(k)}</span>
+              <span className="topic-span muted small num">{span(v)}</span>
+              <span className="topic-pct num">{pct}%</span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

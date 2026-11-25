@@ -3,7 +3,7 @@ import { ask } from "../lib/confirm";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X, Youtube } from "lucide-react";
+import { ArrowDownToLine, ArrowDownUp, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X, Youtube } from "lucide-react";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
@@ -517,6 +517,7 @@ export function ShowView({ id }: { id: string }) {
   const pageRef = useScrollRestore(`show:${id}`, eps != null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
+  const [sortAsc, setSortAsc] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [showOrig, setShowOrig] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -567,8 +568,9 @@ export function ShowView({ id }: { id: string }) {
     [eps, filter, patches],
   );
   const unwatchedCount = useMemo(() => (eps ?? []).filter((e) => !isWatched(e, patches[e.id])).length, [eps, patches]);
-  const { month, setMonth, filtered: shown } = useMonthFilter(byFilter);
-  // "Play all" follows the list as filtered, newest first, skipping finished and unplayable episodes.
+  const { month, setMonth, filtered: shownRaw } = useMonthFilter(byFilter);
+  const shown = useMemo(() => (shownRaw && sortAsc ? [...shownRaw].reverse() : shownRaw), [shownRaw, sortAsc]);
+  // "Play all" follows the list as filtered & sorted, skipping finished and unplayable episodes.
   const playable = (shown ?? []).filter((e) => (e.audioUrl || e.videoId) && !isWatched(e, patches[e.id]));
   if (!show) return (
     <div className="page">
@@ -693,10 +695,21 @@ export function ShowView({ id }: { id: string }) {
           {query && <button className="icon-btn sm" onClick={() => { setQuery(""); searchBox.current?.focus(); }} aria-label={t("清除搜索")}><X size={13} /></button>}
         </label>
         {!hits && (
-          <div className="seg-control">
-            {([["all", t("全部")], ["unwatched", t("未看完")], ["watched", t("已看")], ["subs", t("有字幕")]] as [Filter, string][]).map(([k, label]) => (
-              <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{label}</button>
-            ))}
+          <div className="list-head-right">
+            <button
+              type="button"
+              className={`btn ghost sm sort-btn${sortAsc ? " on" : ""}`}
+              aria-pressed={sortAsc}
+              title={sortAsc ? t("当前最早在前，点击切回最新在前") : t("当前最新在前，点击切到最早在前")}
+              onClick={() => setSortAsc((v) => !v)}
+            >
+              <ArrowDownUp size={13} /> {sortAsc ? t("最早在前") : t("最新在前")}
+            </button>
+            <div className="seg-control">
+              {([["all", t("全部")], ["unwatched", t("未看完")], ["watched", t("已看")], ["subs", t("有字幕")]] as [Filter, string][]).map(([k, label]) => (
+                <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{label}</button>
+              ))}
+            </div>
           </div>
         )}
       </div>

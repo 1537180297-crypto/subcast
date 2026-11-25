@@ -274,16 +274,34 @@ export function MiniPlayer() {
     skipForward: s.settings.skipForward ?? 30,
   })));
   const { panel, panelOpen } = useLayout(useShallow((l) => ({ panel: l.panel, panelOpen: l.panelOpen })));
+  const [dragRatio, setDragRatio] = useState<number | null>(null);
   if (!current || (view.kind === "episode" && view.id === current.id) || (current.videoId && floatingId === current.id)) return null;
   // Left-aligned with the page content; on an episode page it stays within the middle column.
   const right = view.kind === "episode" && panelOpen ? panel + 24 : 24;
-  const onSeekBar = (e: React.MouseEvent<HTMLDivElement>) => {
+  const ratioFrom = (el: HTMLDivElement, clientX: number) => {
+    const rect = el.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+  };
+  const onSeekDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     if (!player || !length) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / Math.max(1, rect.width)));
-    player.seek(ratio * length);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDragRatio(ratioFrom(e.currentTarget, e.clientX));
   };
+  const onSeekMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRatio == null) return;
+    e.stopPropagation();
+    setDragRatio(ratioFrom(e.currentTarget, e.clientX));
+  };
+  const onSeekUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRatio == null) return;
+    e.stopPropagation();
+    const r = ratioFrom(e.currentTarget, e.clientX);
+    setDragRatio(null);
+    if (player && length) player.seek(r * length);
+  };
+  const shownTime = dragRatio != null && length ? Math.round(dragRatio * length) : time;
+  const shownPct = dragRatio != null ? dragRatio * 100 : length ? Math.min(100, (time / length) * 100) : 0;
   const dismiss = () => {
     const s = useStore.getState();
     if (s.playing) s.player?.toggle();
@@ -299,19 +317,23 @@ export function MiniPlayer() {
         <p className="ep-name"><ZhText text={current.title} /></p>
         <div className="mini-sub">
           {current.showTitle && current.showId !== "single" && <span className="meta-line clamp1">{showName(current.showTitle)}</span>}
-          <span className="mini-time">{clock(time)}{length ? ` / ${clock(length)}` : ""}</span>
+          <span className="mini-time">{clock(shownTime)}{length ? ` / ${clock(length)}` : ""}</span>
         </div>
         <div
-          className="mini-seek"
+          className={`mini-seek${dragRatio != null ? " dragging" : ""}`}
           role="slider"
           aria-label={t("播放进度")}
           aria-valuemin={0}
           aria-valuemax={Math.max(1, Math.round(length))}
-          aria-valuenow={time}
-          title={t("点击跳转进度")}
-          onClick={onSeekBar}
+          aria-valuenow={shownTime}
+          title={t("点击或拖动跳转进度")}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={onSeekDown}
+          onPointerMove={onSeekMove}
+          onPointerUp={onSeekUp}
+          onPointerCancel={() => setDragRatio(null)}
         >
-          <div className="bar"><div style={{ width: `${length ? Math.min(100, (time / length) * 100) : 0}%` }} /></div>
+          <div className="bar"><div style={{ width: `${shownPct}%` }} /></div>
         </div>
       </div>
       <div className="mini-skips">
