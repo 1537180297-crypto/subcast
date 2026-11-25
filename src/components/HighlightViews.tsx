@@ -300,7 +300,7 @@ export function HighlightsPanel({
                     else previewEpisodeRange(ep, c.start, c.end);
                   }}
                 >
-                  {isPlayingThis ? <><Pause size={12} fill="currentColor" /> {t("暂停")}</> : <><Play size={12} fill="currentColor" /> {t("试看")}</>}
+                  {isPlayingThis ? <><Pause size={12} fill="currentColor" /> {t("暂停")}</> : <><Play size={12} fill="currentColor" /> {ep.videoId ? t("试看") : t("试听")}</>}
                 </button>
                 {ep.videoId && (
                   <button type="button" className="btn primary sm" onClick={() => openVideoClipDialog({ ep, segments, zh: mergedZh, clip: c })}>

@@ -20,21 +20,32 @@ pub struct Vid { pub id: String, pub title: String, pub published: Option<i64>, 
 /// Known channels, for shows whose name finds the wrong channel or none.
 fn builtin(source: &str) -> Option<&'static str> {
     Some(match source {
-        // Checked by hand (2026-11): each channel's uploads carry the show's own episode titles.
+        // Checked by hand (2026-11): each channel's uploads carry real video recordings with matching titles.
         "nexttoken" => "UC_9pr_usdNG29RauPFwIFQw",
-        "zhangxiaojun" | "zhangxiaojun-zh" => "UC3Sv1JuKpbOx3csUO8FAo5g",
-        "42zhangjing" | "42zhangjing-zh" => "UCirUGhuiz6m85eKO8n3Picw",
         "crossing" | "crossing-zh" => "UCqoy3g7ZH24j2mLOq_nbKrQ",
-        "zhixing" | "zhixing-zh" => "UC3ezayOvLhJRk5L0QRg_bfQ",
-        "mianji" | "mianji-zh" => "UCroOLbclmz0FOit7d2Xe0PQ",
         "nopriors" | "nopriors-zh" => "UCSI7h9hydQ40K5MJHnCrQvw",
         "allin" | "allin-zh" => "UCESLZhusAkFfsNsApnjF_Cg",
         "unsupervised" | "unsupervised-zh" => "UCUl-s_Vp-Kkk_XVyDylNwLA",
         "cogrev" | "cogrev-zh" => "UCjNRVMBVI30Sak_p6HRWhIA",
-        // No YouTube version, or titles too different to match safely (晚点聊 rewrites them on YouTube).
-        "aialchemy" | "aialchemy-zh" | "35huan" | "35huan-zh" | "latetalk" | "latetalk-zh" => "none",
+        // Audio-only podcasts whose YouTube channels are 1:1 (1080x1080) RSS-synced static covers,
+        // or shows with no YouTube video version / mismatched titles.
+        "zhangxiaojun" | "zhangxiaojun-zh"
+        | "42zhangjing" | "42zhangjing-zh"
+        | "zhixing" | "zhixing-zh"
+        | "mianji" | "mianji-zh"
+        | "aialchemy" | "aialchemy-zh"
+        | "35huan" | "35huan-zh"
+        | "latetalk" | "latetalk-zh" => "none",
         _ => return None,
     })
+}
+
+/// Whether a curated source is explicitly marked as audio-only (no YouTube video version).
+pub fn is_audio_only(source: &str) -> bool {
+    if let Some(o) = OVERRIDES.read().unwrap().get(source) {
+        return o.eq_ignore_ascii_case("none");
+    }
+    builtin(source).is_some_and(|b| b.eq_ignore_ascii_case("none"))
 }
 
 static OVERRIDES: Lazy<RwLock<HashMap<String, String>>> = Lazy::new(|| RwLock::new(HashMap::new()));
@@ -124,13 +135,36 @@ async fn discover(show_name: &str, eps: &[Episode]) -> Option<String> {
     let used = std::collections::HashSet::new();
     let chans: Vec<String> = hits.iter().take(3).filter_map(|h| channel_id_of(&h.feed_url)).collect();
     let feeds = futures_util::future::join_all(chans.iter().map(|c| feed_videos(c))).await;
-    let mut best: Option<(usize, String)> = None;
+    let mut best: Option<(usize, String, String)> = None;
     for (ch, vids) in chans.into_iter().zip(feeds) {
-        let score = recent.iter().filter(|e| best_match(&e.title, e.published, &vids, &used).is_some()).count();
-        if score > best.as_ref().map(|b| b.0).unwrap_or(0) { best = Some((score, ch)); }
+        let mut first_vid: Option<String> = None;
+        let mut score = 0;
+        for e in &recent {
+            if let Some(v) = best_match(&e.title, e.published, &vids, &used) {
+                if first_vid.is_none() { first_vid = Some(v); }
+                score += 1;
+            }
+        }
+        if score > best.as_ref().map(|b| b.0).unwrap_or(0) {
+            if let Some(sample) = first_vid { best = Some((score, ch, sample)); }
+        }
     }
     let need = if recent.len() >= 4 { 2 } else { 1 };
-    best.filter(|(s, _)| *s >= need).map(|(_, c)| c)
+    let Some((_, ch, sample)) = best.filter(|(s, _, _)| *s >= need) else { return None };
+    // Reject 1:1 RSS-synced static-cover YouTube Podcast channels (oEmbed reports 4:3 e.g. 200x150 instead of 16:9 200x113).
+    if !is_widescreen_video(&sample).await { return None; }
+    Some(ch)
+}
+
+/// Checks via YouTube oEmbed whether a video is widescreen (>= 3:2) rather than a 1:1 static-cover audio upload.
+/// Falls back to true on network error so transient failures don't reject genuine video channels.
+async fn is_widescreen_video(video_id: &str) -> bool {
+    let url = format!("https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json");
+    let Ok(text) = net::get_text(&url).await else { return true };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else { return true };
+    let (Some(w), Some(h)) = (v["width"].as_u64(), v["height"].as_u64()) else { return true };
+    if w == 0 || h == 0 { return true; }
+    w * 2 >= h * 3
 }
 
 /// The channel's uploads: the last ~15 from its feed (with dates) and up to ~100 from its uploads list.
@@ -308,6 +342,11 @@ mod tests {
         assert_eq!(channel_id_of("https://www.youtube.com/feeds/videos.xml?playlist_id=UULF3Sv1JuKpbOx3csUO8FAo5g").as_deref(), Some("UC3Sv1JuKpbOx3csUO8FAo5g"));
         assert_eq!(channel_id_of("https://www.youtube.com/feeds/videos.xml?channel_id=UC_9pr_usdNG29RauPFwIFQw").as_deref(), Some("UC_9pr_usdNG29RauPFwIFQw"));
         assert_eq!(channel_id_of("none"), None);
+        assert!(is_audio_only("zhangxiaojun"));
+        assert!(is_audio_only("42zhangjing"));
+        assert!(is_audio_only("zhixing"));
+        assert!(is_audio_only("mianji"));
+        assert!(!is_audio_only("crossing"));
     }
 }
 

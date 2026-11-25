@@ -39,7 +39,14 @@ export function ModelSettings({ ProviderEditor }: { ProviderEditor: (props: { p:
     void Promise.all(apiProviders.filter((p) => p.needsKey).map(async (p) => [p.id, await api.hasApiKey(p.id)] as const)).then((r) => setKeys(Object.fromEntries(r)));
   }, [apiProviders.length, editing, keyRev]);
 
-  const used = (id: string) => (settings.translateProvider === id && settings.translateMode !== "google" ? t("默认") : "");
+  const used = (id: string) => {
+    const isChat = settings.chatProvider === id;
+    const isTrans = settings.translateProvider === id && settings.translateMode !== "google";
+    if (isChat && isTrans) return t("默认");
+    if (isChat) return t("问答");
+    if (isTrans) return t("翻译");
+    return "";
+  };
   const ready = (p: Provider) => !p.needsKey || keys[p.id];
   const inUse = (id: string) => settings.chatProvider === id || settings.translateProvider === id;
   // Up front: what's in use, then what has a key, then the recommended ones; three at most (plus the open one).

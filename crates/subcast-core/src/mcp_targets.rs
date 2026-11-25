@@ -69,7 +69,7 @@ fn present(d: &Def) -> bool {
     match d.how {
         How::Cli(k) => agents::path_of(k).is_some(),
         _ => match d.id {
-            "claude-desktop" => cfg!(target_os = "macos") && config_path(d.id).parent().is_some_and(Path::exists),
+            "claude-desktop" => (cfg!(target_os = "macos") || cfg!(target_os = "windows")) && config_path(d.id).parent().is_some_and(Path::exists),
             "kimi" => agents::path_of(Kind::Kimi).is_some(),
             "opencode" => agents::path_of(Kind::Opencode).is_some(),
             "cursor" => home().join(".cursor").is_dir(),
@@ -88,7 +88,13 @@ fn current_command(id: &str) -> Option<String> {
         let rest = &text[start..];
         let block = &rest[..rest[1..].find("\n[").map(|i| i + 1).unwrap_or(rest.len())];
         let line = block.lines().find(|l| l.trim_start().starts_with("command"))?;
-        return Some(line.split_once('=')?.1.trim().trim_matches('"').to_string());
+        let raw = line.split_once('=')?.1.trim();
+        let val = if raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2 {
+            raw[1..raw.len() - 1].replace("\\\\", "\\")
+        } else {
+            raw.trim_matches('\'').to_string()
+        };
+        return Some(val);
     }
     let v: Value = serde_json::from_str(&text).ok()?;
     if id == "opencode" {

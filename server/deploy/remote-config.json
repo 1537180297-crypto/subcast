@@ -1,8 +1,18 @@
 {
-  "version": 1,
+  "version": 2,
   "youtubeClients": [
     { "name": "ANDROID", "version": "20.10.38", "sdk": 34 },
     { "name": "IOS", "version": "20.10.3" },
     { "name": "ANDROID_VR", "version": "1.60.19", "sdk": 32 }
-  ]
+  ],
+  "curatedYoutube": {
+    "zhangxiaojun": "none",
+    "zhangxiaojun-zh": "none",
+    "42zhangjing": "none",
+    "42zhangjing-zh": "none",
+    "zhixing": "none",
+    "zhixing-zh": "none",
+    "mianji": "none",
+    "mianji-zh": "none"
+  }
 }

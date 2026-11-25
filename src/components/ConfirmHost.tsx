@@ -9,10 +9,21 @@ export function ConfirmHost() {
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!req) return;
+    const prev = document.activeElement as HTMLElement | null;
     (req.danger ? cancel.current : ok.current)?.focus();
-    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); answer(false); } };
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); answer(false); return; }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const next = document.activeElement === cancel.current ? ok.current : cancel.current;
+        next?.focus();
+      }
+    };
     window.addEventListener("keydown", k, true);
-    return () => window.removeEventListener("keydown", k, true);
+    return () => {
+      window.removeEventListener("keydown", k, true);
+      prev?.focus?.();
+    };
   }, [req]);
   if (!req) return null;
   return (

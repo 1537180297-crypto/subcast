@@ -3,7 +3,7 @@ import { ask } from "../lib/confirm";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X, Youtube } from "lucide-react";
+import { ArrowDownToLine, ArrowDownUp, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, FolderOpen, ListVideo, Loader2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, RotateCcw, Search, Trash2, X, Youtube } from "lucide-react";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { api, errorText, type Episode, type Show, type ShowHit } from "../lib/api";
 import { date, duration, monthLabel } from "../lib/format";
@@ -259,7 +259,6 @@ function ShowTile({ show }: { show: Show }) {
  *  a feed transcript), a 精读 transcript, or one someone shared (asked for in one batch, see checkShared). */
 const ownSubs = (e: Episode) => !!(e.hasTranscript || e.transcriptUrl || e.deep || e.videoId);
 const useSharedHits = create<{ ids: Record<string, true> }>(() => ({ ids: {} }));
-const hasSubs = (e: Episode, shared: Record<string, true>) => ownSubs(e) || !!shared[e.id];
 /** Episodes already asked about this session (an answer doesn't change often enough to ask again). */
 const askedShared = new Set<string>();
 function checkShared(eps: Episode[]) {
@@ -350,12 +349,11 @@ export function LatestView() {
   // Up next: other unfinished episodes, then saved ones not finished yet.
   const upNext = [...recent.filter((e) => unfinished(e) && e.id !== hero?.id), ...favEps.filter((e) => !unfinished(e) && unwatched(e))]
     .filter((e, i, a) => a.findIndex((x) => x.id === e.id) === i).slice(0, 12);
-  // Latest first, but in the top grid episodes that open with subtitles come before ones that need transcribing.
+  // Keep initial home card order stable: shared subtitle checks only add badges, never reshuffle cards under the cursor.
   const unheard = (eps ?? []).filter(unwatched);
   const allList = hideWatched ? unheard : (eps ?? []);
-  const shared = useSharedHits((s) => s.ids);
   useEffect(() => { checkShared(unheard.slice(0, 18)); }, [eps]);
-  const fresh = [...unheard.slice(0, 18).filter((e) => hasSubs(e, shared)), ...unheard.slice(0, 18).filter((e) => !hasSubs(e, shared)), ...unheard.slice(18)];
+  const fresh = [...unheard.slice(0, 18).filter(ownSubs), ...unheard.slice(0, 18).filter((e) => !ownSubs(e)), ...unheard.slice(18)];
   const recs = useMemo(() => recommend({ shows, recent, favorites: favEps, downloads: dlEps }, 6), [shows, recent, favEps, dlEps]);
   const subscribe = async (input: string, name: string) => {
     setAdding(input);
@@ -373,13 +371,13 @@ export function LatestView() {
     <div className="page home" ref={pageRef}>
       {welcome && <WelcomeCard />}
       {hero && <ContinueHero ep={hero} />}
-      {(upNext.length > 0 || hero || favorites.length > 0) && (
+      {upNext.length > 0 && (
         <section>
           <div className="module-head">
             <h2 className="module-title">{t("接下来听")}</h2>
             <button className="link-btn" onClick={() => go({ kind: "recent" })}>{favorites.length ? t("全部 · 收藏 {n}", { n: favorites.length }) : t("全部")} <ChevronRight size={13} /></button>
           </div>
-          {upNext.length > 0 && <div className="card-strip">{upNext.map((e) => <EpisodeCard key={e.id} ep={e} />)}</div>}
+          <div className="card-strip">{upNext.map((e) => <EpisodeCard key={e.id} ep={e} />)}</div>
         </section>
       )}
       <div className="home-grid">
@@ -413,13 +411,18 @@ export function LatestView() {
               <div className="rec-list">{recs.map((r) => <RecRow key={r.pick.id} r={r} adding={adding === r.pick.input} done={isSubscribed(r.pick, shows)} onAdd={() => void subscribe(r.pick.input, pickName(r.pick))} />)}</div>
             </section>
           )}
-          <section>
-            <div className="module-head">
-              <h2 className="module-title">{t("订阅节目")}</h2>
-              <button className="link-btn" onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={13} /> {t("添加")}</button>
-            </div>
-            <div className="show-grid">{shows.slice(0, 16).map((s) => <ShowTile key={s.id} show={s} />)}</div>
-          </section>
+          {shows.length > 0 && (
+            <section>
+              <div className="module-head">
+                <h2 className="module-title">{t("订阅节目")}</h2>
+                <div className="module-head-actions">
+                  {shows.length > 16 && <button className="link-btn" onClick={() => set({ manageOpen: true })}>{t("管理")}</button>}
+                  <button className="link-btn" onClick={() => set({ addOpen: true, addTab: "search" })}><Plus size={13} /> {t("添加")}</button>
+                </div>
+              </div>
+              <div className="show-grid">{shows.slice(0, 16).map((s) => <ShowTile key={s.id} show={s} />)}</div>
+            </section>
+          )}
         </aside>
       </div>
     </div>
@@ -514,6 +517,7 @@ export function ShowView({ id }: { id: string }) {
   const pageRef = useScrollRestore(`show:${id}`, eps != null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
+  const [sortAsc, setSortAsc] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [showOrig, setShowOrig] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -564,10 +568,17 @@ export function ShowView({ id }: { id: string }) {
     [eps, filter, patches],
   );
   const unwatchedCount = useMemo(() => (eps ?? []).filter((e) => !isWatched(e, patches[e.id])).length, [eps, patches]);
-  const { month, setMonth, filtered: shown } = useMonthFilter(byFilter);
-  // "Play all" follows the list as filtered, newest first, skipping finished and unplayable episodes.
+  const { month, setMonth, filtered: shownRaw } = useMonthFilter(byFilter);
+  const shown = useMemo(() => (shownRaw && sortAsc ? [...shownRaw].reverse() : shownRaw), [shownRaw, sortAsc]);
+  // "Play all" follows the list as filtered & sorted, skipping finished and unplayable episodes.
   const playable = (shown ?? []).filter((e) => (e.audioUrl || e.videoId) && !isWatched(e, patches[e.id]));
-  if (!show) return <div className="page" />;
+  if (!show) return (
+    <div className="page">
+      <EmptyState art={<HeadphonesArt />} title={t("还没有订阅节目")} note={t("新的内容到了，会出现在这里")}>
+        <button className="btn primary" onClick={() => go({ kind: "latest" })}>{t("首页")}</button>
+      </EmptyState>
+    </div>
+  );
   const refresh = async () => {
     setBusy(true);
     try {
@@ -684,10 +695,21 @@ export function ShowView({ id }: { id: string }) {
           {query && <button className="icon-btn sm" onClick={() => { setQuery(""); searchBox.current?.focus(); }} aria-label={t("清除搜索")}><X size={13} /></button>}
         </label>
         {!hits && (
-          <div className="seg-control">
-            {([["all", t("全部")], ["unwatched", t("未看完")], ["watched", t("已看")], ["subs", t("有字幕")]] as [Filter, string][]).map(([k, label]) => (
-              <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{label}</button>
-            ))}
+          <div className="list-head-right">
+            <button
+              type="button"
+              className={`btn ghost sm sort-btn${sortAsc ? " on" : ""}`}
+              aria-pressed={sortAsc}
+              title={sortAsc ? t("当前最早在前，点击切回最新在前") : t("当前最新在前，点击切到最早在前")}
+              onClick={() => setSortAsc((v) => !v)}
+            >
+              <ArrowDownUp size={13} /> {sortAsc ? t("最早在前") : t("最新在前")}
+            </button>
+            <div className="seg-control">
+              {([["all", t("全部")], ["unwatched", t("未看完")], ["watched", t("已看")], ["subs", t("有字幕")]] as [Filter, string][]).map(([k, label]) => (
+                <button key={k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>{label}</button>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -778,7 +800,7 @@ const dropInput = (prev: ReadonlySet<string>, input: string) => { const next = n
 
 export function DiscoverView() {
   const { shows, reloadShows, notify, go } = useStore(useShallow((s) => ({ shows: s.shows, reloadShows: s.reloadShows, notify: s.notify, go: s.go })));
-  const [adding, setAdding] = useState<string | null>(null);
+  const [busyInputs, setBusyInputs] = useState<ReadonlySet<string>>(new Set());
   const [topics, setTopics] = useState<Topic[]>([]);
   const promo = usePromo();
   const bannerHidden = useStore((s) => s.settings.homeBannerHidden);
@@ -792,7 +814,7 @@ export function DiscoverView() {
     if (inflight.current.has(input)) return;
     inflight.current.add(input);
     setOptimistic((prev) => addInput(prev, input));
-    setAdding(input);
+    setBusyInputs((prev) => addInput(prev, input));
     try {
       const r = await api.addSubscription(input);
       await reloadShows();
@@ -807,28 +829,31 @@ export function DiscoverView() {
     } catch (err) {
       setOptimistic((prev) => dropInput(prev, input));
       notify(errorText(err));
-    } finally { inflight.current.delete(input); setAdding(null); }
+    } finally { inflight.current.delete(input); setBusyInputs((prev) => dropInput(prev, input)); }
   };
   const drop = async (p: Pick) => {
     const sub = subscribedShow(p, useStore.getState().shows);
     if (!sub?.id) { setOptimistic((prev) => dropInput(prev, p.input)); return; }
     if (!(await ask({ title: t("取消订阅「{name}」？", { name: pickName(p) }), message: t("已生成的字幕、精读和收听进度会保留。"), ok: t("取消订阅"), danger: true }))) return;
-    setAdding(p.input);
+    setBusyInputs((prev) => addInput(prev, p.input));
     try {
       await api.removeShow(sub.id);
       await reloadShows();
       setOptimistic((prev) => dropInput(prev, p.input));
       notify(t("已取消订阅「{name}」", { name: pickName(p) }));
-    } catch (err) { notify(errorText(err)); } finally { setAdding(null); }
+    } catch (err) { notify(errorText(err)); } finally { setBusyInputs((prev) => dropInput(prev, p.input)); }
   };
-  const subBtn = (p: Pick, done: boolean) => done
-    ? <button type="button" className="tile-done" title={t("再点一次，取消订阅")} aria-label={t("再点一次，取消订阅")} onClick={(e) => { e.stopPropagation(); void drop(p); }} disabled={adding != null}><Check size={16} className="when-idle" /><X size={16} className="when-hover" /></button>
-    : <button className="tile-add" title={t("订阅")} onClick={(e) => { e.stopPropagation(); void add(p.input, pickName(p)); }} disabled={adding != null}>{adding === p.input ? <Loader2 size={16} className="spin" /> : <Plus size={18} />}</button>;
+  const subBtn = (p: Pick, done: boolean) => {
+    const cardBusy = busyInputs.has(p.input);
+    return done
+      ? <button type="button" className="tile-done" title={t("再点一次，取消订阅")} aria-label={t("再点一次，取消订阅")} onClick={(e) => { e.stopPropagation(); void drop(p); }} disabled={cardBusy}><Check size={16} className="when-idle" /><X size={16} className="when-hover" /></button>
+      : <button className="tile-add" title={t("订阅")} onClick={(e) => { e.stopPropagation(); void add(p.input, pickName(p)); }} disabled={cardBusy}>{cardBusy ? <Loader2 size={16} className="spin" /> : <Plus size={18} />}</button>;
+  };
   return (
     <div className="page">
       <h1 className="page-title">{t("发现")}</h1>
       <p className="muted page-sub">{t("精选海外与中文好节目，订阅后字幕和中文翻译开箱即用。想找别的节目，用上方搜索框。")}</p>
-      {showBanner && home && !topics.length && <HomeShowBanner onHide={() => { void useStore.getState().saveSettings({ homeBannerHidden: true }); notify(t("好的，不再显示。可以在设置 › 通用里重新打开")); }} subscribed={subscribed(home)} busy={adding === home.input} onSubscribe={() => void add(home.input, pickName(home))} onOpen={() => go({ kind: "channel", input: home.input })} />}
+      {showBanner && home && !topics.length && <HomeShowBanner onHide={() => { void useStore.getState().saveSettings({ homeBannerHidden: true }); notify(t("好的，不再显示。可以在设置 › 通用里重新打开")); }} subscribed={subscribed(home)} busy={busyInputs.has(home.input)} onSubscribe={() => void add(home.input, pickName(home))} onOpen={() => go({ kind: "channel", input: home.input })} />}
       <TopicChips topics={topics} setTopics={setTopics} />
       <div className="tile-grid">
         {visible(topics).filter((p) => !(showBanner && p === home && !topics.length)).map((p) => <PickCard key={p.id} p={p} subscribed={subscribed(p)} onOpen={() => go({ kind: "channel", input: p.input })} action={subBtn(p, subscribed(p))} />)}

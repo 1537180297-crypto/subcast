@@ -8,8 +8,9 @@ const CONTEXT = 6;
 
 /** The clip's start and end on a strip of its sentences (and a few either side), dragged by two handles that
  *  snap to sentence boundaries. The clip only changes when a handle is let go, so a drag doesn't refetch. */
-export function ClipRangeBar({ segments, startIdx, endIdx, onChange }: {
+export function ClipRangeBar({ segments, zh, startIdx, endIdx, onChange }: {
   segments: Segment[];
+  zh?: (string | null | undefined)[];
   startIdx: number;
   endIdx: number;
   onChange: (startIdx: number, endIdx: number) => void;
@@ -75,6 +76,8 @@ export function ClipRangeBar({ segments, startIdx, endIdx, onChange }: {
 
   const a = segments[s]?.start ?? 0;
   const b = segments[e]?.end ?? a;
+  const dragIdx = drag ? (drag.which === "start" ? s : e) : null;
+  const dragCue = dragIdx != null ? (zh?.[dragIdx]?.trim() || segments[dragIdx]?.text?.trim() || "") : "";
   const blocks = [];
   for (let i = win.w0; i <= win.w1; i++) {
     const seg = segments[i];
@@ -84,7 +87,7 @@ export function ClipRangeBar({ segments, startIdx, endIdx, onChange }: {
         key={i}
         className={`vclip-rb-seg${inside ? " in" : ""}`}
         style={{ left: `${pct(seg.start)}%`, width: `${Math.max(0.4, pct(seg.end) - pct(seg.start))}%` }}
-        title={seg.text}
+        title={zh?.[i]?.trim() || seg.text}
         onClick={() => onTrackClick(i)}
       />,
     );
@@ -116,6 +119,12 @@ export function ClipRangeBar({ segments, startIdx, endIdx, onChange }: {
         <span>{t("{n} 句", { n: e - s + 1 })}</span>
         <span>{clock(b)}</span>
       </div>
+      {drag && dragCue && (
+        <div className="vclip-rb-cue small" role="status">
+          <span className="vclip-rb-cue-tag">{drag.which === "start" ? t("开头") : t("结尾")}</span>
+          <span className="clamp1">{dragCue}</span>
+        </div>
+      )}
     </div>
   );
 }

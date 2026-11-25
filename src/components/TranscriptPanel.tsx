@@ -92,11 +92,11 @@ function onLineClick(e: React.MouseEvent, seek: () => void) {
   lineClick = window.setTimeout(() => { if (!window.getSelection()?.toString().trim()) seek(); }, 260);
 }
 
-const Row = memo(function Row({ seg, i, k, zh, active, playingActive, mode, pending, onSeek, query, current, marks, reading, hlClass, hl, onHlPreview, onHlClip, registerRow }: {
+const Row = memo(function Row({ seg, i, k, zh, active, playingActive, mode, pending, onSeek, query, current, marks, reading, hlClass, hl, isVideo, onHlPreview, onHlClip, registerRow }: {
   seg: Segment; i: number; k: number; zh?: string | null; active: boolean; playingActive: boolean; mode: string; pending: boolean;
   onSeek: (t: number, i: number) => void; query: string; current: boolean; marks: LearnMarks | null; reading?: boolean;
   /** Highlight span styling, and the clip that starts at this line (its heading is drawn above it). */
-  hlClass?: string; hl?: HighlightClip; onHlPreview?: (c: HighlightClip) => void; onHlClip?: (c: HighlightClip) => void;
+  hlClass?: string; hl?: HighlightClip; isVideo?: boolean; onHlPreview?: (c: HighlightClip) => void; onHlClip?: (c: HighlightClip) => void;
   registerRow?: (k: number, el: HTMLDivElement | null) => void;
 }) {
   const showZh = mode !== "original";
@@ -142,7 +142,7 @@ const Row = memo(function Row({ seg, i, k, zh, active, playingActive, mode, pend
         <span className="num small muted">{Math.round(hl.end - hl.start)}s</span>
         <span className="spacer" />
         <button type="button" className="link-btn" onClick={() => onHlPreview?.(hl)}>
-          <Play size={11} fill="currentColor" /> {t("试看")}
+          <Play size={11} fill="currentColor" /> {isVideo ? t("试看") : t("试听")}
         </button>
         {onHlClip && (
           <button type="button" className="link-btn hl-clip-btn" onClick={() => onHlClip(hl)}>
@@ -239,9 +239,11 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
   const marks = useLearnMarks(english);
   const learning = !!marks || (english && settings.learnOn);
   const [card, setCard] = useState<CardTarget | null>(null);
-  const [shadow, setShadow] = useState(false);
+  const [shadow, setShadowRaw] = useState(false);
+  const setShadow = useCallback((v: boolean) => { setShadowRaw(v); if (v) setAligning(false); }, []);
+  const openAlign = useCallback(() => { setShadowRaw(false); setAligning(true); }, []);
   useShadowing(shadow && isCurrent, ep.id, segments, transcript?.language?.startsWith("en") ? "en" : "auto");
-  useEffect(() => { if (!learning) setShadow(false); }, [learning]);
+  useEffect(() => { if (!learning) setShadowRaw(false); }, [learning]);
   const closeCard = useCallback(() => setCard(null), []);
   // Looking a word up pauses playback (as Language Reactor and asbplayer do), and closing the card resumes it
   // when the card was what paused it.
@@ -604,7 +606,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
       </button>
     )}
     <button className="icon-btn" title={t("搜索文稿（⌘F）")} onClick={() => { setShowHighlights(false); setSearching(true); setTimeout(() => searchInput.current?.focus(), 0); }}><Search size={15} /></button>
-    {total > 0 && <PanelMenu ep={ep} segments={segments} zh={translation?.items} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, shadow, setShadow, canShadow: isCurrent } : undefined} onAlign={canAlign ? () => setAligning(true) : undefined} />}
+    {total > 0 && <PanelMenu ep={ep} segments={segments} zh={translation?.items} onRetranslate={wantsZh && canUpgrade ? () => start("llm") : undefined} learn={learning ? { segments, zh: translation?.items, shadow, setShadow, canShadow: isCurrent } : undefined} onAlign={canAlign ? openAlign : undefined} />}
   </>;
   const source = SOURCE_LABEL[transcript.source] ? t(SOURCE_LABEL[transcript.source]) : transcript.source;
 
@@ -696,6 +698,7 @@ export function TranscriptPanel({ ep }: { ep: Episode }) {
               reading={i === readIndex}
               hlClass={hlClass}
               hl={hl}
+              isVideo={!!ep.videoId}
               onHlPreview={onHlPreview}
               onHlClip={ep.videoId ? onHlClip : undefined}
               registerRow={virtual ? registerRow : undefined}

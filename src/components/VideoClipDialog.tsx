@@ -1159,33 +1159,13 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
           )}
 
           {pvView === "video" && !montage && segments.length > 1 && (
-            <ClipRangeBar segments={segments} startIdx={startIdx} endIdx={endIdx} onChange={(a, b) => { setStartIdx(a); setEndIdx(b); }} />
+            <ClipRangeBar segments={effectiveSegments} zh={effectiveZh} startIdx={startIdx} endIdx={endIdx} onChange={(a, b) => { setStartIdx(a); setEndIdx(b); }} />
           )}
           {pvView === "video" && !montage && <OpeningHint segments={segments} startIdx={startIdx} endIdx={endIdx} onStart={setStartIdx} />}
 
           <div className="vclip-pv-bar">
             {pvView === "cover" ? (
-              <>
-              <div className="vclip-cover-tools" role="toolbar" aria-label={t("封面文字")}>
-                <select className="vclip-font-select" value={coverFont} onChange={(e) => setCoverFont(e.target.value as CoverFontId)} aria-label={t("字体")}>
-                  {COVER_FONTS.map(([v, label]) => <option key={v} value={v}>{t(label)}</option>)}
-                </select>
-                <div className="vclip-swatches" role="radiogroup" aria-label={t("高亮色")}>
-                  {ACCENTS.map((c) => (
-                    <button key={c || "auto"} type="button" role="radio" aria-checked={coverAccent === c} className={`sw${coverAccent === c ? " on" : ""}${c ? "" : " auto"}`}
-                      style={c ? { background: c } : undefined} title={c ? c : t("跟随样式")} onClick={() => setCoverAccent(c)} />
-                  ))}
-                </div>
-                <button type="button" className={`link-btn small${coverAdvanced ? " on" : ""}`} aria-expanded={coverAdvanced} onClick={() => setCoverAdvanced(!coverAdvanced)}>{t("高级")}</button>
-              </div>
-              {coverAdvanced && (
-                <div className="vclip-cover-adv">
-                  <label><span>{t("字号")}</span><input type="range" min={0.8} max={1.25} step={0.05} value={coverScale} onChange={(e) => setCoverScale(Number(e.target.value))} /><span className="num">{Math.round(coverScale * 100)}%</span></label>
-                  <label><span>{t("字间距")}</span><input type="range" min={-0.05} max={0.2} step={0.01} value={coverTracking} onChange={(e) => setCoverTracking(Number(e.target.value))} /><span className="num">{Math.round(coverTracking * 100)}</span></label>
-                  {(coverScale !== 1 || coverTracking !== 0) && <button type="button" className="link-btn small" onClick={() => { setCoverScale(1); setCoverTracking(0); }}>{t("还原")}</button>}
-                </div>
-              )}
-              </>
+              <span className="small muted">{t("封面预览")} · {videoCoverAspect}</span>
             ) : preparedValid ? (
               <>
                 <button type="button" className="icon-btn sm" onClick={togglePreviewPlay} title={pvPlaying ? t("暂停") : t("播放")}>
@@ -1195,11 +1175,7 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                   {pvMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}{soundBlocked && pvMuted && <span>{t("点这里开声音")}</span>}
                 </button>
                 <span className="num small muted nowrap">{clock(toKeptTime(pvTime, cutsNow) / speed)} / {clock(keptDur / speed)}</span>
-                <div className="vclip-speed" role="group" aria-label={t("成片倍速")}>
-                  {SPEEDS.map((r) => (
-                    <button key={r} type="button" className={r === speed ? "on" : ""} onClick={() => setSpeed(r)} title={t("成片按这个速度导出")}>{r}×</button>
-                  ))}
-                </div>
+                {speed !== 1 && <span className="vclip-speed-badge num" title={t("当前成片倍速，可在右侧「视频」栏调整")}>{speed}×</span>}
               </>
             ) : pvView === "video" && !montage && segments.length > 1 ? null : (
               <span className="small muted">{montage ? t("{n} 段拼接", { n: parts.length }) : `${clock(clipStart)} – ${clock(clipEnd)}`} · {Math.round(clipDur)}s</span>
@@ -1252,6 +1228,14 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     />
                   </div>
                 )}
+                <div className="reading-row" title={t("成片按这个速度导出")}>
+                  <span>{t("成片倍速")}</span>
+                  <Seg
+                    value={String(speed)}
+                    options={SPEEDS.map((r) => [String(r), `${r}×`])}
+                    onChange={(v) => setSpeed(Number(v))}
+                  />
+                </div>
                 <label className="vclip-sub-toggle">
                   <input type="checkbox" checked={removePauses} onChange={(e) => setRemovePauses(e.target.checked)} />
                   {t("去掉停顿")}
@@ -1491,6 +1475,27 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
                     <TextField value={coverKicker} onValue={setCoverKicker} clearable placeholder={t("顶部眉标（节目名）")} aria-label={t("眉标")} />
                   </div>
                 </div>
+                <div className="vclip-cover-style">
+                  <div className="vclip-cover-tools" role="toolbar" aria-label={t("封面文字")}>
+                    <select className="vclip-font-select" value={coverFont} onChange={(e) => setCoverFont(e.target.value as CoverFontId)} aria-label={t("字体")}>
+                      {COVER_FONTS.map(([v, label]) => <option key={v} value={v}>{t(label)}</option>)}
+                    </select>
+                    <div className="vclip-swatches" role="radiogroup" aria-label={t("高亮色")}>
+                      {ACCENTS.map((c) => (
+                        <button key={c || "auto"} type="button" role="radio" aria-checked={coverAccent === c} className={`sw${coverAccent === c ? " on" : ""}${c ? "" : " auto"}`}
+                          style={c ? { background: c } : undefined} title={c ? c : t("跟随样式")} onClick={() => setCoverAccent(c)} />
+                      ))}
+                    </div>
+                    <button type="button" className={`link-btn small${coverAdvanced ? " on" : ""}`} aria-expanded={coverAdvanced} onClick={() => setCoverAdvanced(!coverAdvanced)}>{t("高级")}</button>
+                  </div>
+                  {coverAdvanced && (
+                    <div className="vclip-cover-adv">
+                      <label><span>{t("字号")}</span><input type="range" min={0.8} max={1.25} step={0.05} value={coverScale} onChange={(e) => setCoverScale(Number(e.target.value))} /><span className="num">{Math.round(coverScale * 100)}%</span></label>
+                      <label><span>{t("字间距")}</span><input type="range" min={-0.05} max={0.2} step={0.01} value={coverTracking} onChange={(e) => setCoverTracking(Number(e.target.value))} /><span className="num">{Math.round(coverTracking * 100)}</span></label>
+                      {(coverScale !== 1 || coverTracking !== 0) && <button type="button" className="link-btn small" onClick={() => { setCoverScale(1); setCoverTracking(0); }}>{t("还原")}</button>}
+                    </div>
+                  )}
+                </div>
               </section>
 
               <section className="vclip-sec">
@@ -1641,9 +1646,11 @@ function VideoClipDialogBody({ target }: { target: ClipModalTarget }) {
         )}
         <span className="spacer" />
         <button type="button" className="btn ghost" onClick={requestClose}>{t("关闭")}</button>
-        <button type="button" className="btn" disabled={!!busyJob} onClick={() => void runExport(true)}>
-          {t("另存为…")}
-        </button>
+        {!batch && (
+          <button type="button" className="btn" disabled={!!busyJob} onClick={() => void runExport(true)}>
+            {t("另存为…")}
+          </button>
+        )}
         {batch ? (
           run ? (
             <button type="button" className="btn primary" onClick={() => { stopBatch.current = true; setStopping(true); }} disabled={stopping}>
